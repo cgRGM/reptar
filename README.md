@@ -63,14 +63,12 @@ Framework code lives in `framework/Reptar` (core, data, auth, codegen) and `fram
 The Astro site has a working `/blog` page powered by the C# Worker:
 
 ```bash
-# terminal 1 — C# Worker API (D1 + R2)
-cd spikes/netwasm-worker && bunx wrangler@latest dev --port 8788 --local
-
-# terminal 2 — Astro site
-cd apps/web && bun run dev:bare --port 4321
+bun run dev
 ```
 
-Open `http://localhost:4321/blog`. Posts are stored in D1, cover images in R2, and the page includes a publish form that writes through the C# API.
+This starts the web app on `:4321`, the docs site on `:4322`, and the C# Worker API on `:8788` (D1 + R2). Open `http://localhost:4321/blog`. Posts are stored in D1, cover images in R2, and the page includes a publish form that writes through the C# API.
+
+Prefer separate terminals? Use `bun run dev:web`, `bun run dev:docs`, and `bun run dev:api`.
 
 ---
 

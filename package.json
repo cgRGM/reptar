@@ -4,7 +4,8 @@
   "workspaces": {
     "packages": [
       "apps/*",
-      "packages/*"
+      "packages/*",
+      "spikes/*"
     ],
     "catalog": {
       "zod": "^4.5.4",
@@ -15,7 +16,7 @@
   },
   "type": "module",
   "scripts": {
-    "dev": "turbo run dev",
+    "dev": "turbo run dev --filter=web --filter=docs --filter=@reptar/workers-blog-demo",
     "build": "turbo run build",
     "check-types": "turbo run check-types",
     "dev:web": "turbo run dev:bare -F web --",
@@ -31,7 +32,8 @@
     "env:generate": "varlock codegen --path ./apps/web/",
     "postinstall": "varlock codegen --path ./apps/web/",
     "check": "ultracite check",
-    "fix": "ultracite fix"
+    "fix": "ultracite fix",
+    "dev:api": "turbo run dev -F @reptar/workers-blog-demo"
   },
   "dependencies": {
     "@reptar/client": "workspace:*",

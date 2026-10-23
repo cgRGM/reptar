@@ -1,0 +1,13 @@
+{
+  "name": "@reptar/workers-blog-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler d1 execute DB --local --command \"create table if not exists posts (id text primary key, title text not null, content text not null, image_key text, created_at text not null);\" && wrangler dev --port 8788 --local",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.152.0"
+  }
+}

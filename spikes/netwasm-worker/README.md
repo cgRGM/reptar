@@ -16,14 +16,17 @@ The Astro frontend is at `apps/web/src/pages/blog.astro` and renders the posts a
 
 ## Run the demo
 
+From the repo root:
+
 ```bash
-# terminal 1 — C# Worker API (D1 + R2)
+bun run dev
+```
+
+This starts the web app (`:4321`), docs (`:4322`), and the C# Worker API (`:8788`). Or run the API alone:
+
+```bash
 cd spikes/netwasm-worker
 bunx wrangler@latest dev --port 8788 --local
-
-# terminal 2 — Astro site
-cd apps/web
-bun run dev:bare --port 4321
 ```
 
 Seed a post and image:
@@ -57,16 +60,17 @@ bunx wrangler@latest d1 execute DB --local --command \
 
 ## Reproduce the C# module
 
+The C# source lives in `csharp/`. With .NET SDK 10.0.401+:
+
 ```bash
 dotnet new install NetWasm.Templates@0.10.1
-dotnet new netwasm-app -n HelloReptar --host page
-# replace Program.cs and app.host.mjs with the versions in this spike
+cd csharp
 dotnet publish -c Release
-
-cp -R bin/Release/netwasm0.1/publish/browser ./public/browser
-python3 patch-host.py
-bunx wrangler@latest dev --port 8788 --local
+cd ..
+./build.sh          # copies publish output + applies patch-host.py
 ```
+
+The generated `public/browser` artifacts are committed, so `bun run dev` works without rebuilding the C# module.
 
 ## Why the host is patched
 

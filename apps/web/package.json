@@ -6,6 +6,7 @@
   "scripts": {
     "check-types": "astro check",
     "astro": "astro",
+    "dev": "astro dev",
     "dev:bare": "astro dev",
     "env:generate": "varlock codegen"
   },

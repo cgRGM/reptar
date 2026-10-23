@@ -14,20 +14,37 @@ const apiUrl = import.meta.env.PUBLIC_API_URL ?? "http://localhost:8788";
 let posts: Post[] = [];
 let error: string | null = null;
 
-try {
-  const response = await fetch(`${apiUrl}/posts`);
+const sleep = (milliseconds: number): Promise<void> =>
+  // eslint-disable-next-line promise/avoid-new
+  new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 
-  if (response.ok) {
-    posts = (await response.json()) as Post[];
-  } else {
+const loadPosts = async (attempt: number): Promise<void> => {
+  try {
+    const response = await fetch(`${apiUrl}/posts`);
+
+    if (response.ok) {
+      posts = (await response.json()) as Post[];
+      error = null;
+      return;
+    }
+
     error = `The Reptar API returned ${response.status}.`;
+  } catch (error_) {
+    error =
+      error_ instanceof Error
+        ? `Could not reach the Reptar API at ${apiUrl}. Start the stack with \`bun run dev\`. ${error_.message}`
+        : `Could not reach the Reptar API at ${apiUrl}. Start the stack with \`bun run dev\`.`;
   }
-} catch (error_) {
-  error =
-    error_ instanceof Error
-      ? `Could not reach the Reptar API at ${apiUrl}. ${error_.message}`
-      : `Could not reach the Reptar API at ${apiUrl}.`;
-}
+
+  if (attempt < 4) {
+    await sleep(500);
+    await loadPosts(attempt + 1);
+  }
+};
+
+await loadPosts(0);
 ---
 
 <Layout

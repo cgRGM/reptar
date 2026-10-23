@@ -67,5 +67,4 @@ temp
 
 # Cloudflare local state
 .wrangler/
-spikes/**/public/browser/
 spikes/**/.wrangler/

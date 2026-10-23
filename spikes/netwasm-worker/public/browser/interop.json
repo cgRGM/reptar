@@ -1,0 +1,157 @@
+{
+  "version": 1,
+  "target": "wasm32",
+  "statusAbi": {
+    "successStatus": 0,
+    "hostFailureStatus": 1,
+    "scalarResultOffset": 0
+  },
+  "targetLayout": {
+    "managedReferenceSize": 4,
+    "stringLengthOffset": 4,
+    "stringDataOffset": 8,
+    "arrayLengthOffset": 4,
+    "arrayDataPointerOffset": 8
+  },
+  "imports": [
+    {
+      "module": "app.host",
+      "name": "query",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.HelloReptar.06000001",
+      "rejectExport": "netwasm.async.import.reject.HelloReptar.06000001",
+      "cancelExport": "netwasm.async.import.cancel.HelloReptar.06000001"
+    },
+    {
+      "module": "app.host",
+      "name": "r2put",
+      "parameters": [
+        "string",
+        "bytes",
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.HelloReptar.06000002",
+      "rejectExport": "netwasm.async.import.reject.HelloReptar.06000002",
+      "cancelExport": "netwasm.async.import.cancel.HelloReptar.06000002"
+    },
+    {
+      "module": "app.host",
+      "name": "resolve",
+      "parameters": [
+        "string"
+      ],
+      "result": "void",
+      "asyncReturn": null,
+      "resolveExport": null,
+      "rejectExport": null,
+      "cancelExport": null
+    }
+  ],
+  "exports": [
+    {
+      "name": "createPost",
+      "parameters": [
+        "string",
+        "string",
+        "string"
+      ],
+      "result": "void",
+      "parameterNames": [
+        "title",
+        "content",
+        "imageKey"
+      ],
+      "nonNullableParameters": [
+        true,
+        true,
+        true
+      ],
+      "nonNullableResult": true,
+      "asyncReturn": null,
+      "statusExport": null,
+      "resultExport": null,
+      "completeExport": null,
+      "completionResult": null
+    },
+    {
+      "name": "listPosts",
+      "parameters": [],
+      "result": "void",
+      "parameterNames": [],
+      "nonNullableParameters": [],
+      "nonNullableResult": true,
+      "asyncReturn": null,
+      "statusExport": null,
+      "resultExport": null,
+      "completeExport": null,
+      "completionResult": null
+    },
+    {
+      "name": "uploadImage",
+      "parameters": [
+        "string",
+        "string",
+        "bytes"
+      ],
+      "result": "void",
+      "parameterNames": [
+        "key",
+        "contentType",
+        "bytes"
+      ],
+      "nonNullableParameters": [
+        true,
+        true,
+        true
+      ],
+      "nonNullableResult": true,
+      "asyncReturn": null,
+      "statusExport": null,
+      "resultExport": null,
+      "completeExport": null,
+      "completionResult": null
+    }
+  ],
+  "callbacks": [],
+  "witImports": [
+    {
+      "interface": "netwasm:runtime@1.0.0/reactor-host",
+      "function": "watch"
+    },
+    {
+      "interface": "wasi:cli@0.2.11/environment",
+      "function": "get-environment"
+    },
+    {
+      "interface": "wasi:clocks@0.2.11/monotonic-clock",
+      "function": "subscribe-duration"
+    },
+    {
+      "interface": "wasi:clocks@0.2.11/wall-clock",
+      "function": "now"
+    },
+    {
+      "interface": "wasi:filesystem@0.2.11/preopens",
+      "function": "get-directories"
+    },
+    {
+      "interface": "wasi:filesystem@0.2.11/types",
+      "function": "[method]descriptor.open-at"
+    },
+    {
+      "interface": "wasi:filesystem@0.2.11/types",
+      "function": "[method]descriptor.read"
+    },
+    {
+      "interface": "wasi:random@0.2.11/random",
+      "function": "get-random-bytes"
+    }
+  ]
+}
