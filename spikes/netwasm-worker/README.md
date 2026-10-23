@@ -55,6 +55,8 @@ curl -b /tmp/reptar-cookies.txt http://localhost:8788/auth/session
 curl -b /tmp/reptar-cookies.txt http://localhost:8788/me
 ```
 
+Passwords use PBKDF2 with **100,000 iterations** because workerd rejects higher counts in production (local dev may allow them).
+
 D1 tables:
 
 ```bash
@@ -73,6 +75,16 @@ bun run build
 ```
 
 The generated `public/browser` artifacts are committed, so `bun run dev` works without rebuilding the C# module. The optimized module is currently ~10 MB because it carries the framework, auth, source-generated JSON, and LINQ surface; the original minimal spike was 348 KB. Trimming that surface is on the roadmap.
+
+## Deploy
+
+From the repo root:
+
+```bash
+bun run deploy
+```
+
+Alchemy provisions D1 and R2, applies `migrations/0001_init.sql`, builds this Worker, and deploys it together with the Astro site. The Astro Worker gets `PUBLIC_API_URL` at runtime and an `API` service binding for server-side fetches. The API's `/browser/*` manifest and artifacts are read through the Worker's `ASSETS` binding, not a same-zone public `fetch`.
 
 ## Why the host is rewritten
 

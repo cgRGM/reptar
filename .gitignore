@@ -68,3 +68,6 @@ temp
 # Cloudflare local state
 .wrangler/
 spikes/**/.wrangler/
+
+# Alchemy transpiled stack mirror
+packages/infra/alchemy.run.js

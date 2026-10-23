@@ -5,7 +5,7 @@
   "scripts": {
     "check-types": "tsc --noEmit",
     "dev": "alchemy dev",
-    "deploy": "alchemy deploy",
+    "deploy": "bun ../../scripts/reptar.ts build:worker && alchemy deploy",
     "destroy": "alchemy destroy"
   },
   "dependencies": {

@@ -121,12 +121,17 @@ bun run fix
 Infrastructure is defined in `packages/infra/alchemy.run.ts` and deployed using Alchemy to Cloudflare:
 
 ```bash
-# Deploy staging / dev stage
+# Build the C# Worker, apply D1 migrations, deploy API + web
 bun run deploy
 
+# Non-interactive / CI
+bun run deploy -- --yes --no-input
+
 # Deploy to production stage
-cd packages/infra && bunx alchemy deploy --stage production
+cd packages/infra && bunx alchemy deploy --stage production --yes
 ```
+
+The stack provisions a D1 database (`db`), an R2 bucket (`bucket`), the C# Worker (`api`), and the Astro site (`web`). D1 migrations come from `spikes/netwasm-worker/migrations/`. The Astro Worker gets `PUBLIC_API_URL` as a runtime binding for browser requests and an `API` service binding for server-side fetches, avoiding same-zone Worker fetch issues.
 
 ---
 

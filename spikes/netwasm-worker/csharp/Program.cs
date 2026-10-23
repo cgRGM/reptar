@@ -161,7 +161,6 @@ public static partial class PageExports
         var app = ReptarApp.Create(new ReptarConfig
         {
             Auth = BuiltIn(),
-            Debug = true,
             Database = new D1DbClient(json),
             Storage = new R2Client(),
             Json = json,

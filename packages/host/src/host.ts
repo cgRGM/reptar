@@ -8,6 +8,9 @@ export interface ReptarWasmApp {
 }
 
 export interface ReptarHostOptions<TEnv> {
+  assets?: (env: TEnv) => {
+    fetch: (request: Request) => Promise<Response>;
+  };
   bindings: (env: TEnv) => ReptarBindings;
   manifestUrl?: (origin: string) => string;
   open: () => Promise<ReptarWasmApp>;
@@ -35,6 +38,10 @@ interface ReptarScope {
   ) => Promise<boolean>;
   __REPTAR_DB_EXECUTE?: (sql: string, paramsJson: string) => Promise<number>;
   __REPTAR_DB_QUERY?: (sql: string, paramsJson: string) => Promise<string>;
+  __REPTAR_FETCH?: (
+    input: RequestInfo | URL,
+    init?: RequestInit
+  ) => Promise<Response>;
   __REPTAR_MANIFEST_URL?: string;
   __REPTAR_R2_PUT?: (
     key: string,
@@ -92,6 +99,17 @@ export const createReptarHost = <TEnv>(
       scope.__REPTAR_R2_PUT ??= (key, bytes, contentType) =>
         r2.put(key, bytes, contentType);
     }
+
+    scope.__REPTAR_FETCH ??= (input, init) => {
+      const request = new Request(input, init);
+      const assets = options.assets?.(env);
+
+      if (assets && new URL(request.url).pathname.startsWith("/browser/")) {
+        return assets.fetch(request);
+      }
+
+      return fetch(request);
+    };
 
     appPromise ??= options.open();
     return appPromise;

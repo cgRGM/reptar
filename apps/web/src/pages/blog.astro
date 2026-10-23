@@ -9,7 +9,42 @@ interface Post {
   createdAt: string;
 }
 
-const apiUrl = import.meta.env.PUBLIC_API_URL ?? "http://localhost:8788";
+const localApiUrl =
+  import.meta.env.PUBLIC_API_URL ?? "http://localhost:8788";
+
+type CloudflareEnv = Record<string, unknown>;
+
+const resolveCloudflareEnv = async (): Promise<
+  CloudflareEnv | undefined
+> => {
+  if (!import.meta.env.SSR) {
+    return;
+  }
+
+  try {
+    const cloudflareWorkersModule = "cloudflare:workers";
+    // @vite-ignore
+    const module = (await import(cloudflareWorkersModule)) as {
+      env?: CloudflareEnv;
+    };
+
+    return module.env;
+  } catch {
+    // Local `astro dev` has no Cloudflare bindings.
+  }
+};
+
+const cloudflareEnv = await resolveCloudflareEnv();
+const apiUrl =
+  (cloudflareEnv?.PUBLIC_API_URL as string | undefined) ?? localApiUrl;
+const apiService = cloudflareEnv?.API as
+  | { fetch: (request: Request) => Promise<Response> }
+  | undefined;
+
+const fetchApi = (path: string, init?: RequestInit): Promise<Response> =>
+  apiService
+    ? apiService.fetch(new Request(`${apiUrl}${path}`, init))
+    : fetch(`${apiUrl}${path}`, init);
 
 let posts: Post[] = [];
 let error: string | null = null;
@@ -22,7 +57,7 @@ const sleep = (milliseconds: number): Promise<void> =>
 
 const loadPosts = async (attempt: number): Promise<void> => {
   try {
-    const response = await fetch(`${apiUrl}/posts`);
+    const response = await fetchApi("/posts");
 
     if (response.ok) {
       posts = (await response.json()) as Post[];

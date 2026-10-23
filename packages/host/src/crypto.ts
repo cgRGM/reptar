@@ -64,7 +64,9 @@ const derivePassword = async (
 };
 
 export const hashPassword = async (password: string): Promise<string> => {
-  const iterations = 210_000;
+  // workerd caps PBKDF2 at 100,000 iterations (higher counts throw
+  // NotSupportedError in production even though local dev may allow them).
+  const iterations = 100_000;
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const hash = await derivePassword(password, salt, iterations);
 

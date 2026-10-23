@@ -15,6 +15,10 @@ const baseReplacements: readonly (readonly [string, string])[] = [
     "compileCoreModule:()=>globalThis.__REPTAR_WASM_MODULE",
   ],
   [
+    "fetch:globalThis.fetch.bind(globalThis)",
+    "fetch:globalThis.__REPTAR_FETCH",
+  ],
+  [
     "createModuleUrl:e=>URL.createObjectURL(new Blob([e],{type:`text/javascript`}))",
     'createModuleUrl:e=>"blob:reptar-raw-adapter"',
   ],

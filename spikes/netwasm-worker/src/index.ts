@@ -26,6 +26,7 @@ const withCors = (response: Response, origin: string | null): Response => {
 };
 
 const host = createReptarHost<Env>({
+  assets: (env) => env.ASSETS,
   bindings: (env) => ({
     db: env.DB as unknown as D1DatabaseLike,
     r2: {

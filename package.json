@@ -28,7 +28,7 @@
     "api:codegen": "bun scripts/reptar.ts codegen",
     "rpc:gen": "bun scripts/reptar.ts codegen",
     "rpc:check": "bunx tsc --noEmit -p examples/blog/rpc",
-    "deploy": "turbo run deploy -F @reptar/infra --",
+    "deploy": "cd packages/infra && bun run deploy",
     "destroy": "turbo run destroy -F @reptar/infra --",
     "env:generate": "varlock codegen --path ./apps/web/",
     "postinstall": "varlock codegen --path ./apps/web/",

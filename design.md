@@ -389,10 +389,11 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
 - **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, codegen, and the file-based blog app are implemented. `bun api:test` passes (8 tests); `bun rpc:gen` + `bun rpc:check` pass.
 - **Wasm core:** `framework/Reptar.Wasm` compiles the shared router, `Ctx`, middleware, `Rule<T>`/`Validator<T>`, and the JSON codec to `netwasm0.1`. The Worker app uses `ReptarApp` directly; the expression-tree validator runs inside workerd and returns the standard validation envelope.
 - **Cloudflare data:** `D1DbClient` implements `QueryAsync`/`QuerySingleOrDefaultAsync`/`ExecuteAsync` over `[JSImport]`; `R2Client` implements `PutAsync`. The blog API lists and creates posts in D1 and uploads images to R2 through `c.Db` and `c.Storage`.
-- **Auth on Wasm:** the D1 auth slice implements signup/signin/signout/session and `RequireUser`. Passwords use PBKDF2 through the host WebCrypto shim; sessions are SHA-256 token hashes in D1; cookies use `Max-Age`, `HttpOnly`, and `SameSite=Lax`.
+- **Auth on Wasm:** the D1 auth slice implements signup/signin/signout/session and `RequireUser`. Passwords use PBKDF2 (100,000 iterations, the workerd maximum) through the host WebCrypto shim; sessions are SHA-256 token hashes in D1; cookies use `Max-Age`, `HttpOnly`, and `SameSite=Lax`.
 - **Host contract:** `@reptar/host` owns the runtime shim (`createReptarHost`, D1 query/execute, R2 put) and the NetWasm host rewrite (`patchNetWasmHost`). The C# app exposes one `[JSExport] handle(string)` and responds through `[JSImport] respond(string)`. `bun reptar build:worker` publishes the C# app, copies the browser artifacts, and applies the host rewrite; there is no app-specific patch script.
 - **Blog demo:** Astro `/blog` renders posts from the C# Worker. Posts are in D1, images are in R2, and the page includes a publish form that writes through the C# API. See `apps/web/src/pages/blog.astro` and `spikes/netwasm-worker/`.
-- **Next:** move the portable blog's `schema/` + `features/` (CRUD, slugs, ownership) onto the Wasm target, then deploy the Worker + site with Alchemy.
+- **Deployed:** `bun run deploy` builds the C# Wasm Worker, provisions D1 + R2, applies `spikes/netwasm-worker/migrations/`, and deploys both the API Worker and the Astro Worker through Alchemy. The Astro Worker receives `PUBLIC_API_URL` as a runtime binding and an `API` service binding for server-side fetches; `GET /blog` renders D1 posts and R2 images from the deployed API.
+- **Next:** move the portable blog's `schema/` + `features/` (CRUD, slugs, ownership) onto the Wasm target, then add source-generated table metadata and trim the Wasm payload.
 
 ### Phase 0 update: D1 bridge proven
 
@@ -401,7 +402,8 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
 - NetWasm does not support async `[JSExport]` returning `Task<string>`. The host-driven pattern is: C# starts async work from a `void` export, awaits a JS import, then calls a `respond` import; the Worker awaits a JS Promise resolved by that callback. This is the contract for `@reptar/host`.
 - The same pattern now carries a generic request/response envelope, so the framework exposes one `handle` export instead of one export per route.
 - `Validator<T>`'s expression-tree rules execute under NetWasm; `POST /posts` with a short title/empty content returns `400 validation_error` with field paths.
-- Auth works end-to-end in workerd: signup inserts a D1 user and session, returns an HttpOnly cookie, and `/auth/session` + `/me` resolve the user on later requests.
+- Auth works end-to-end in workerd and on deployed Cloudflare: signup inserts a D1 user and session, returns an HttpOnly cookie, and `/auth/session` + `/me` resolve the user on later requests.
+- workerd caps PBKDF2 at 100,000 iterations; higher counts work in local dev but throw `NotSupportedError` in production. The host crypto shim uses the 100,000 cap.
 - `CookieJar` uses `Max-Age` for expiry; `DateTimeOffset.TryParse`/RFC1123 formatting was not reliable on NetWasm.
 - Removing `Regex` from the Wasm validator path fixed the Binaryen `wasm-opt` O1+ failure. Email validation is a small manual check on Wasm; custom regex rules remain net10.0-only for now.
 - The optimized Worker module is ~10 MB with the current framework, auth, source-generated JSON, and LINQ surface. The next size win is a custom JSON codec and a smaller LINQ surface.
