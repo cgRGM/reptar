@@ -7,7 +7,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../framework/Reptar.Wasm/Reptar.Wasm.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <NetWasmJavaScriptModule Include="app.host.mjs" Module="app.host" />
-    <Content Include="index.html;app.mjs" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

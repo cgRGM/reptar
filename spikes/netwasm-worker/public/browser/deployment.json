@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "729075d30b4111604049bc3d7ca797bfa7ad9742ece278daa730638b130c0eaf",
+  "semanticBuildId": "30084c7c9ccf033b0ffc8626d9b9466519fca9fba4d30f987f49ad5cd456daf9",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "2b57c37ef7bde6df0ccfef5f02fa16258466cc1dbc7befbc3335874ba13336ff",
+  "buildFingerprint": "06cc29304ab1711f61d1db63a646e634d42e58754facfe255602d945e4fc6185",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,42 +23,42 @@
       "relativePath": "HelloReptar.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "16708f1431f1a72933e8e455eb4b6750374a1e3f36e1259f7c31edd52aad6943",
+      "sha256": "ee34aff6ceb5e6a4089a1e479757debf0a7b76dea0d98bae980f56aa0848ca12",
       "schemaVersion": 2
     },
     {
       "relativePath": "HelloReptar.raw-adapter.mjs",
       "role": "raw-adapter",
       "mediaType": "text/javascript",
-      "sha256": "76bc6d5a39dbcbe8335736ba069fb35dcab9636034d0e0821f05b646872e272d",
+      "sha256": "126606ecc954c5d2a20a5bfd1b7c2dba183b853b9eda11242a61dd21349d61fc",
       "schemaVersion": null
     },
     {
       "relativePath": "HelloReptar.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "11d40020810165b845221f088b7b8d272e51227f7d93bc731b5c058c81779cb9",
+      "sha256": "c086cafe2da4e5d5716cfd0d4192d5c123f8ef40963c7d2f97505038942e87f3",
       "schemaVersion": null
     },
     {
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "8b996e661243d19986f70062893a992fcec36e71f7c8221e07d8cc86c98963a1",
+      "sha256": "12469982743eb980f6b27cc56665fe7bb8f47df0fd4d8bf1368b1d5c9e268df1",
       "schemaVersion": 1
     },
     {
       "relativePath": "netwasm.page.mjs",
       "role": "hosting-javascript",
       "mediaType": "text/javascript",
-      "sha256": "23054756ac84786d7dfffe303eab58669cbeb7876f02206305f97a697db61ee2",
+      "sha256": "8ede5dd32da33b610947db14f7fafc5518899360ccf87a53680150b228d6fc47",
       "schemaVersion": null
     },
     {
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "99edb579b4ff1c49e9f403da90ccc4819ae7b772f21ff002f42957e9a10784ba",
+      "sha256": "9b90895f332e504af05238f314375d5aba68c307c71186a8923862ffa16b3281",
       "schemaVersion": 1
     }
   ],
@@ -74,6 +74,14 @@
     "wasi:random/random@0.2.11"
   ],
   "requiredImports": [
+    {
+      "interface": "netwasm:runtime/reactor-host@1.0.0",
+      "name": "cancel",
+      "parameters": [
+        "u32"
+      ],
+      "results": []
+    },
     {
       "interface": "netwasm:runtime/reactor-host@1.0.0",
       "name": "watch",
@@ -97,6 +105,14 @@
       "parameters": [],
       "results": [
         "own\u003Cwasi:io/streams@0.2.11#output-stream\u003E"
+      ]
+    },
+    {
+      "interface": "wasi:clocks/monotonic-clock@0.2.11",
+      "name": "now",
+      "parameters": [],
+      "results": [
+        "wasi:clocks/monotonic-clock@0.2.11#instant"
       ]
     },
     {

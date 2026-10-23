@@ -27,18 +27,19 @@ reptar/
 │   └── docs/        # Documentation site (Astro Starlight)
 ├── framework/
 │   ├── Reptar/          # C# core: router, Ctx, validation, data, auth, codegen
+│   ├── Reptar.Wasm/     # netwasm0.1 target: D1/R2 clients + Wasm table metadata
 │   └── Reptar.Kestrel/  # Optional local dev host (ASP.NET is not a runtime dependency)
 ├── examples/
 │   └── blog/        # File-based C# reference app (no .csproj)
 ├── packages/
 │   ├── rpc/         # @reptar/client runtime for generated contracts
-│   ├── host/        # @reptar/host Worker shim (NetWasm host + D1 bridge)
+│   ├── host/        # @reptar/host Worker shim (NetWasm rewrite + D1/R2 bridges)
 │   ├── infra/       # Alchemy infrastructure (Cloudflare Worker website deployments)
 │   └── config/      # Shared TypeScript configuration
 ├── spikes/
-│   └── netwasm-worker/  # Phase 0 proof: C# Wasm + D1 inside workerd
+│   └── netwasm-worker/  # C# ReptarApp on workerd: D1 + R2 blog API
 ├── scripts/
-│   └── reptar.ts    # Bun CLI: dev, codegen, test, build
+│   └── reptar.ts    # Bun CLI: dev, codegen, test, build, build:worker
 ├── design.md        # Canonical design specification and roadmap
 └── frontend.md      # Website and documentation brief
 ```
@@ -56,7 +57,13 @@ bun api:test      # run the C# framework tests
 
 Framework code lives in `framework/Reptar` (core, data, auth, codegen) and `framework/Reptar.Kestrel` (optional dev host). Generated contracts are committed under `examples/blog/rpc`.
 
-**Phase 0 status:** NetWasm compiles the C# module to a 26 KB `.wasm`; it runs inside `wrangler dev` (workerd) and reads real D1 rows. See `spikes/netwasm-worker/README.md`. `packages/host` is the start of the reusable Worker shim.
+**Wasm status:** the shared `ReptarApp` core now compiles to `netwasm0.1` and runs inside `wrangler dev` (workerd). The Worker app uses framework routes, `c.Db` against D1, `c.Storage` against R2, and `Validator<T>` validation. Built-in auth runs too: D1 users/sessions, PBKDF2 through host WebCrypto, HttpOnly cookies, and `Auth.RequireUser`. `@reptar/host` owns the NetWasm Worker rewrite and the generic `handle`/`respond` bridge. Rebuild the C# module with:
+
+```bash
+bun worker:build
+```
+
+See `spikes/netwasm-worker/README.md` for the runtime details.
 
 ### Blog demo
 

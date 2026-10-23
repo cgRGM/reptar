@@ -79,7 +79,9 @@ public abstract class PropertyRules
     public virtual PropertyRules Min(int value) => this;
     public virtual PropertyRules Max(int value) => this;
     public virtual PropertyRules Length(int value) => this;
+#if !NETWASM
     public virtual PropertyRules Regex(string pattern) => this;
+#endif
     public virtual PropertyRules Email() => this;
     public virtual PropertyRules Url() => this;
     public virtual PropertyRules NotNull() => this;
@@ -107,20 +109,21 @@ public abstract class PropertyRules
 
 public sealed class StringRules : PropertyRules
 {
-    private static readonly System.Text.RegularExpressions.Regex EmailPattern =
-        new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
-
     private int? _min;
     private int? _max;
     private int? _length;
+#if !NETWASM
     private string? _pattern;
+#endif
     private bool _email;
     private bool _url;
 
     public override StringRules Min(int value) { _min = value; return this; }
     public override StringRules Max(int value) { _max = value; return this; }
     public override StringRules Length(int value) { _length = value; return this; }
+#if !NETWASM
     public override StringRules Regex(string pattern) { _pattern = pattern; return this; }
+#endif
     public override StringRules Email() { _email = true; return this; }
     public override StringRules Url() { _url = true; return this; }
     public override StringRules NotNull() => this;
@@ -154,19 +157,35 @@ public sealed class StringRules : PropertyRules
         if (_length is { } length && text.Length != length)
             issues.Add(new ValidationIssue($"Must be exactly {length} characters.", [path]));
 
+#if !NETWASM
         if (_pattern is not null &&
             !System.Text.RegularExpressions.Regex.IsMatch(text, _pattern))
         {
             issues.Add(new ValidationIssue("Invalid format.", [path]));
         }
+#endif
 
-        if (_email && !EmailPattern.IsMatch(text))
+        if (_email && !IsEmail(text))
             issues.Add(new ValidationIssue("Must be a valid email.", [path]));
 
         if (_url && !Uri.TryCreate(text, UriKind.Absolute, out _))
             issues.Add(new ValidationIssue("Must be a valid URL.", [path]));
 
         return issues;
+    }
+
+    private static bool IsEmail(string text)
+    {
+        var at = text.IndexOf('@');
+
+        if (at <= 0 || at != text.LastIndexOf('@') || at == text.Length - 1)
+            return false;
+
+        var dot = text.LastIndexOf('.');
+        return dot > at + 1 &&
+            dot < text.Length - 1 &&
+            !text.Contains(' ') &&
+            !text.Contains('\t');
     }
 }
 

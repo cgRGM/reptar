@@ -4,12 +4,14 @@ namespace Reptar;
 
 public sealed class ReptarConfig
 {
+    public bool Debug { get; set; }
     public IDbClient? Database { get; set; }
     public IR2Client? Storage { get; set; }
     public IAiClient? AI { get; set; }
     public IRateLimiter? RateLimit { get; set; }
     public ICrypto? Crypto { get; set; }
     public IClock? Clock { get; set; }
+    public IJsonCodec? Json { get; set; }
     public AuthOptions? Auth { get; set; }
     public TelemetryOptions? Telemetry { get; set; }
 }
@@ -62,5 +64,7 @@ public static class ReptarApi
 
 public static class Db
 {
+#if !NETWASM
     public static IDbClient Sqlite(string path = "local.db") => new SqliteDbClient(path);
+#endif
 }

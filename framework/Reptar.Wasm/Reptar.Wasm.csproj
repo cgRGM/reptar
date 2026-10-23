@@ -1,0 +1,28 @@
+<Project Sdk="NetWasm.Sdk">
+  <PropertyGroup>
+    <TargetFramework>netwasm0.1</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <DefineConstants>NETWASM</DefineConstants>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>Reptar</AssemblyName>
+    <RootNamespace>Reptar</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="../Reptar/Core/**/*.cs" />
+    <Compile Include="../Reptar/Validation/**/*.cs" />
+    <Compile Include="../Reptar/Data/Services.cs" />
+    <Compile Include="Data/TableDef.Wasm.cs" />
+    <Compile Include="Data/D1DbClient.cs" />
+    <Compile Include="Data/R2Client.cs" />
+    <Compile Include="Data/WasmCrypto.cs" />
+    <Compile Include="Auth/Auth.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NetWasm.System.Linq" Version="0.10.0" />
+    <PackageReference Include="NetWasm.System.Text.Json" Version="0.10.0" />
+  </ItemGroup>
+</Project>

@@ -79,6 +79,9 @@
     "spikes/netwasm-worker": {
       "name": "@reptar/workers-blog-demo",
       "version": "0.1.0",
+      "dependencies": {
+        "@reptar/host": "workspace:*",
+      },
       "devDependencies": {
         "wrangler": "^4.152.0",
       },

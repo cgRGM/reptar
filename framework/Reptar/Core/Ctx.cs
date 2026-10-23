@@ -22,6 +22,7 @@ public sealed class Ctx
     public IRateLimiter RateLimit => _services.RateLimit;
     public IClock Clock => _services.Clock;
     public ICrypto Crypto => _services.Crypto;
+    public IJsonCodec JsonCodec => _services.Json;
     public CookieJar Cookies { get; }
     public SessionUser? User { get; set; }
 
@@ -36,7 +37,7 @@ public sealed class Ctx
     public void SetHeader(string name, string value) => PendingHeaders[name] = value;
 
     public ReptarResponse Json<T>(T value, int status = 200) =>
-        ReptarResponse.Json(JsonSerializer.Serialize(value, ReptarJson.Options), status);
+        ReptarResponse.Json(_services.Json.Serialize(value), status);
 
     public ReptarResponse Text(string text, int status = 200) => new()
     {
@@ -73,7 +74,13 @@ public sealed class Ctx
         Error(400, "bad_request", message);
 
     public ReptarResponse Invalid(IReadOnlyList<ValidationIssue> issues) =>
-        Json(new ValidationError("validation_error", "Validation failed.", RequestId, issues), 400);
+        Json(
+            new ValidationError(
+                "validation_error",
+                "Validation failed.",
+                RequestId,
+                issues.ToArray()),
+            400);
 }
 
 internal sealed record ServiceSet(
@@ -82,4 +89,5 @@ internal sealed record ServiceSet(
     IAiClient AI,
     IRateLimiter RateLimit,
     IClock Clock,
-    ICrypto Crypto);
+    ICrypto Crypto,
+    IJsonCodec Json);

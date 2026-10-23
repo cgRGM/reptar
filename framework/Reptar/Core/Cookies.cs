@@ -34,6 +34,23 @@ public sealed class CookieJar
         Pending.Add(string.Join("; ", parts));
     }
 
+    public void Set(string name, string value, TimeSpan maxAge, string? domain = null)
+    {
+        var parts = new List<string>
+        {
+            $"{name}={value}",
+            "Path=/",
+            $"Max-Age={Math.Max(0, (long)maxAge.TotalSeconds)}",
+        };
+
+        if (domain is not null)
+            parts.Add($"Domain={domain}");
+
+        parts.Add("HttpOnly");
+        parts.Add("SameSite=Lax");
+        Pending.Add(string.Join("; ", parts));
+    }
+
     public void Delete(string name, string? domain = null) =>
-        Set(name, "", DateTimeOffset.UtcNow.AddDays(-1).ToString("O"), domain);
+        Set(name, "", TimeSpan.Zero, domain);
 }

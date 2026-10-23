@@ -23,6 +23,7 @@
     "dev:docs": "turbo run dev -F docs --",
     "api:dev": "bun scripts/reptar.ts dev",
     "api:build": "bun scripts/reptar.ts build",
+    "worker:build": "bun scripts/reptar.ts build:worker",
     "api:test": "bun scripts/reptar.ts test",
     "api:codegen": "bun scripts/reptar.ts codegen",
     "rpc:gen": "bun scripts/reptar.ts codegen",

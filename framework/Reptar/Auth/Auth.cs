@@ -2,10 +2,6 @@ using static Reptar.ReptarApi;
 
 namespace Reptar;
 
-public sealed record SessionUser(string Id, string Email, string Name);
-
-public sealed record SessionResponse(SessionUser? User);
-
 public static class Auth
 {
     private static AuthOptions _options = new();
@@ -119,7 +115,7 @@ public static class Auth
                 await ctx.Db.DeleteWhereAsync(
                     Sessions,
                     "token_hash = @hash",
-                    new { hash = ctx.Crypto.Sha256(token) });
+                    new { hash = await ctx.Crypto.Sha256(token) });
             }
 
             ctx.Cookies.Delete(_options.CookieName);
@@ -179,7 +175,7 @@ public static class Auth
         if (token is null)
             return null;
 
-        var hash = ctx.Crypto.Sha256(token);
+        var hash = await ctx.Crypto.Sha256(token);
 
         return await ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
             """
@@ -199,7 +195,7 @@ public static class Auth
         await ctx.Db.InsertAsync(Sessions, new SessionRow(
             Id: Ids.New("ses"),
             UserId: userId,
-            TokenHash: ctx.Crypto.Sha256(token),
+            TokenHash: await ctx.Crypto.Sha256(token),
             ExpiresAt: expiresAt,
             CreatedAt: ctx.Clock.IsoNow()));
 

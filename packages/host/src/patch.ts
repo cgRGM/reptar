@@ -1,7 +1,7 @@
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-const replacements: readonly (readonly [string, string])[] = [
+const baseReplacements: readonly (readonly [string, string])[] = [
   [
     "manifestUrl:new URL(`./deployment.json`,import.meta.url).href",
     "manifestUrl:globalThis.__REPTAR_MANIFEST_URL",
@@ -18,12 +18,28 @@ const replacements: readonly (readonly [string, string])[] = [
     "createModuleUrl:e=>URL.createObjectURL(new Blob([e],{type:`text/javascript`}))",
     'createModuleUrl:e=>"blob:reptar-raw-adapter"',
   ],
-  [
-    "importModule:e=>import(e)",
-    'importModule:async()=>{const m=await import("./HelloReptar.raw-adapter.mjs");return{createAdapter:m.createAdapter,rawAdapterMetadata:m.rawAdapterMetadata}}',
-  ],
   ["revokeModuleUrl:URL.revokeObjectURL.bind(URL)", "revokeModuleUrl:()=>{}"],
 ];
+
+const findEntryModule = (browserDirectory: string): string | null => {
+  for (const entry of readdirSync(browserDirectory)) {
+    if (
+      !entry.endsWith(".mjs") ||
+      entry === "netwasm.page.mjs" ||
+      entry.endsWith(".raw-adapter.mjs")
+    ) {
+      continue;
+    }
+
+    const source = readFileSync(path.join(browserDirectory, entry), "utf-8");
+
+    if (source.includes('"./netwasm.page.bun.mjs"')) {
+      return entry;
+    }
+  }
+
+  return null;
+};
 
 /**
  * Rewrites a NetWasm browser host into a Worker-compatible host.
@@ -37,6 +53,19 @@ export const patchNetWasmHost = (browserDirectory: string): number => {
   const pagePath = path.join(browserDirectory, "netwasm.page.mjs");
   let page = readFileSync(pagePath, "utf-8");
   let applied = 0;
+
+  const entryModule = findEntryModule(browserDirectory);
+  const rawAdapter = entryModule
+    ? `${entryModule.slice(0, -".mjs".length)}.raw-adapter.mjs`
+    : "HelloReptar.raw-adapter.mjs";
+
+  const replacements: readonly (readonly [string, string])[] = [
+    ...baseReplacements,
+    [
+      "importModule:e=>import(e)",
+      `importModule:async()=>{const m=await import("./${rawAdapter}");return{createAdapter:m.createAdapter,rawAdapterMetadata:m.rawAdapterMetadata}}`,
+    ],
+  ];
 
   for (const [from, to] of replacements) {
     if (page.includes(to) || !page.includes(from)) {

@@ -16,6 +16,31 @@
   "imports": [
     {
       "module": "app.host",
+      "name": "execute",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "i32",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060001c7",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060001c7",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060001c7"
+    },
+    {
+      "module": "app.host",
+      "name": "hashPassword",
+      "parameters": [
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060001dd",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060001dd",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060001dd"
+    },
+    {
+      "module": "app.host",
       "name": "query",
       "parameters": [
         "string",
@@ -23,9 +48,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.HelloReptar.06000001",
-      "rejectExport": "netwasm.async.import.reject.HelloReptar.06000001",
-      "cancelExport": "netwasm.async.import.cancel.HelloReptar.06000001"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060001c6",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060001c6",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060001c6"
     },
     {
       "module": "app.host",
@@ -37,13 +62,25 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.HelloReptar.06000002",
-      "rejectExport": "netwasm.async.import.reject.HelloReptar.06000002",
-      "cancelExport": "netwasm.async.import.cancel.HelloReptar.06000002"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060001d6",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060001d6",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060001d6"
     },
     {
       "module": "app.host",
-      "name": "resolve",
+      "name": "randomToken",
+      "parameters": [
+        "i32"
+      ],
+      "result": "string",
+      "asyncReturn": null,
+      "resolveExport": null,
+      "rejectExport": null,
+      "cancelExport": null
+    },
+    {
+      "module": "app.host",
+      "name": "respond",
       "parameters": [
         "string"
       ],
@@ -52,63 +89,44 @@
       "resolveExport": null,
       "rejectExport": null,
       "cancelExport": null
+    },
+    {
+      "module": "app.host",
+      "name": "sha256",
+      "parameters": [
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060001df",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060001df",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060001df"
+    },
+    {
+      "module": "app.host",
+      "name": "verifyPassword",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "bool",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060001de",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060001de",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060001de"
     }
   ],
   "exports": [
     {
-      "name": "createPost",
+      "name": "handle",
       "parameters": [
-        "string",
-        "string",
         "string"
       ],
       "result": "void",
       "parameterNames": [
-        "title",
-        "content",
-        "imageKey"
+        "requestJson"
       ],
       "nonNullableParameters": [
-        true,
-        true,
-        true
-      ],
-      "nonNullableResult": true,
-      "asyncReturn": null,
-      "statusExport": null,
-      "resultExport": null,
-      "completeExport": null,
-      "completionResult": null
-    },
-    {
-      "name": "listPosts",
-      "parameters": [],
-      "result": "void",
-      "parameterNames": [],
-      "nonNullableParameters": [],
-      "nonNullableResult": true,
-      "asyncReturn": null,
-      "statusExport": null,
-      "resultExport": null,
-      "completeExport": null,
-      "completionResult": null
-    },
-    {
-      "name": "uploadImage",
-      "parameters": [
-        "string",
-        "string",
-        "bytes"
-      ],
-      "result": "void",
-      "parameterNames": [
-        "key",
-        "contentType",
-        "bytes"
-      ],
-      "nonNullableParameters": [
-        true,
-        true,
         true
       ],
       "nonNullableResult": true,
@@ -123,11 +141,23 @@
   "witImports": [
     {
       "interface": "netwasm:runtime@1.0.0/reactor-host",
+      "function": "cancel"
+    },
+    {
+      "interface": "netwasm:runtime@1.0.0/reactor-host",
       "function": "watch"
     },
     {
       "interface": "wasi:cli@0.2.11/environment",
       "function": "get-environment"
+    },
+    {
+      "interface": "wasi:cli@0.2.11/stderr",
+      "function": "get-stderr"
+    },
+    {
+      "interface": "wasi:clocks@0.2.11/monotonic-clock",
+      "function": "now"
     },
     {
       "interface": "wasi:clocks@0.2.11/monotonic-clock",
@@ -148,6 +178,18 @@
     {
       "interface": "wasi:filesystem@0.2.11/types",
       "function": "[method]descriptor.read"
+    },
+    {
+      "interface": "wasi:io@0.2.11/error",
+      "function": "[resource-drop]error"
+    },
+    {
+      "interface": "wasi:io@0.2.11/streams",
+      "function": "[method]output-stream.blocking-write-and-flush"
+    },
+    {
+      "interface": "wasi:io@0.2.11/streams",
+      "function": "[resource-drop]output-stream"
     },
     {
       "interface": "wasi:random@0.2.11/random",

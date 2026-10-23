@@ -11,9 +11,7 @@ export interface NetWasmPageOpenOptions {
   stdout?: (line: string) => void;
 }
 export interface NetWasmPageModule {
-  "createPost"(title: string, content: string, imageKey: string): void;
-  "listPosts"(): void;
-  "uploadImage"(key: string, contentType: string, bytes: Uint8Array): void;
+  "handle"(requestJson: string): void;
   close(): Promise<void>;
   readonly failure: Promise<unknown>;
 }

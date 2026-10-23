@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { cpSync, mkdirSync, rmSync } from "node:fs";
 import path from "node:path";
+
+import { patchNetWasmHost } from "../packages/host/src/patch";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const requiredSdk = "10.0.401";
@@ -127,10 +129,11 @@ if (command === "--help" || command === "-h" || command === "help") {
   console.log(`reptar <command>
 
 Commands:
-  dev       Run the example blog API on http://localhost:8787
-  codegen   Generate packages/rpc contracts from the C# route tree
-  test      Run the C# framework tests
-  build     Build the framework core
+  dev          Run the example blog API on http://localhost:8787
+  codegen      Generate packages/rpc contracts from the C# route tree
+  test         Run the C# framework tests
+  build        Build the framework core
+  build:worker Publish the C# Wasm app and patch the NetWasm host for Workers
 
 The .NET SDK is only a build tool. It is installed under .reptar/ when missing.
 `);
@@ -166,6 +169,24 @@ switch (command) {
 
   case "build": {
     run(["build", "framework/Reptar/Reptar.csproj", ...rest]);
+    break;
+  }
+
+  case "build:worker": {
+    const workerRoot = path.join(repoRoot, "spikes/netwasm-worker");
+    const csharpRoot = path.join(workerRoot, "csharp");
+    const publishRoot = path.join(
+      csharpRoot,
+      "bin/Release/netwasm0.1/publish/browser"
+    );
+    const browserRoot = path.join(workerRoot, "public/browser");
+
+    run(["publish", "-c", "Release"], csharpRoot);
+    rmSync(browserRoot, { force: true, recursive: true });
+    cpSync(publishRoot, browserRoot, { recursive: true });
+
+    const patched = patchNetWasmHost(browserRoot);
+    console.log(`Patched ${patched} NetWasm host replacement(s).`);
     break;
   }
 

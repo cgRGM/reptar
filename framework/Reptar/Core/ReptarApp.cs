@@ -90,6 +90,17 @@ public sealed class ReptarApp
 
     public RouteBuilder Post<TInput>(
         string path,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("POST", path, null, null, handler);
+
+    public RouteBuilder Post<TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("POST", path, middleware, null, handler);
+
+    public RouteBuilder Post<TInput>(
+        string path,
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("POST", path, null, validator, handler);
@@ -100,6 +111,17 @@ public sealed class ReptarApp
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("POST", path, middleware, validator, handler);
+
+    public RouteBuilder Put<TInput>(
+        string path,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("PUT", path, null, null, handler);
+
+    public RouteBuilder Put<TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("PUT", path, middleware, null, handler);
 
     public RouteBuilder Put<TInput>(
         string path,
@@ -184,7 +206,12 @@ public sealed class ReptarApp
             catch (Exception exception)
             {
                 Console.Error.WriteLine(exception);
-                response = ctx.Error(500, "internal_error", "Something went wrong.");
+                response = ctx.Error(
+                    500,
+                    "internal_error",
+                    _config.Debug
+                        ? exception.ToString()
+                        : "Something went wrong.");
             }
         }
 
@@ -201,7 +228,7 @@ public sealed class ReptarApp
         string method,
         string path,
         ReptarMiddleware? middleware,
-        Validator<TInput> validator,
+        Validator<TInput>? validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler)
     {
         var meta = new RouteMeta
@@ -228,7 +255,7 @@ public sealed class ReptarApp
 
             try
             {
-                input = JsonSerializer.Deserialize<TInput>(body, ReptarJson.Options);
+                input = ctx.JsonCodec.Deserialize<TInput>(body);
             }
             catch (JsonException)
             {
@@ -248,7 +275,7 @@ public sealed class ReptarApp
                     [new ValidationIssue("Invalid JSON body.", ["body"])]), 400);
             }
 
-            var issues = validator.Validate(input);
+            List<ValidationIssue> issues = validator is null ? [] : validator.Validate(input);
 
             if (issues.Count > 0)
                 return ctx.Invalid(issues);
@@ -323,12 +350,32 @@ public sealed class ReptarApp
     }
 
     private ServiceSet Services => _services ??= new ServiceSet(
-        _config.Database ?? new SqliteDbClient("reptar.db"),
+        _config.Database ?? DefaultDatabase(),
         _config.Storage ?? new NoopR2Client(),
         _config.AI ?? new NoopAiClient(),
         _config.RateLimit ?? new NoopRateLimiter(),
         _config.Clock ?? new SystemClock(),
-        _config.Crypto ?? new DevCrypto());
+        _config.Crypto ?? DefaultCrypto(),
+        _config.Json ?? new DefaultJsonCodec());
+
+    private static IDbClient DefaultDatabase()
+    {
+#if NETWASM
+        throw new InvalidOperationException(
+            "Configure ReptarConfig.Database for the Wasm host.");
+#else
+        return new SqliteDbClient("reptar.db");
+#endif
+    }
+
+    private static ICrypto DefaultCrypto()
+    {
+#if NETWASM
+        return new WasmCrypto();
+#else
+        return new DevCrypto();
+#endif
+    }
 
     internal static string Normalize(string path)
     {
@@ -391,6 +438,17 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
 
     public RouteBuilder Post<TInput>(
         string path,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Post(path, handler);
+
+    public RouteBuilder Post<TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Post(path, middleware, handler);
+
+    public RouteBuilder Post<TInput>(
+        string path,
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Post(path, validator, handler);
@@ -401,6 +459,17 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Post(path, middleware, validator, handler);
+
+    public RouteBuilder Put<TInput>(
+        string path,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Put(path, handler);
+
+    public RouteBuilder Put<TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Put(path, middleware, handler);
 
     public RouteBuilder Put<TInput>(
         string path,

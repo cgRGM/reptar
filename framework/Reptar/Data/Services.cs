@@ -37,10 +37,11 @@ public interface ICrypto
 {
     Task<string> HashPassword(string password);
     Task<bool> VerifyPassword(string password, string hash);
-    string Sha256(string input);
+    Task<string> Sha256(string input);
     string RandomToken(int bytes = 32);
 }
 
+#if !NETWASM
 public sealed class DevCrypto : ICrypto
 {
     private const int Iterations = 210_000;
@@ -81,12 +82,12 @@ public sealed class DevCrypto : ICrypto
             System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(actual, expected));
     }
 
-    public string Sha256(string input)
+    public Task<string> Sha256(string input)
     {
         var hash = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(input));
 
-        return Convert.ToHexString(hash).ToLowerInvariant();
+        return Task.FromResult(Convert.ToHexString(hash).ToLowerInvariant());
     }
 
     public string RandomToken(int bytes = 32) =>
@@ -95,6 +96,7 @@ public sealed class DevCrypto : ICrypto
             .Replace('+', '-')
             .Replace('/', '_');
 }
+#endif
 
 public interface IR2Client
 {

@@ -8,4 +8,4 @@ public sealed record ValidationError(
     string Code,
     string Message,
     string? RequestId,
-    IReadOnlyList<ValidationIssue> Issues);
+    ValidationIssue[] Issues);
