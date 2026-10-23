@@ -389,7 +389,8 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
 - **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, codegen, and the file-based blog app are implemented. `bun api:test` passes (8 tests); `bun rpc:gen` + `bun rpc:check` pass.
 - **Phase 0 spike (local):** NetWasm compiles the C# module to a **26 KB** `.wasm`; it runs inside `wrangler dev` (workerd). `GET /greet` returns `Hello, Cloudflare, from C#.` in ~3–5 ms warm. See `spikes/netwasm-worker/`.
 - **Host contract:** the stock NetWasm host is browser-only. The Worker shim must (1) set the manifest URL at request time, (2) use a statically imported `WebAssembly.Module`, (3) avoid `URL.createObjectURL` by statically importing the raw adapter, and (4) return exactly `createAdapter` + `rawAdapterMetadata` from the adapter module. These are the responsibilities of `@reptar/host`.
-- **Next:** productize `@reptar/host`, add the D1 bridge (`[JSImport]` → `env.DB`), move the blog features onto the Wasm target, then deploy with Alchemy.
+- **Blog demo:** Astro `/blog` renders posts from the C# Worker. Posts are in D1, images are in R2, and the page includes a publish form that writes through the C# API. See `apps/web/src/pages/blog.astro` and `spikes/netwasm-worker/`.
+- **Next:** productize `@reptar/host`, move the blog's `schema/` + `features/` onto the Wasm target, then deploy the Worker + site with Alchemy.
 
 ### Phase 0 update: D1 bridge proven
 

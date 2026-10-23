@@ -58,6 +58,20 @@ Framework code lives in `framework/Reptar` (core, data, auth, codegen) and `fram
 
 **Phase 0 status:** NetWasm compiles the C# module to a 26 KB `.wasm`; it runs inside `wrangler dev` (workerd) and reads real D1 rows. See `spikes/netwasm-worker/README.md`. `packages/host` is the start of the reusable Worker shim.
 
+### Blog demo
+
+The Astro site has a working `/blog` page powered by the C# Worker:
+
+```bash
+# terminal 1 — C# Worker API (D1 + R2)
+cd spikes/netwasm-worker && bunx wrangler@latest dev --port 8788 --local
+
+# terminal 2 — Astro site
+cd apps/web && bun run dev:bare --port 4321
+```
+
+Open `http://localhost:4321/blog`. Posts are stored in D1, cover images in R2, and the page includes a publish form that writes through the C# API.
+
 ---
 
 ## Local Development

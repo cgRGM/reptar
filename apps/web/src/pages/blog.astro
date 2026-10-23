@@ -1,0 +1,224 @@
+---
+import Layout from "../layouts/layout.astro";
+
+interface Post {
+  id: string;
+  title: string;
+  content: string;
+  imageKey: string | null;
+  createdAt: string;
+}
+
+const apiUrl = import.meta.env.PUBLIC_API_URL ?? "http://localhost:8788";
+
+let posts: Post[] = [];
+let error: string | null = null;
+
+try {
+  const response = await fetch(`${apiUrl}/posts`);
+
+  if (response.ok) {
+    posts = (await response.json()) as Post[];
+  } else {
+    error = `The Reptar API returned ${response.status}.`;
+  }
+} catch (error_) {
+  error =
+    error_ instanceof Error
+      ? `Could not reach the Reptar API at ${apiUrl}. ${error_.message}`
+      : `Could not reach the Reptar API at ${apiUrl}.`;
+}
+---
+
+<Layout
+  title="Blog — Reptar"
+  description="A blog powered by C# on Cloudflare Workers, with posts in D1 and images in R2."
+>
+  <section class="border-b border-[#232730] bg-[#090a0c] py-16 lg:py-24">
+    <div class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
+      <p class="font-mono text-xs uppercase tracking-[0.2em] text-emerald-400">
+        Reptar demo
+      </p>
+      <h1 class="mt-4 text-4xl sm:text-5xl font-bold tracking-tight text-white">
+        Blog, powered by C# on Workers.
+      </h1>
+      <p class="mt-5 max-w-2xl text-lg text-zinc-400 leading-relaxed">
+        Posts live in D1. Images live in R2. The API is C# compiled to Wasm and
+        running inside workerd. This page is the Astro frontend.
+      </p>
+
+      <div class="mt-8 flex flex-wrap items-center gap-3 font-mono text-xs">
+        <span
+          class="rounded border border-[#232730] bg-[#111317] px-3 py-1.5 text-zinc-400"
+        >
+          GET /posts → C# → D1
+        </span>
+        <span
+          class="rounded border border-[#232730] bg-[#111317] px-3 py-1.5 text-zinc-400"
+        >
+          GET /images/:key → R2
+        </span>
+        <a
+          href={`${apiUrl}/posts`}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="rounded border border-emerald-900/60 bg-emerald-950/40 px-3 py-1.5 text-emerald-300 hover:border-emerald-700 transition-colors"
+        >
+          Raw API JSON ↗
+        </a>
+      </div>
+    </div>
+  </section>
+
+  <section class="bg-[#090a0c] py-14">
+    <div class="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
+      {
+        error ? (
+          <div class="rounded border border-red-900/60 bg-red-950/30 p-6 text-sm text-red-300">
+            {error}
+          </div>
+        ) : posts.length === 0 ? (
+          <div class="rounded border border-[#232730] bg-[#111317] p-6 text-sm text-zinc-500">
+            No posts yet. Create one through the C# API and refresh.
+          </div>
+        ) : (
+          <div class="space-y-6">
+            {posts.map((post) => (
+              <article class="overflow-hidden rounded border border-[#232730] bg-[#111317]">
+                {post.imageKey && (
+                  <img
+                    src={`${apiUrl}/images/${encodeURIComponent(post.imageKey)}`}
+                    alt=""
+                    loading="lazy"
+                    class="h-56 w-full border-b border-[#232730] bg-[#0c0e11] object-cover"
+                  />
+                )}
+                <div class="p-6 sm:p-8">
+                  <p class="font-mono text-xs uppercase tracking-wider text-zinc-500">
+                    {new Date(post.createdAt).toLocaleDateString("en-US", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })}
+                  </p>
+                  <h2 class="mt-2 text-2xl font-semibold tracking-tight text-white">
+                    {post.title}
+                  </h2>
+                  <p class="mt-3 leading-relaxed text-zinc-400">{post.content}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+        )
+      }
+
+      <form
+        id="new-post"
+        class="mt-12 rounded border border-[#232730] bg-[#111317] p-6 sm:p-8"
+      >
+        <h2 class="text-lg font-semibold text-white">Create a post</h2>
+        <p class="mt-1 text-sm text-zinc-500">
+          This writes to D1 and uploads the image to R2 through the C# API.
+        </p>
+
+        <div class="mt-5 grid gap-4">
+          <label class="grid gap-2 text-sm text-zinc-300">
+            Title
+            <input
+              name="title"
+              required
+              maxlength="120"
+              class="rounded border border-[#232730] bg-[#090a0c] px-3 py-2 text-white outline-none focus:border-emerald-700"
+            />
+          </label>
+
+          <label class="grid gap-2 text-sm text-zinc-300">
+            Content
+            <textarea
+              name="content"
+              required
+              rows="4"
+              class="rounded border border-[#232730] bg-[#090a0c] px-3 py-2 text-white outline-none focus:border-emerald-700"
+            ></textarea>
+          </label>
+
+          <label class="grid gap-2 text-sm text-zinc-300">
+            Cover image
+            <input
+              name="image"
+              type="file"
+              accept="image/*"
+              class="text-sm text-zinc-400 file:mr-3 file:rounded file:border-0 file:bg-[#232730] file:px-3 file:py-1.5 file:text-zinc-200"
+            />
+          </label>
+        </div>
+
+        <div class="mt-5 flex items-center gap-4">
+          <button
+            type="submit"
+            class="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-emerald-400 transition-colors"
+          >
+            Publish
+          </button>
+          <p id="form-status" class="font-mono text-xs text-zinc-500"></p>
+        </div>
+      </form>
+    </div>
+  </section>
+
+  <script define:vars={{ apiUrl }}>
+    const form = document.querySelector("#new-post");
+    const status = document.querySelector("#form-status");
+
+    form?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const title = String(data.get("title") ?? "");
+      const content = String(data.get("content") ?? "");
+      const file = data.get("image");
+
+      status.textContent = "Publishing…";
+
+      try {
+        let imageKey = "";
+
+        if (file instanceof File && file.size > 0) {
+          const key = `${Date.now()}-${file.name}`;
+          const upload = await fetch(
+            `${apiUrl}/upload?key=${encodeURIComponent(key)}`,
+            {
+              body: file,
+              headers: {
+                "content-type": file.type || "application/octet-stream",
+              },
+              method: "POST",
+            },
+          );
+
+          if (!upload.ok) {
+            throw new Error(`Image upload failed (${upload.status})`);
+          }
+
+          const uploaded = await upload.json();
+          imageKey = uploaded.key;
+        }
+
+        const response = await fetch(`${apiUrl}/posts`, {
+          body: JSON.stringify({ content, imageKey, title }),
+          headers: { "content-type": "application/json" },
+          method: "POST",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Create failed (${response.status})`);
+        }
+
+        status.textContent = "Published. Reloading…";
+        location.reload();
+      } catch (error) {
+        status.textContent =
+          error instanceof Error ? error.message : "Something went wrong.";
+      }
+    });
+  </script>
+</Layout>
