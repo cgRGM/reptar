@@ -56,3 +56,16 @@ coverage
 .cache
 tmp
 temp
+
+# Reptar build toolchain
+.reptar/
+**/bin/
+**/obj/
+*.db
+*.db-shm
+*.db-wal
+
+# Cloudflare local state
+.wrangler/
+spikes/**/public/browser/
+spikes/**/.wrangler/

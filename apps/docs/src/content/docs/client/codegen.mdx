@@ -1,0 +1,89 @@
+---
+title: Typed Client & Codegen
+description: End-to-end type safety, Standard Schema generation, and OpenAPI contracts.
+---
+
+import { Code } from "@astrojs/starlight/components";
+import appTypeCode from "../../../../../../examples/blog/rpc/app-type.d.ts?raw";
+import smokeCode from "../../../../../../examples/blog/rpc/smoke.ts?raw";
+
+## Codegen Command
+
+The Reptar CLI runs automatic contract generation during development and builds:
+
+```bash
+bun reptar codegen
+# or via script
+bun run api:codegen
+```
+
+To verify that generated contracts are up to date in CI/CD without modifying files:
+
+```bash
+bun reptar codegen --check
+```
+
+---
+
+## Generated Artifacts
+
+`bun reptar codegen` inspects your C# feature slices and outputs:
+
+```text
+packages/rpc/src/
+  app-type.d.ts           # Complete route tree type: AppType
+  types.ts                # TypeScript DTO interfaces corresponding to C# records
+  schemas.generated.ts    # Zero-dependency Standard Schema validators (~standard)
+  client.ts               # Stable, ~100-line createClient runtime
+
+packages/contract/
+  reptar.spec.json        # Language-neutral schema for multi-platform client generators
+  openapi.json            # Standard OpenAPI 3.1 specification
+```
+
+---
+
+## Living Contract: Generated `AppType`
+
+The route tree below is **sourced directly from the real generated output** (`examples/blog/rpc/app-type.d.ts`), demonstrating the exact contract generated from C# routes:
+
+<Code
+  code={appTypeCode}
+  lang="typescript"
+  title="examples/blog/rpc/app-type.d.ts"
+/>
+
+---
+
+## Consuming the Typed Client
+
+Here is the real TypeScript consumer (`examples/blog/rpc/smoke.ts`) verifying the client against the generated types:
+
+<Code code={smokeCode} lang="typescript" title="examples/blog/rpc/smoke.ts" />
+
+---
+
+## Zero-Dependency Standard Schema
+
+Every `Rule<T>` in your C# backend generates a validator implementing `~standard` (version 1, vendor `"reptar"`).
+
+```ts
+import { createPostSchema } from "@reptar/rpc";
+import { useForm } from "@tanstack/react-form";
+
+// Plug directly into TanStack Form with zero additional validation packages
+const form = useForm({
+  validatorAdapter: createPostSchema,
+  defaultValues: {
+    title: "",
+    content: "",
+  },
+});
+```
+
+One `Rule<T>` in C# provides:
+
+1. Server-side validation
+2. Client-side form validation
+3. TypeScript static types
+4. OpenAPI schema constraints

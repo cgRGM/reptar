@@ -1,0 +1,22 @@
+{
+  "name": "reptar-netwasm-spike",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-22",
+  "assets": {
+    "directory": "./public",
+  },
+  "rules": [
+    {
+      "type": "CompiledWasm",
+      "globs": ["**/*.wasm"],
+      "fallthrough": true,
+    },
+  ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "reptar-spike",
+      "database_id": "11111111-1111-1111-1111-111111111111",
+    },
+  ],
+}

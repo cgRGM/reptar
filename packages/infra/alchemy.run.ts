@@ -9,20 +9,20 @@ export default Alchemy.Stack(
     providers: Cloudflare.providers(),
     state: Cloudflare.state(),
   },
-  Effect.gen(function* () {
+  Effect.gen(function* reptarStack() {
     const webWorker = yield* Cloudflare.Website.Astro("web", {
-      rootDir: "../../apps/web",
-      env: {
-        SESSION: Cloudflare.KV.Namespace("session"),
-        IMAGES: Cloudflare.Images.Images(),
-      },
       dev: {
         port: 4321,
       },
+      env: {
+        IMAGES: Cloudflare.Images.Images(),
+        SESSION: Cloudflare.KV.Namespace("session"),
+      },
+      rootDir: "../../apps/web",
     });
 
     return {
       web: webWorker.url,
     };
-  }),
+  })
 );

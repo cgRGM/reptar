@@ -1,0 +1,95 @@
+:root {
+  --sl-font:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --sl-font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  /* Brand accents (Reptar emerald) */
+  --sl-color-accent-low: #064e3b;
+  --sl-color-accent: #10b981;
+  --sl-color-accent-high: #6ee7b7;
+
+  /* Dark mode palette */
+  --sl-color-white: #f4f4f5;
+  --sl-color-gray-1: #e4e4e7;
+  --sl-color-gray-2: #a1a1aa;
+  --sl-color-gray-3: #71717a;
+  --sl-color-gray-4: #27272a;
+  --sl-color-gray-5: #18181b;
+  --sl-color-gray-6: #090a0c;
+  --sl-color-black: #090a0c;
+  --sl-color-bg: #090a0c;
+  --sl-color-bg-sidebar: #090a0c;
+  --sl-color-bg-nav: #090a0c;
+  --sl-color-hairline: #232730;
+  --sl-color-hairline-light: #232730;
+}
+
+/* Starlight sidebar and content polish */
+header.header {
+  border-bottom: 1px solid var(--sl-color-hairline);
+  background-color: #090a0c;
+}
+
+nav.sidebar {
+  border-right: 1px solid var(--sl-color-hairline);
+  background-color: #090a0c;
+}
+
+/* Code block styling */
+.expressive-code {
+  --ec-brdCol: #232730;
+  --ec-bg: #0d0e12;
+}
+
+.expressive-code pre {
+  border: 1px solid #232730 !important;
+  border-radius: 4px;
+}
+
+/* Links & CTAs */
+a {
+  text-decoration-thickness: 1px;
+}
+
+.action.primary {
+  background-color: #10b981 !important;
+  color: #090a0c !important;
+  font-weight: 600;
+  border: none;
+}
+
+.action.primary:hover {
+  background-color: #059669 !important;
+}
+
+.action.secondary,
+.action.minimal {
+  background-color: #111317 !important;
+  color: #e4e4e7 !important;
+  border: 1px solid #232730 !important;
+}
+
+.action.secondary:hover,
+.action.minimal:hover {
+  background-color: #18181b !important;
+  color: #ffffff !important;
+}
+
+/* Asides & Callouts */
+.starlight-aside--note {
+  border-left-color: #10b981 !important;
+  background-color: #0d1210 !important;
+}
+
+.starlight-aside--tip {
+  border-left-color: #10b981 !important;
+  background-color: #0d1210 !important;
+}
+
+.starlight-aside--caution {
+  border-left-color: #f59e0b !important;
+  background-color: #18150c !important;
+}

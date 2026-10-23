@@ -4,5 +4,12 @@ import core from "ultracite/oxlint/core";
 
 export default defineConfig({
   extends: [core, astro],
-  ignorePatterns: core.ignorePatterns,
+  ignorePatterns: [
+    ...core.ignorePatterns,
+    "examples/blog/rpc/app-type.d.ts",
+    "examples/blog/rpc/types.ts",
+    "examples/blog/rpc/openapi.json",
+    "spikes/**/public/**",
+    "spikes/**/.wrangler/**",
+  ],
 });

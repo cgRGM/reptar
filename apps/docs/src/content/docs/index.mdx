@@ -1,39 +1,48 @@
 ---
-title: Welcome to Starlight
-description: Get started building your docs site with Starlight.
-template: splash # Remove or comment out this line to display the site sidebar on this page.
+title: Reptar Documentation
+description: A C# web framework compiled to WebAssembly for Cloudflare Workers.
+template: splash
 hero:
-  tagline: Congrats on setting up a new Starlight project!
-  image:
-    file: ../../assets/houston.webp
+  tagline: Reptar is the backend. Zero frontend opinions, first-class Cloudflare bindings, and generated typed contracts.
   actions:
-    - text: Example Guide
-      link: /guides/example/
+    - text: Quick Start
+      link: /getting-started/quickstart/
       icon: right-arrow
-    - text: Read the Starlight docs
-      link: https://starlight.astro.build
+      variant: primary
+    - text: System Architecture
+      link: /overview/architecture/
+      icon: open-book
+      variant: secondary
+    - text: GitHub Repository
+      link: https://github.com/RocktownLabs/reptar
       icon: external
       variant: minimal
 ---
 
 import { Card, CardGrid } from "@astrojs/starlight/components";
 
-## Next steps
+## Architectural Foundations
 
 <CardGrid stagger>
-  <Card title="Update content" icon="pencil">
-    Edit `src/content/docs/index.mdx` to see this page change.
+  <Card title="The One Rule" icon="seti:c-sharp">
+    Reptar is strictly the backend. The only frontend-facing surface is generated contracts: typed fetch client, Standard Schema, and OpenAPI.
   </Card>
-  <Card title="Change page layout" icon="document">
-    Delete `template: splash` in `src/content/docs/index.mdx` to display a sidebar on this page.
+  <Card title="Compiled WebAssembly" icon="rocket">
+    Your C# compiles to NetWasm and Native AOT. Zero runtime reflection; the Wasm instance is cached per isolate.
   </Card>
-  <Card title="Add new content" icon="add-document">
-    Add Markdown or MDX files to `src/content/docs` to create new pages.
+  <Card title="D1, R2 & AI Bindings" icon="cloud">
+    First-class platform surfaces exposed directly as C# APIs through `c.Db`, `c.Storage`, `c.AI`, and `c.RateLimit`.
   </Card>
-  <Card title="Configure your site" icon="setting">
-    Edit your `sidebar` and other config in `astro.config.mjs`.
-  </Card>
-  <Card title="Read the docs" icon="open-book">
-    Learn more in [the Starlight Docs](https://starlight.astro.build/).
+  <Card title="Zero-Dep Validation" icon="approve-check">
+    `Rule<T>` validates inputs on the backend and emits zero-dependency `~standard` validators for TanStack Form or Zod.
   </Card>
 </CardGrid>
+
+## Next Steps
+
+Explore the core sections of the Reptar documentation:
+
+- **[Project Layout](/getting-started/project-structure/)**: Learn how `apps/api`, `apps/worker`, and `packages/rpc` collaborate.
+- **[Routing & Handlers](/core/routing/)**: Write concise, expressive routes with `.Produces<T>()` metadata.
+- **[Database & Schema](/data/schema/)**: Define your single source of truth using Drizzle-like table definitions.
+- **[Built-in Auth](/auth/builtin/)**: Secure your applications with host-native scrypt hashing and D1 sessions.

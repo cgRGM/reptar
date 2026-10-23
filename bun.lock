@@ -5,6 +5,8 @@
     "": {
       "name": "reptar",
       "dependencies": {
+        "@reptar/client": "workspace:*",
+        "cookie": "^2.0.1",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -51,6 +53,10 @@
       "name": "@reptar/config",
       "version": "0.0.0",
     },
+    "packages/host": {
+      "name": "@reptar/host",
+      "version": "0.1.0",
+    },
     "packages/infra": {
       "name": "@reptar/infra",
       "dependencies": {
@@ -65,6 +71,10 @@
         "typescript": "catalog:",
         "varlock": "catalog:",
       },
+    },
+    "packages/rpc": {
+      "name": "@reptar/client",
+      "version": "0.1.0",
     },
   },
   "catalog": {
@@ -570,7 +580,11 @@
 
     "@redis/time-series": ["@redis/time-series@6.3.0", "", { "peerDependencies": { "@redis/client": "^6.3.0" } }, "sha512-+fJOB8mN1z5WRakCJNh5lVdz1KqvHGSOistsKeitD24QsCtPwyRQXWC0iq6T/i/ubLE/YcguZqPm8F598MKk4A=="],
 
+    "@reptar/client": ["@reptar/client@workspace:packages/rpc"],
+
     "@reptar/config": ["@reptar/config@workspace:packages/config"],
+
+    "@reptar/host": ["@reptar/host@workspace:packages/host"],
 
     "@reptar/infra": ["@reptar/infra@workspace:packages/infra"],
 

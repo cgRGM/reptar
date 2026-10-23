@@ -1,0 +1,53 @@
+---
+title: Schema Definition
+description: Drizzle-like table definitions as the single source of truth.
+---
+
+import { Code } from "@astrojs/starlight/components";
+import schemaPostsCode from "../../../../../../examples/blog/schema/posts.cs?raw";
+
+## Defining Tables
+
+Every table definition file is declared as a partial `Schema` class under `apps/api/schema/`. This declaration acts as the single source of truth for migrations, database queries, and row mapping.
+
+The snippet below is **sourced directly from the repository** (`examples/blog/schema/posts.cs`):
+
+<Code
+  code={schemaPostsCode}
+  lang="csharp"
+  title="examples/blog/schema/posts.cs"
+/>
+
+---
+
+## Column Types & Modifiers
+
+Reptar provides column definitions tailored to SQLite and Cloudflare D1:
+
+- `Col.Text(columnName)`
+- `Col.Int(columnName)`
+- `Col.Real(columnName)`
+- `Col.Blob(columnName)`
+
+### Modifiers
+
+- `.PrimaryKey()` — Marks the column as primary key.
+- `.NotNull()` — Sets a NOT NULL constraint.
+- `.Unique()` — Adds a UNIQUE constraint and generates an index.
+- `.Indexed()` — Generates an explicit index.
+- `.Default(value)` — Sets a constant default value.
+- `.DefaultSql("CURRENT_TIMESTAMP")` — Sets an SQL-evaluated default expression.
+- `.References(foreignTable, foreignCol, onDelete)` — Declares a foreign key relationship.
+
+---
+
+## Aggregation (`apps/api/schema/index.cs`)
+
+You can explicitly aggregate tables or allow build-time discovery to find every `TableDef` across partial classes:
+
+```csharp
+public static partial class Schema
+{
+    public static readonly TableDef[] All = [Users, Posts];
+}
+```

@@ -1,0 +1,42 @@
+---
+title: Routing & Handlers
+description: Terse, expressive route handlers with explicit response contracts.
+---
+
+import { Code } from "@astrojs/starlight/components";
+import postsCode from "../../../../../../examples/blog/features/posts.cs?raw";
+
+## Feature-Slice Routing
+
+In Reptar, routes are organized into feature slices. A feature file contains records, validation rules, and route definitions in one cohesive class.
+
+The snippet below is **imported directly from the living codebase** (`examples/blog/features/posts.cs`), ensuring documentation never drifts from actual implementation:
+
+<Code code={postsCode} lang="csharp" title="examples/blog/features/posts.cs" />
+
+---
+
+## Route Parameters & Query Strings
+
+Access path parameters and query strings directly from `ctx.Req`:
+
+```csharp
+// Path parameters
+var id = ctx.Req.Param("id");
+
+// Query string values
+var page = ctx.Req.Query("page", defaultValue: "1");
+
+// Headers
+var authorization = ctx.Req.Header("Authorization");
+```
+
+---
+
+## Explicit Contracts with `.Produces<T>()`
+
+`.Produces<T>(status)` is the core mechanism that connects C# route handlers to frontend TypeScript types and OpenAPI schemas:
+
+- **Type safety:** Tells the codegen engine the exact return type for status code `200`, `201`, `404`, etc.
+- **Client accuracy:** Generated RPC clients type the return value of `await api.posts.$get()` based entirely on `.Produces<T>()`.
+- **Zero guesswork:** If a route produces different models on success versus error, both are explicitly declared.

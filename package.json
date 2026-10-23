@@ -19,6 +19,13 @@
     "build": "turbo run build",
     "check-types": "turbo run check-types",
     "dev:web": "turbo run dev:bare -F web --",
+    "dev:docs": "turbo run dev -F docs --",
+    "api:dev": "bun scripts/reptar.ts dev",
+    "api:build": "bun scripts/reptar.ts build",
+    "api:test": "bun scripts/reptar.ts test",
+    "api:codegen": "bun scripts/reptar.ts codegen",
+    "rpc:gen": "bun scripts/reptar.ts codegen",
+    "rpc:check": "bunx tsc --noEmit -p examples/blog/rpc",
     "deploy": "turbo run deploy -F @reptar/infra --",
     "destroy": "turbo run destroy -F @reptar/infra --",
     "env:generate": "varlock codegen --path ./apps/web/",
@@ -27,6 +34,8 @@
     "fix": "ultracite fix"
   },
   "dependencies": {
+    "@reptar/client": "workspace:*",
+    "cookie": "^2.0.1",
     "zod": "catalog:"
   },
   "devDependencies": {

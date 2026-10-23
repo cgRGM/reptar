@@ -1,0 +1,66 @@
+using System.Diagnostics;
+
+namespace Reptar;
+
+public sealed class ReptarConfig
+{
+    public IDbClient? Database { get; set; }
+    public IR2Client? Storage { get; set; }
+    public IAiClient? AI { get; set; }
+    public IRateLimiter? RateLimit { get; set; }
+    public ICrypto? Crypto { get; set; }
+    public IClock? Clock { get; set; }
+    public AuthOptions? Auth { get; set; }
+    public TelemetryOptions? Telemetry { get; set; }
+}
+
+public sealed class AuthOptions
+{
+    public int SessionDays { get; set; } = 30;
+    public string CookieName { get; set; } = "reptar_session";
+    public string? CookieDomain { get; set; }
+    public bool AllowAnonymous { get; set; } = true;
+    public string[] BootstrapAdmins { get; set; } = [];
+}
+
+public sealed class TelemetryOptions
+{
+    public bool Enabled { get; set; } = true;
+}
+
+public static class ReptarApi
+{
+    public static readonly ColApi Col = new();
+
+    public static ReptarApp Create(ReptarConfig? config = null) =>
+        ReptarApp.Create(config);
+
+    public static Validator<T> Rule<T>() => new();
+
+    public static TableDef DefineTable(string name, object columns) =>
+        TableDef.Create(name, columns);
+
+    public static AuthOptions BuiltIn(AuthOptions? options = null) =>
+        options ?? new AuthOptions();
+
+    public static TelemetryOptions Axiom() => new();
+
+    public static IDbClient D1() =>
+        throw new PlatformNotSupportedException(
+            "D1 is provided by the Workers shim. Use Db.Sqlite(...) for local development.");
+
+    public static IR2Client R2() => new NoopR2Client();
+
+    public static IAiClient WorkersAI() => new NoopAiClient();
+
+    public static ReptarMiddleware RequestId() => Middlewares.RequestId();
+
+    public static ReptarMiddleware Cors() => Middlewares.Cors();
+
+    public static ReptarMiddleware Telemetry() => Middlewares.Telemetry();
+}
+
+public static class Db
+{
+    public static IDbClient Sqlite(string path = "local.db") => new SqliteDbClient(path);
+}
