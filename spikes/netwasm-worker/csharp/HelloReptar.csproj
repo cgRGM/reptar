@@ -8,6 +8,10 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../framework/Reptar.Wasm/Reptar.Wasm.csproj" />
+    <Compile Include="../../../examples/blog/schema/posts.cs" />
+    <Compile Include="../../../examples/blog/schema/index.cs" />
+    <Compile Include="../../../examples/blog/features/posts.cs" />
+    <Compile Include="../../../examples/blog/features/blog.cs" />
   </ItemGroup>
   <ItemGroup>
     <NetWasmJavaScriptModule Include="app.host.mjs" Module="app.host" />

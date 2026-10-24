@@ -25,6 +25,7 @@
     "api:build": "bun scripts/reptar.ts build",
     "worker:build": "bun scripts/reptar.ts build:worker",
     "api:test": "bun scripts/reptar.ts test",
+    "api:bench": "bun scripts/benchmark.ts",
     "api:codegen": "bun scripts/reptar.ts codegen",
     "rpc:gen": "bun scripts/reptar.ts codegen",
     "rpc:check": "bunx tsc --noEmit -p examples/blog/rpc",

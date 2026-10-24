@@ -3,6 +3,8 @@ title: Migrations Engine
 description: Autonomous SQL DDL generation, local SQLite push, and Cloudflare D1 deployment.
 ---
 
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
 ## Overview
 
 Because your `TableDef` declarations contain comprehensive schema information, Reptar generates pure SQL DDL migrations directly. There is no external ORM or Drizzle Kit dependency required in the standard workflow.
@@ -15,9 +17,12 @@ Because your `TableDef` declarations contain comprehensive schema information, R
 
 When you create or update tables in `apps/api/schema/`, run:
 
-```bash
-bun reptar db generate
-```
+<Tabs syncKey="pkg">
+  <TabItem label="npm">```bash npx reptar db generate ```</TabItem>
+  <TabItem label="pnpm">```bash pnpm dlx reptar db generate ```</TabItem>
+  <TabItem label="yarn">```bash yarn dlx reptar db generate ```</TabItem>
+  <TabItem label="bun">```bash bun reptar db generate ```</TabItem>
+</Tabs>
 
 This diffs your current `TableDef` instances against `migrations/meta/_journal.json` and emits a sequential SQL file:
 
@@ -38,17 +43,23 @@ CREATE TABLE IF NOT EXISTS posts (
 
 During local development, apply pending schema changes to your local SQLite file without touching production:
 
-```bash
-bun reptar db push
-```
+<Tabs syncKey="pkg">
+  <TabItem label="npm">```bash npx reptar db push ```</TabItem>
+  <TabItem label="pnpm">```bash pnpm dlx reptar db push ```</TabItem>
+  <TabItem label="yarn">```bash yarn dlx reptar db push ```</TabItem>
+  <TabItem label="bun">```bash bun reptar db push ```</TabItem>
+</Tabs>
 
 ### 3. Apply to Cloudflare D1
 
 To apply pending migrations to your remote Cloudflare D1 database:
 
-```bash
-bun reptar db apply
-```
+<Tabs syncKey="pkg">
+  <TabItem label="npm">```bash npx reptar db apply ```</TabItem>
+  <TabItem label="pnpm">```bash pnpm dlx reptar db apply ```</TabItem>
+  <TabItem label="yarn">```bash yarn dlx reptar db apply ```</TabItem>
+  <TabItem label="bun">```bash bun reptar db apply ```</TabItem>
+</Tabs>
 
 In automated CI/CD pipelines, Alchemy reads the `apps/api/migrations/` directory directly and applies migrations atomically.
 

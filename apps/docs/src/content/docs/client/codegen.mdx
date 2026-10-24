@@ -3,7 +3,7 @@ title: Typed Client & Codegen
 description: End-to-end type safety, Standard Schema generation, and OpenAPI contracts.
 ---
 
-import { Code } from "@astrojs/starlight/components";
+import { Code, Tabs, TabItem } from "@astrojs/starlight/components";
 import appTypeCode from "../../../../../../examples/blog/rpc/app-type.d.ts?raw";
 import smokeCode from "../../../../../../examples/blog/rpc/smoke.ts?raw";
 
@@ -11,17 +11,29 @@ import smokeCode from "../../../../../../examples/blog/rpc/smoke.ts?raw";
 
 The Reptar CLI runs automatic contract generation during development and builds:
 
-```bash
-bun reptar codegen
-# or via script
-bun run api:codegen
-```
+<Tabs syncKey="pkg">
+  <TabItem label="npm">
+    ```bash npx reptar codegen # or via script npm run api:codegen ```
+  </TabItem>
+  <TabItem label="pnpm">
+    ```bash pnpm dlx reptar codegen # or via script pnpm api:codegen ```
+  </TabItem>
+  <TabItem label="yarn">
+    ```bash yarn dlx reptar codegen # or via script yarn api:codegen ```
+  </TabItem>
+  <TabItem label="bun">
+    ```bash bun reptar codegen # or via script bun run api:codegen ```
+  </TabItem>
+</Tabs>
 
 To verify that generated contracts are up to date in CI/CD without modifying files:
 
-```bash
-bun reptar codegen --check
-```
+<Tabs syncKey="pkg">
+  <TabItem label="npm">```bash npx reptar codegen --check ```</TabItem>
+  <TabItem label="pnpm">```bash pnpm dlx reptar codegen --check ```</TabItem>
+  <TabItem label="yarn">```bash yarn dlx reptar codegen --check ```</TabItem>
+  <TabItem label="bun">```bash bun reptar codegen --check ```</TabItem>
+</Tabs>
 
 ---
 
