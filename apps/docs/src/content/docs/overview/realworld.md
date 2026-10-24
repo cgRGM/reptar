@@ -9,7 +9,7 @@ Reptar includes a complete RealWorld (Conduit) API under `examples/realworld`. I
 
 - **Official Hurl suite:** 13/13 files pass, 154/154 requests.
 - **Targets:** portable SQLite/Kestrel and Linux Native AOT.
-- **Wasm Worker:** the C# RealWorld Worker builds to ~8.8 MB, but the edge deployment is still being hardened separately.
+- **Wasm Worker:** the C# RealWorld Worker builds to ~9.5 MB, but the edge deployment is still being hardened separately.
 - **Database:** SQLite by default; the same routes can use `Db.Postgres(...)`.
 
 ## Run locally
@@ -45,16 +45,18 @@ bun run realworld:bench
 
 Measured on a small Lightsail VPS with the Native AOT container and SQLite, 300 seeded articles, 5-second autocannon runs:
 
-| Scenario | Connections | Req/sec | p50 | p95 |
-| --- | --: | --: | --: | --: |
-| `GET /api/tags` | 100 | 3,810 | 25 ms | 47 ms |
-| `GET /api/articles/:slug` | 100 | 2,261 | 44 ms | 61 ms |
-| `GET /api/articles?limit=20` | 100 | 320 | 301 ms | 372 ms |
-| `GET /api/articles/feed?limit=20` | 100 | ~300 | ~322 ms | ~377 ms |
-| `GET /api/articles?tag=bench` | 100 | ~240 | ~386 ms | ~451 ms |
-| `POST /api/articles` | 10 | ~28 | ~304 ms | ~730 ms |
+| Scenario                          | Connections | Req/sec |    p50 |  p97.5 |
+| --------------------------------- | ----------: | ------: | -----: | -----: |
+| `GET /api/tags`                   |         100 |   3,911 |  23 ms |  51 ms |
+| `GET /api/articles/:slug`         |         100 |   2,174 |  40 ms |  83 ms |
+| `GET /api/articles?limit=20`      |         100 |     327 | 260 ms | 619 ms |
+| `GET /api/articles/feed?limit=20` |         100 |     325 | 299 ms | 346 ms |
+| `GET /api/articles?tag=bench`     |         100 |     240 | 404 ms | 448 ms |
+| `POST /api/articles`              |          10 |      60 | 164 ms | 203 ms |
 
-The list endpoints spend most of their time in the per-article tag lookup and SQLite serialization. The single-article and tags endpoints show the raw Native AOT/Kestrel ceiling.
+Batching tag lookups raised feed throughput from ~200 to ~325 req/sec and tag-filter from ~200 to ~240 req/sec. The unfiltered list only moved from ~300 to ~327 req/sec: its main query still has three correlated subqueries per row, and `SqliteDbClient` serializes access through one connection.
+
+SQLite now defaults to WAL with `synchronous=NORMAL` and a 5-second busy timeout. Write throughput rose from ~28 to ~60 req/sec; a new-code control with `DELETE`/`FULL` measured ~20 req/sec. `synchronous=NORMAL` is a durability tradeoff; override it with `REPTAR_SQLITE_SYNCHRONOUS=FULL` if required. The image is 38.3 MB uncompressed / 11.6 MB compressed after removing the 22 MB `.dbg` symbols.
 
 ## AOT lessons
 

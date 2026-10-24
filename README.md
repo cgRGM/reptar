@@ -28,8 +28,8 @@ Reptar runs across four tier-one deployment targets from a single C# codebase:
 | Target | Engine / Host | Database Support | Binary / Image Size | Memory (Cold) | Throughput (Benchmarked) |
 | :-- | :-- | :-- | :-- | :-- | :-- |
 | **Cloudflare Workers** | NetWasm / V8 isolate (`@reptar/host`) | Cloudflare D1, Hyperdrive | ~12 MB Wasm module | < 128 MB isolate | Sub-2ms isolate execution |
-| **Native AOT Containers** | Kestrel on Google Distroless | PostgreSQL (Npgsql), SQLite | **16 MB** binary (<25MB img) | **31 MB** RSS | **7,217 req/s** (in-memory) |
-| **Linux VPS / Bare Metal** | Systemd / Docker Compose | PostgreSQL 17, SQLite | **16 MB** standalone binary | **31 MB** RSS | **2,799 req/s** (database I/O) |
+| **Native AOT Containers** | Kestrel on Google Distroless | PostgreSQL (Npgsql), SQLite | **10.8 MB** binary (38 MB img) | **~31 MB** RSS | **7,217 req/s** (in-memory) |
+| **Linux VPS / Bare Metal** | Systemd / Docker Compose | PostgreSQL 17, SQLite | **10.8 MB** standalone binary | **~31 MB** RSS | **2,799 req/s** (database I/O) |
 | **AWS Lambda** | Custom Runtime (`provided.al2023`) | PostgreSQL, SQLite | Self-contained AOT zip | ~31 MB RSS | Sub-15ms cold boot |
 
 ---
@@ -133,14 +133,16 @@ bun run realworld:bench        # requires a seed file
 
 VPS Native AOT results with 300 seeded articles and autocannon:
 
-| Scenario                      | Req/sec |     p50 |
-| ----------------------------- | ------: | ------: |
-| `GET /api/tags`               |   3,810 |   25 ms |
-| `GET /api/articles/:slug`     |   2,261 |   44 ms |
-| `GET /api/articles?limit=20`  |     320 |  301 ms |
-| `GET /api/articles/feed`      |    ~300 | ~322 ms |
-| `GET /api/articles?tag=bench` |    ~240 | ~386 ms |
-| `POST /api/articles`          |     ~28 | ~304 ms |
+| Scenario                      | Req/sec |    p50 |
+| ----------------------------- | ------: | -----: |
+| `GET /api/tags`               |   3,911 |  23 ms |
+| `GET /api/articles/:slug`     |   2,174 |  40 ms |
+| `GET /api/articles?limit=20`  |     327 | 260 ms |
+| `GET /api/articles/feed`      |     325 | 299 ms |
+| `GET /api/articles?tag=bench` |     240 | 404 ms |
+| `POST /api/articles`          |      60 | 164 ms |
+
+The article list now batches tag lookups for the whole page instead of issuing one tag query per article. That raised feed throughput from ~200 to ~325 req/sec and tag-filter from ~200 to ~240 req/sec; the unfiltered list remains limited by its main query's correlated subqueries and the single SQLite connection gate. SQLite defaults to WAL with `synchronous=NORMAL`; write throughput rose from ~28 to ~60 req/sec (a new-code `DELETE`/`FULL` control measured ~20 req/sec). The image is **38.3 MB uncompressed / 11.6 MB compressed** after removing the 22 MB `.dbg` symbols.
 
 The Native AOT run surfaced and fixed AOT-unsafe anonymous parameter binding and reflection-only row mapping. `QueryMappedAsync` is now the AOT-safe row-mapping path, and `SqliteDbClient` binds deletes/gets with dictionaries.
 
@@ -160,7 +162,7 @@ bun run deploy -- -y
 
 ### 2. Docker / Distroless Container (VPS or Kubernetes)
 
-Build the ultra-lightweight Google Distroless container (<25MB footprint):
+Build the minimal Google Distroless container (~38 MB uncompressed, ~11.6 MB compressed):
 
 ```bash
 docker build -t reptar-app -f deploy/Dockerfile .

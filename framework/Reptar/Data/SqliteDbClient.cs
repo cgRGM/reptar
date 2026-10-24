@@ -16,8 +16,44 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         _connection = new SqliteConnection($"Data Source={path}");
         _connection.Open();
 
+        ExecutePragma("PRAGMA foreign_keys = ON");
+        ExecutePragma("PRAGMA busy_timeout = 5000");
+
+        var journalMode = AllowedPragma(
+            Environment.GetEnvironmentVariable("REPTAR_SQLITE_JOURNAL_MODE"),
+            "WAL",
+            "DELETE",
+            "TRUNCATE",
+            "PERSIST",
+            "MEMORY",
+            "WAL");
+        ExecutePragma($"PRAGMA journal_mode = {journalMode}");
+
+        var synchronous = AllowedPragma(
+            Environment.GetEnvironmentVariable("REPTAR_SQLITE_SYNCHRONOUS"),
+            "NORMAL",
+            "OFF",
+            "NORMAL",
+            "FULL",
+            "EXTRA");
+        ExecutePragma($"PRAGMA synchronous = {synchronous}");
+    }
+
+    private static string AllowedPragma(
+        string? value,
+        string fallback,
+        params string[] allowed)
+    {
+        var candidate = (value ?? fallback).ToUpperInvariant();
+        return allowed.Contains(candidate, StringComparer.Ordinal)
+            ? candidate
+            : fallback;
+    }
+
+    private void ExecutePragma(string sql)
+    {
         using var command = _connection.CreateCommand();
-        command.CommandText = "PRAGMA foreign_keys = ON";
+        command.CommandText = sql;
         command.ExecuteNonQuery();
     }
 

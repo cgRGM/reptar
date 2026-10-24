@@ -39,6 +39,8 @@ public sealed class RealWorldJsonCodec : IJsonCodec
             return (T)(object)Tags(json);
         if (typeof(T) == typeof(List<RwTagIdRow>))
             return (T)(object)TagIds(json);
+        if (typeof(T) == typeof(List<RwArticleTagRow>))
+            return (T)(object)ArticleTags(json);
         if (typeof(T) == typeof(List<RwCommentRow>))
             return (T)(object)Comments(json);
         if (typeof(T) == typeof(List<DbCount>))
@@ -135,6 +137,20 @@ public sealed class RealWorldJsonCodec : IJsonCodec
 
         foreach (var item in document.RootElement.EnumerateArray())
             rows.Add(new RwTagIdRow(Str(item, "id")));
+
+        return rows;
+    }
+
+    private static List<RwArticleTagRow> ArticleTags(string json)
+    {
+        var rows = new List<RwArticleTagRow>();
+
+        using var document = JsonDocument.Parse(json);
+
+        foreach (var item in document.RootElement.EnumerateArray())
+            rows.Add(new RwArticleTagRow(
+                Str(item, "articleId"),
+                Str(item, "name")));
 
         return rows;
     }

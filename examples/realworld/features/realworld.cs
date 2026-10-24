@@ -48,6 +48,9 @@ public sealed record RwTagRow(string Name);
 [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
 public sealed record RwTagIdRow(string Id);
 
+[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
+public sealed record RwArticleTagRow(string ArticleId, string Name);
+
 public sealed record RwArticleInsert(
     string Id,
     string AuthorId,
@@ -461,6 +464,7 @@ public static class RealWorld
             parameters,
             MapArticle);
 
+        var tagsByArticle = await TagMap(ctx, rows);
         var articles = new StringBuilder("[");
 
         for (var index = 0; index < rows.Count; index++)
@@ -468,7 +472,9 @@ public static class RealWorld
             if (index > 0)
                 articles.Append(',');
 
-            var tags = await TagList(ctx, rows[index].Id);
+            var tags = tagsByArticle.TryGetValue(rows[index].Id, out var value)
+                ? value
+                : [];
             articles.Append(ArticleJson(rows[index], tags, includeBody: false));
         }
 
@@ -909,6 +915,56 @@ public static class RealWorld
             Args(("article", articleId), ("viewerId", viewerId)),
             MapComment);
 
+    private static async Task<Dictionary<string, List<string>>> TagMap(
+        Ctx ctx,
+        IReadOnlyList<RwArticleRow> articles)
+    {
+        var result = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        if (articles.Count == 0)
+            return result;
+
+        const int chunkSize = 50;
+
+        for (var start = 0; start < articles.Count; start += chunkSize)
+        {
+            var count = Math.Min(chunkSize, articles.Count - start);
+            var args = new Dictionary<string, object?>(count);
+            var placeholders = new string[count];
+
+            for (var index = 0; index < count; index++)
+            {
+                var name = $"article{index}";
+                args[name] = articles[start + index].Id;
+                placeholders[index] = $"@{name}";
+            }
+
+            var rows = await Mapped(
+                ctx,
+                $"""
+                select at.article_id as "articleId", t.name as "name"
+                from rw_article_tags at
+                join rw_tags t on t.id = at.tag_id
+                where at.article_id in ({string.Join(", ", placeholders)})
+                order by t.name
+                """,
+                args,
+                MapArticleTag);
+
+            foreach (var row in rows)
+            {
+                if (!result.TryGetValue(row.ArticleId, out var tags))
+                {
+                    tags = [];
+                    result[row.ArticleId] = tags;
+                }
+
+                tags.Add(row.Name);
+            }
+        }
+
+        return result;
+    }
+
     private static async Task<List<string>> TagList(Ctx ctx, string articleId)
     {
         var rows = await Mapped(
@@ -941,12 +997,17 @@ public static class RealWorld
             "article_id = @article",
             Args(("article", articleId)));
 
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
         foreach (var name in tags)
         {
             if (string.IsNullOrWhiteSpace(name))
                 continue;
 
             var trimmed = name.Trim();
+            if (!seen.Add(trimmed))
+                continue;
+
             var tag = await SingleMapped(
                 ctx,
                 "select name as \"name\" from rw_tags where name = @name",
@@ -1239,6 +1300,10 @@ public static class RealWorld
     internal static RwTagIdRow MapTagId(
         IReadOnlyDictionary<string, object?> row) =>
         new(Text(row, "id"));
+
+    internal static RwArticleTagRow MapArticleTag(
+        IReadOnlyDictionary<string, object?> row) =>
+        new(Text(row, "articleId"), Text(row, "name"));
 
     internal static DbCount MapCount(IReadOnlyDictionary<string, object?> row) =>
         new(Number(row, "count"));
