@@ -45,6 +45,82 @@ const withCors = (
   return response;
 };
 
+const CACHE_SECONDS = 15;
+const CACHE_PURGE_PATHS = [
+  "/api/tags",
+  "/api/articles",
+  "/api/articles?limit=20",
+];
+
+const isCacheableRead = (request: Request, url: URL): boolean => {
+  if (request.method !== "GET") {
+    return false;
+  }
+  if (request.headers.has("authorization") || request.headers.has("cookie")) {
+    return false;
+  }
+
+  if (url.pathname === "/api/tags") {
+    return true;
+  }
+
+  if (url.pathname === "/api/articles") {
+    return url.search === "" || url.search === "?limit=20";
+  }
+
+  return (
+    url.pathname.startsWith("/api/articles/") &&
+    url.pathname !== "/api/articles/feed" &&
+    !url.pathname.includes("/comments") &&
+    !url.pathname.endsWith("/favorite")
+  );
+};
+
+const cacheKeyFor = (url: URL): Request =>
+  new Request(url.toString(), { method: "GET" });
+
+const readCache = async (url: URL): Promise<Response | null> => {
+  if (typeof caches === "undefined") {
+    return null;
+  }
+  return await caches.default.match(cacheKeyFor(url));
+};
+
+const writeCache = async (url: URL, response: Response): Promise<void> => {
+  if (typeof caches === "undefined" || response.status !== 200) {
+    return;
+  }
+
+  const headers = new Headers(response.headers);
+  headers.set(
+    "cache-control",
+    `public, max-age=${CACHE_SECONDS}, stale-while-revalidate=${CACHE_SECONDS * 2}`
+  );
+  headers.delete("set-cookie");
+  const body = await response.arrayBuffer();
+  await caches.default.put(
+    cacheKeyFor(url),
+    new Response(body, { headers, status: response.status })
+  );
+};
+
+const purgeReadCache = async (url: URL, slug?: string): Promise<void> => {
+  if (typeof caches === "undefined") {
+    return;
+  }
+
+  const paths = [...CACHE_PURGE_PATHS];
+  if (slug) {
+    paths.push(`/api/articles/${slug}`);
+  }
+
+  await Promise.all(
+    paths.map((path) =>
+      caches.default.delete(cacheKeyFor(new URL(path, url.origin)))
+    )
+  );
+};
+
 const host = createReptarHost<Env>({
   assets: (env) => env.ASSETS,
   bindings: (env) => ({
@@ -58,7 +134,7 @@ const host = createReptarHost<Env>({
 });
 
 export default {
-  async fetch(request: Request, env: Env) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
     if (url.pathname.startsWith("/browser/")) {
       return env.ASSETS.fetch(request);
@@ -75,6 +151,23 @@ export default {
       return new Response(null, { headers: cors });
     }
 
-    return withCors(await host.fetch(request, env), origin, env.CORS_ORIGINS);
+    const cacheable = isCacheableRead(request, url);
+    if (cacheable) {
+      const cached = await readCache(url);
+      if (cached) {
+        return withCors(cached, origin, env.CORS_ORIGINS);
+      }
+    }
+
+    const response = await host.fetch(request, env);
+
+    if (cacheable && response.status === 200) {
+      ctx.waitUntil(writeCache(url, response.clone()));
+    } else if (request.method !== "GET" && response.status < 400) {
+      const match = /^\/api\/articles\/(?<slug>[^/]+)$/u.exec(url.pathname);
+      await purgeReadCache(url, match?.groups?.slug);
+    }
+
+    return withCors(response, origin, env.CORS_ORIGINS);
   },
 };
