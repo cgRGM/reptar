@@ -9,7 +9,7 @@ Reptar includes a complete RealWorld (Conduit) API under `examples/realworld`. I
 
 - **Official Hurl suite:** 13/13 files pass, 154/154 requests.
 - **Targets:** portable SQLite/Kestrel and Linux Native AOT.
-- **Wasm Worker:** the C# RealWorld Worker builds to ~9.5 MB, but the edge deployment is still being hardened separately.
+- **Wasm Worker:** the C# RealWorld Worker builds to ~9.5 MB and passes the 154-request Hurl suite locally under `wrangler dev`; edge deployment and benchmarking are next.
 - **Database:** SQLite by default; the same routes can use `Db.Postgres(...)`.
 
 ## Run locally

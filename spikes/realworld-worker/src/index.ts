@@ -4,6 +4,7 @@ import type { D1DatabaseLike, ReptarWasmApp } from "@reptar/host";
 import wasmModule from "../public/browser/RealWorld.wasm";
 
 interface Env {
+  ASSETS: { fetch: (request: Request) => Promise<Response> };
   CORS_ORIGINS?: string;
   DB: D1Database;
   REALWORLD_JWT_SECRET?: string;
@@ -45,6 +46,7 @@ const withCors = (
 };
 
 const host = createReptarHost<Env>({
+  assets: (env) => env.ASSETS,
   bindings: (env) => ({
     db: env.DB as unknown as D1DatabaseLike,
   }),
@@ -57,6 +59,11 @@ const host = createReptarHost<Env>({
 
 export default {
   async fetch(request: Request, env: Env) {
+    const url = new URL(request.url);
+    if (url.pathname.startsWith("/browser/")) {
+      return env.ASSETS.fetch(request);
+    }
+
     const origin = request.headers.get("origin");
     const cors = corsHeaders(origin, env.CORS_ORIGINS);
 

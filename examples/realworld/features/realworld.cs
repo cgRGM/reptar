@@ -451,6 +451,10 @@ public static class RealWorld
         var countParameters = new Dictionary<string, object?>(parameters);
         countParameters.Remove("limit");
         countParameters.Remove("offset");
+        if (!feed)
+            countParameters.Remove("viewerId");
+        if (where.Count == 0)
+            countParameters.Clear();
 
         var countRow = await SingleMapped(
             ctx,
@@ -465,6 +469,7 @@ public static class RealWorld
             MapArticle);
 
         var tagsByArticle = await TagMap(ctx, rows);
+
         var articles = new StringBuilder("[");
 
         for (var index = 0; index < rows.Count; index++)

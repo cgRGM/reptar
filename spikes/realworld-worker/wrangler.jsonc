@@ -2,6 +2,9 @@
   "name": "reptar-realworld",
   "main": "src/index.ts",
   "compatibility_date": "2026-10-22",
+  "assets": {
+    "directory": "./public",
+  },
   "d1_databases": [
     {
       "binding": "DB",

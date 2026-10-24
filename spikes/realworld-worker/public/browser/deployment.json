@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "71287f9b6fba4382ea306f7b1f81b446b848e1fc1728ff80249a660e4ccb9a03",
+  "semanticBuildId": "f121b243e443b49aad70f6b65b3762fcc627bb27e612c0f15815e3c236c6ac91",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "ea66158de1247690cd68c11b3ba557cf910764062c2cf4f9587e75c137336558",
+  "buildFingerprint": "ccc68d50169b29ead3895e6fdab538a2139ad76fa8b69d5851e48128caa76ebb",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,7 +23,7 @@
       "relativePath": "RealWorld.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "316545ae7d7f49622e40f06e0e047d0264ce5cb2aa09a2a54d3a4b6d9e23be1c",
+      "sha256": "d1f8017385d29cacb5980bc10b12dce15e22dcd67cce156be6e92a81865b5b6e",
       "schemaVersion": 2
     },
     {
@@ -37,7 +37,7 @@
       "relativePath": "RealWorld.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "773da2a34e578833fb300462674597ec4853155632c6da0673ba2001cb337a12",
+      "sha256": "1e5dd925dcbaac8bcac123103f24de56203130cc101d5ecca9562c8298206f84",
       "schemaVersion": null
     },
     {
@@ -58,7 +58,7 @@
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "b780650778f1be721b4a794e94980ff92233f5e3e8040dc99a1eb58b5a92dcf9",
+      "sha256": "d1eeb4356203dd437239a6f65d4d2e11e2723df8265d6be67856c9fe2a653770",
       "schemaVersion": 1
     }
   ],

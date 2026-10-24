@@ -22,6 +22,8 @@ public sealed class RealWorldJsonCodec : IJsonCodec
             return Favorite(favorite);
         if (value is RwFollowInsert follow)
             return Follow(follow);
+        if (value is ErrorBody error)
+            return $"{{\"code\":{Q(error.Code)},\"message\":{Q(error.Message)},\"requestId\":{Q(error.RequestId)}}}";
 
         throw new NotSupportedException(
             $"RealWorldJsonCodec cannot serialize {typeof(T).Name}.");

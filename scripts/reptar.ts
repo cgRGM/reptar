@@ -219,6 +219,12 @@ switch (command) {
     );
     const browserRoot = path.join(workerRoot, "public/browser");
 
+    // The NetWasm page host is generated per app. A stale incremental build
+    // can leave the blog page host in the RealWorld output, so force a clean
+    // publish for this separate Worker.
+    rmSync(path.join(csharpRoot, "bin"), { force: true, recursive: true });
+    rmSync(path.join(csharpRoot, "obj"), { force: true, recursive: true });
+
     run(["publish", "-c", "Release"], csharpRoot);
 
     if (existsSync(publishRoot)) {
