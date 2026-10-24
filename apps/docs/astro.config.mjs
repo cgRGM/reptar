@@ -56,6 +56,10 @@ export default defineConfig({
           label: "Cloudflare Bindings",
         },
         {
+          items: [{ label: "Payments (Stripe)", slug: "features/stripe" }],
+          label: "Features & Add-ons",
+        },
+        {
           items: [
             { label: "Typed Client & Contracts", slug: "client/codegen" },
           ],

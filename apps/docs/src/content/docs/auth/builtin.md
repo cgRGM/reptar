@@ -1,6 +1,6 @@
 ---
 title: Built-in C# Authentication
-description: Host-native scrypt hashing, D1 session tokens, and middleware.
+description: Host-native PBKDF2 hashing, D1 session tokens, and middleware.
 ---
 
 ## Overview
@@ -8,25 +8,25 @@ description: Host-native scrypt hashing, D1 session tokens, and middleware.
 Reptar ships with a complete, mountable authentication feature slice (`Reptar.Auth`):
 
 - **Tables:** `users` and `sessions` managed in D1.
-- **Password Security:** Scrypt password hashing executed via `c.Crypto` (delegating to native host crypto to stay comfortably within Worker CPU limits).
-- **Session Tokens:** Cryptographically random 32-byte tokens. SHA-256 hashes stored in D1; plain tokens stored in HttpOnly cookies.
-- **Anonymous Sessions:** First-class guest sessions for frictionless user onboarding.
-- **Middleware:** `RequireUser()` and `RequireRole("admin")`.
+- **Password Security:** PBKDF2 password hashing (100,000 iterations capped to comply with Cloudflare `workerd` limits) executed via `c.Crypto` over native WebCrypto.
+- **Session Tokens:** Cryptographically random 32-byte tokens. SHA-256 hashes stored in D1; plain tokens stored in secure `HttpOnly` cookies.
+- **Anonymous Sessions:** First-class guest sessions for frictionless user onboarding via `POST /auth/anonymous`.
+- **Middleware:** `Auth.RequireUser` and role-based access checks.
 
 ---
 
 ## Configuration
 
-Enable built-in auth in `app.cs`:
+Enable built-in auth in `Program.cs` / `app.cs`:
 
 ```csharp
-var app = Reptar(new ReptarConfig
+var app = ReptarApp.Create(new ReptarConfig
 {
     Auth = BuiltIn(new AuthOptions
     {
         SessionDays = 30,
         AllowAnonymous = true,
-        CookieDomain = ".example.com" // Optional cross-subdomain sharing
+        CookieName = "reptar_session"
     })
 });
 
@@ -40,28 +40,34 @@ app.Route("/auth", Reptar.Auth.Routes());
 
 Mounting `Reptar.Auth.Routes()` exposes the following endpoints:
 
-| Endpoint | Method | Description |
-| --- | --- | --- |
-| `/auth/signup` | POST | Registers a new user with email and password |
-| `/auth/signin` | POST | Authenticates and returns an HttpOnly session cookie |
-| `/auth/signout` | POST | Revokes the current session and clears cookies |
-| `/auth/session` | GET | Returns the currently authenticated user profile |
-| `/auth/anonymous` | POST | Creates a temporary guest session |
+| Endpoint | Method | Status | Description |
+| --- | --- | --- | --- |
+| `/auth/signup` | POST | 201 | Registers a new user with email, name, and password |
+| `/auth/signin` | POST | 200 | Authenticates and returns an HttpOnly session cookie |
+| `/auth/signout` | POST | 204 | Revokes the current session and clears cookies |
+| `/auth/session` | GET | 200 | Returns the currently authenticated user profile |
+| `/auth/anonymous` | POST | 201 | Creates a temporary guest user and starts a session |
 
 ---
 
 ## Route Protection Middleware
 
-Protect your application routes using `RequireUser`:
+Protect your application routes using `Auth.RequireUser`:
 
 ```csharp
-app.Get("/profile", RequireUser(), async c =>
+app.Get("/me", Auth.RequireUser, async ctx =>
 {
-    // c.User is guaranteed non-null
-    return c.Json(new
-    {
-        userId = c.User.Id,
-        email = c.User.Email
-    });
+    // ctx.User is guaranteed non-null
+    return ctx.Json(new SessionResponse(ctx.User));
 });
+```
+
+If an unauthenticated request hits a protected route, Reptar automatically returns a standardized 401 response envelope:
+
+```json
+{
+  "code": "unauthorized",
+  "message": "Unauthorized.",
+  "requestId": "req_01..."
+}
 ```

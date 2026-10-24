@@ -1,60 +1,118 @@
 ---
 title: Database Client (c.Db)
-description: Explicit, parameterized, Dapper-like data access without ORM overhead.
+description: Reflection-free CRUD, TableDef schemas, and Dapper-like data access on Cloudflare D1.
 ---
 
 ## Philosophy
 
-Reptar intentionally rejects heavyweight ORM abstractions in favor of a clean, Dapper-like query interface:
+Reptar intentionally rejects heavyweight ORM abstractions in favor of a clean, reflection-free data access model tailored for ahead-of-time (AOT) WebAssembly:
 
-- **Explicit SQL:** Queries are written in plain, readable SQL.
-- **Source-Generated Mappers:** Column names in `snake_case` map directly to C# record properties in `PascalCase` without runtime reflection.
-- **Zero Runtime Magic:** No hidden subqueries, lazy loading pitfalls, or unexpected query cascades.
+- **Explicit Schemas:** Tables are defined with fluent `TableDef` builders.
+- **Reflection-Free Execution:** Inserts and updates serialize through source-generated JSON and `JsonDocument` DOM traversal, avoiding runtime reflection entirely.
+- **Transparent Snake Case Mapping:** Columns in SQLite (`created_at`, `image_key`, `user_id`) automatically map to C# record properties (`CreatedAt`, `ImageKey`, `UserId`) and TypeScript types (`createdAt`, `imageKey`, `userId`).
+- **Zero ORM Overhead:** No hidden lazy-loading cascades or query generation magic.
 
 ---
 
-## Raw SQL Queries
+## 1. Table Definitions (`TableDef`)
 
-Direct SQL execution is always available on `c.Db`:
+Define schemas using fluent column builders:
 
 ```csharp
-// 1. Query multiple records
-var posts = await c.Db.QueryAsync<Post>(
-    "select * from posts where published = 1 order by created_at desc"
+using Reptar;
+using static Reptar.ReptarApi;
+
+public static readonly TableDef PostsTable = DefineTable("posts",
+    Col.Text("id").PrimaryKey(),
+    Col.Text("title").NotNull(),
+    Col.Text("content").NotNull(),
+    Col.Text("image_key"),
+    Col.Text("created_at").NotNull()
+);
+```
+
+Available column types include `Col.Text()`, `Col.Int()`, `Col.Real()`, and `Col.Blob()`, with modifiers `.PrimaryKey()`, `.NotNull()`, `.Unique()`, and `.Default(...)`.
+
+---
+
+## 2. Reflection-Free CRUD Operations
+
+For standard operations, `c.Db` exposes strongly-typed CRUD helpers:
+
+### Fetching Records
+
+```csharp
+// Get single record by primary key (returns null if not found)
+var post = await c.Db.GetAsync<Post>(PostsTable, id);
+
+// List records with optional WHERE / ORDER BY clauses
+var posts = await c.Db.ListAsync<Post>(PostsTable, "where published = 1 order by created_at desc");
+
+// Check if a record exists
+bool exists = await c.Db.ExistsAsync(PostsTable, "slug = ?", slug);
+```
+
+### Inserting Records
+
+```csharp
+var post = new Post(
+    Id: Ids.New("post"),
+    Title: input.Title.Trim(),
+    Content: input.Content,
+    ImageKey: input.ImageKey,
+    CreatedAt: c.Clock.IsoNow()
 );
 
-// 2. Query single record with parameters
-var post = await c.Db.QuerySingleOrDefaultAsync<Post>(
-    "select * from posts where id = @id",
-    new { id }
-);
+// Inserts all columns matching the TableDef schema
+await c.Db.InsertAsync(PostsTable, post);
+```
 
-// 3. Execute statement
-await c.Db.ExecuteAsync(
-    "insert into posts (id, title, content, created_at) values (@Id, @Title, @Content, @CreatedAt)",
-    post
-);
+### Updating Records
+
+```csharp
+var updated = post with
+{
+    Title = input.Title.Trim(),
+    Content = input.Content,
+    ImageKey = input.ImageKey ?? post.ImageKey
+};
+
+// Updates all columns except primary key and created_at
+await c.Db.UpdateAsync(PostsTable, updated, updated.Id);
+```
+
+### Deleting Records
+
+```csharp
+// Delete by primary key
+await c.Db.DeleteAsync(PostsTable, id);
+
+// Delete matching WHERE clause
+await c.Db.DeleteWhereAsync(PostsTable, "user_id = ?", userId);
 ```
 
 ---
 
-## Generated CRUD Helpers
+## 3. Direct SQL Queries
 
-For routine operations, `c.Db` exposes type-safe helpers derived from your `TableDef`:
+Direct parameterized SQL is always supported when you need joins, aggregations, or complex queries:
 
 ```csharp
-// Get by primary key
-var post = await c.Db.GetAsync<Post>(Schema.Posts, id);
+// 1. Parameterized query
+var activeUsers = await c.Db.QueryAsync<User>(
+    "select * from users where is_active = ? and role = ?",
+    "1", "admin"
+);
 
-// Filter with WHERE clause
-var posts = await c.Db.ListAsync<Post>(Schema.Posts, "where published = 1 order by created_at desc");
+// 2. Query single scalar / row
+var user = await c.Db.QuerySingleOrDefaultAsync<User>(
+    "select * from users where email = ?",
+    email
+);
 
-// Insert row
-await c.Db.InsertAsync(Schema.Posts, post);
-
-// Update row
-await c.Db.UpdateAsync(Schema.Posts, post);
-
-// Delete row
-await c.Db.DeleteAsync<Post>(Schema.Posts, id);
+// 3. Execute statement
+int affectedRows = await c.Db.ExecuteAsync(
+    "update posts set view_count = view_count + 1 where id = ?",
+    postId
+);
 ```

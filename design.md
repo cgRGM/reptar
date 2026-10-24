@@ -386,14 +386,28 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
 
 ## 16. Implementation status (current)
 
-- **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, codegen, and the file-based blog app are implemented. `bun api:test` passes (8 tests); `bun rpc:gen` + `bun rpc:check` pass.
-- **Wasm core:** `framework/Reptar.Wasm` compiles the shared router, `Ctx`, middleware, `Rule<T>`/`Validator<T>`, and the JSON codec to `netwasm0.1`. The Worker app uses `ReptarApp` directly; the expression-tree validator runs inside workerd and returns the standard validation envelope.
-- **Cloudflare data:** `D1DbClient` implements `QueryAsync`/`QuerySingleOrDefaultAsync`/`ExecuteAsync` over `[JSImport]`; `R2Client` implements `PutAsync`. The blog API lists and creates posts in D1 and uploads images to R2 through `c.Db` and `c.Storage`.
-- **Auth on Wasm:** the D1 auth slice implements signup/signin/signout/session and `RequireUser`. Passwords use PBKDF2 (100,000 iterations, the workerd maximum) through the host WebCrypto shim; sessions are SHA-256 token hashes in D1; cookies use `Max-Age`, `HttpOnly`, and `SameSite=Lax`.
-- **Host contract:** `@reptar/host` owns the runtime shim (`createReptarHost`, D1 query/execute, R2 put) and the NetWasm host rewrite (`patchNetWasmHost`). The C# app exposes one `[JSExport] handle(string)` and responds through `[JSImport] respond(string)`. `bun reptar build:worker` publishes the C# app, copies the browser artifacts, and applies the host rewrite; there is no app-specific patch script.
-- **Blog demo:** Astro `/blog` renders posts from the C# Worker. Posts are in D1, images are in R2, and the page includes a publish form that writes through the C# API. See `apps/web/src/pages/blog.astro` and `spikes/netwasm-worker/`.
-- **Deployed:** `bun run deploy` builds the C# Wasm Worker, provisions D1 + R2, applies `spikes/netwasm-worker/migrations/`, and deploys both the API Worker and the Astro Worker through Alchemy. The Astro Worker receives `PUBLIC_API_URL` as a runtime binding and an `API` service binding for server-side fetches; `GET /blog` renders D1 posts and R2 images from the deployed API.
-- **Next:** move the portable blog's `schema/` + `features/` (CRUD, slugs, ownership) onto the Wasm target, then add source-generated table metadata and trim the Wasm payload.
+- **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, Stripe module, codegen, and the file-based blog app are implemented. `bun api:test` passes (10 tests); `bun rpc:gen` + `bun rpc:check` pass.
+- **Wasm core & reflection-free CRUD:** `framework/Reptar.Wasm` compiles the shared router, `Ctx`, middleware, `Rule<T>`/`Validator<T>`, and the JSON codec to `netwasm0.1`. `D1DbClient` and `TableDef.Wasm` implement generic, reflection-free CRUD (`GetAsync<T>`, `ListAsync<T>`, `InsertAsync<T>`, `UpdateAsync<T>`, `DeleteAsync`, `ExistsAsync`) with transparent SQLite `snake_case` &harr; `camelCase` property normalization.
+- **Cloudflare platform bindings:**
+  - **D1:** Query and execute with typed parameter binding.
+  - **R2:** `PutAsync`, `GetAsync`, `ExistsAsync`, `DeleteAsync` with direct binary stream piping in Worker `fetch`.
+  - **KV Cache:** `c.Cache` (`KvClient.cs`) for low-latency edge caching with TTL support.
+  - **Queues:** `c.Queues` (`QueueClient.cs`) for asynchronous background task producer events.
+  - **Workers AI:** `c.AI` (`AiClient.cs`) for serverless neural inference.
+  - **Durable Objects:** `c.Durable` (`DurableBridge.cs`) for in-process stub fetching.
+  - **Native WebCrypto:** PBKDF2 password hashing (100k cap), SHA-256 session tokens, and HMAC-SHA256 signature verification.
+  - **Outbound HTTP:** `WasmHttpClient.cs` bridging edge `fetch` into C# Wasm.
+- **Built-in Stripe module (`Reptar.Stripe`):** Zero-bloat checkout session creation and HMAC-SHA256 webhook signature verification with replay attack timestamp protection.
+- **Typed client & contracts:** `@reptar/client` export with `createClient<AppType>` providing full type inference for route segments, URL params, query strings, and request/response payloads for frontend consumers (Astro, React, Next.js).
+- **Auth on Wasm:** The D1 auth slice implements signup/signin/signout/session, `/auth/anonymous` guest sessions, and `RequireUser`. Passwords use PBKDF2 (100,000 iterations, the workerd maximum) through the host WebCrypto shim; sessions are SHA-256 token hashes in D1; cookies use `Max-Age`, `HttpOnly`, and `SameSite=Lax`.
+- **Host contract:** `@reptar/host` owns the runtime shim (`createReptarHost`, bindings, crypto) and the NetWasm host rewrite (`patchNetWasmHost`). The C# app exposes one `[JSExport] handle(string)` and responds through `[JSImport] respond(string)`. `bun reptar build:worker` publishes the C# app, copies the browser artifacts, and applies the host rewrite.
+- **Blog demo & login UI:** Astro `/blog` renders posts from the C# Worker, uploads images to R2, and interacts via `@reptar/client`. Astro `/login` provides a dark-first authentication and guest session onboarding interface.
+- **Deployed clean URLs:** `bun run deploy` builds the C# Wasm Worker, provisions D1 + R2, applies migrations, and deploys both the API Worker and the Astro Worker under clean names:
+  - API: `https://reptar-api.rocktown-labs.workers.dev`
+  - Web: `https://reptar-web.rocktown-labs.workers.dev`
+  - Blog: `https://reptar-web.rocktown-labs.workers.dev/blog`
+  - Login: `https://reptar-web.rocktown-labs.workers.dev/login`
+- **Next:** automated Wasm e2e test suite, source-generated contract generation pipeline directly from the Wasm app, and Wasm bundle trimming.
 
 ### Phase 0 update: D1 bridge proven
 

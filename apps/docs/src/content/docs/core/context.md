@@ -11,7 +11,7 @@ The `Ctx` object (`c`) is passed to every route handler and middleware. It expos
 app.Get("/example", async c =>
 {
     var id = c.Req.Param("id");
-    var post = await c.Db.GetAsync<Post>(Schema.Posts, id);
+    var post = await c.Db.GetAsync<Post>(PostsTable, id);
     return c.Json(post);
 });
 ```
@@ -22,18 +22,22 @@ app.Get("/example", async c =>
 
 | Member | Backed by | Description |
 | --- | --- | --- |
-| `c.Req` | Request envelope | Query parameters, route params, headers, JSON body, multipart uploads |
-| `c.Db` | Cloudflare D1 | Dapper-like query and execution client |
-| `c.Storage` | Cloudflare R2 | Object operations: `PutAsync`, `GetAsync`, `ExistsAsync`, `DeleteAsync`, `Url` |
-| `c.AI` | Workers AI | Neural inference: `GenerateAsync`, `TranscribeAsync`, `EmbedAsync` |
-| `c.RateLimit` | Cloudflare RateLimiter | Edge rate limiting: `LimitAsync("chat", key)` |
-| `c.Cookies` | Host Shim | Get, set, and delete cookies with HttpOnly and SameSite defaults |
-| `c.Clock` | Host Shim | Deterministic time: `IsoNow()`, `IsoIn(duration)` |
-| `c.Crypto` | Host WebCrypto | Native scrypt password hashing, SHA-256, and random token generation |
-| `c.User` | Auth Slice | Authenticated user record populated by `RequireUser` middleware |
-| `c.Json()` | Core Framework | Serializes typed JSON responses with status codes |
-| `c.Status()` | Core Framework | Returns empty or text responses with explicit HTTP status codes |
-| `c.Stream()` | Core Framework | Streams SSE or chunked responses across the Wasm boundary |
+| `c.Req` | Request envelope | Query parameters, route params, headers, JSON body, raw byte stream |
+| `c.Db` | Cloudflare D1 / SQLite | Reflection-free CRUD (`GetAsync`, `ListAsync`, `InsertAsync`, `UpdateAsync`, `DeleteAsync`) & parameterized SQL |
+| `c.Storage` | Cloudflare R2 | Object operations: `PutAsync`, `GetAsync`, `ExistsAsync`, `DeleteAsync` |
+| `c.Cache` | Cloudflare KV | Low-latency key-value caching: `GetAsync`, `PutAsync`, `DeleteAsync` |
+| `c.Queues` | Cloudflare Queues | Message queue producer: `SendAsync(queueName, message)` |
+| `c.AI` | Workers AI | Serverless GPU neural inference: `RunAsync(model, prompt)` |
+| `c.Durable` | Durable Objects | In-process bridge to stateful actor stubs: `FetchAsync(...)` |
+| `c.Cookies` | Host Cookie Jar | Get, set, and delete cookies with `HttpOnly`, `SameSite`, and `Max-Age` |
+| `c.Clock` | Host Clock | Deterministic time: `IsoNow()`, `IsoIn(duration)` |
+| `c.Crypto` | Host WebCrypto | PBKDF2 password hashing, SHA-256 tokens, and HMAC-SHA256 signatures |
+| `c.User` | Auth Slice | Authenticated user record populated by `Auth.RequireUser` |
+| `c.Json()` | Core Framework | Serializes typed JSON responses with HTTP status codes |
+| `c.Status()` | Core Framework | Returns empty or status responses (e.g. `c.Status(204)`) |
+| `c.NotFound()` | Core Framework | Standardized 404 response envelope |
+| `c.BadRequest()` | Core Framework | Standardized 400 validation error envelope |
+| `c.Unauthorized()` | Core Framework | Standardized 401 unauthorized envelope |
 
 ---
 
@@ -45,6 +49,8 @@ Avoid direct calls to `DateTime.UtcNow` in business logic. Using `c.Clock.IsoNow
 var post = new Post(
     Id: Ids.New("post"),
     Title: input.Title,
+    Content: input.Content,
+    ImageKey: input.ImageKey,
     CreatedAt: c.Clock.IsoNow()
 );
 ```

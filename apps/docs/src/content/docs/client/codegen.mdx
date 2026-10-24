@@ -57,6 +57,32 @@ The route tree below is **sourced directly from the real generated output** (`ex
 
 ## Consuming the Typed Client
 
+The `@reptar/client` package provides a minimal (~100 lines), zero-dependency proxy client that provides full type inference for route segments, URL parameters, query strings, and request/response bodies:
+
+```typescript
+import { createClient } from "@reptar/client";
+import type { AppType } from "./app-type";
+
+// 1. Browser Client (includes cookies across requests)
+export const api = createClient<AppType>(
+  "https://reptar-api.rocktown-labs.workers.dev",
+  {
+    credentials: "include",
+  }
+);
+
+// Calling endpoints with full autocomplete:
+const postsResponse = await api.posts.$get();
+if (postsResponse.ok) {
+  const posts = await postsResponse.json(); // Typed as Post[]
+}
+
+// 2. Server-Side Rendering via Cloudflare Worker Service Binding (Zero Network Overhead)
+export const ssrApi = createClient<AppType>("http://internal", {
+  fetch: env.API.fetch.bind(env.API),
+});
+```
+
 Here is the real TypeScript consumer (`examples/blog/rpc/smoke.ts`) verifying the client against the generated types:
 
 <Code code={smokeCode} lang="typescript" title="examples/blog/rpc/smoke.ts" />

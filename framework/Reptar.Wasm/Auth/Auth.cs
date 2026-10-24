@@ -121,6 +121,43 @@ public static class Auth
         app.Get("/session", async ctx =>
             ctx.Json(new SessionResponse(await CurrentUser(ctx))));
 
+        app.Post("/anonymous", async ctx =>
+        {
+            if (!_options.AllowAnonymous)
+            {
+                return ctx.NotFound("Anonymous sessions are disabled.");
+            }
+
+            var id = Ids.New("usr");
+            var user = new UserRow(
+                Id: id,
+                Email: $"guest_{id}@reptar.local",
+                Name: "Guest",
+                PasswordHash: "!",
+                IsAnonymous: 1,
+                Role: "user",
+                CreatedAt: ctx.Clock.IsoNow());
+
+            await ctx.Db.ExecuteAsync(
+                """
+                insert into users
+                  (id, email, name, password_hash, is_anonymous, role, created_at)
+                values (?, ?, ?, ?, ?, ?, ?)
+                """,
+                Params(
+                    user.Id,
+                    user.Email,
+                    user.Name,
+                    user.PasswordHash,
+                    user.IsAnonymous.ToString(),
+                    user.Role,
+                    user.CreatedAt));
+
+            await StartSession(ctx, user.Id);
+
+            return ctx.Json(new SessionUser(user.Id, user.Email, user.Name), 201);
+        });
+
         return app;
     }
 
