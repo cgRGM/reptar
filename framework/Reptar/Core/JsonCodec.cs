@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Text;
 using System.Text.Json;
 
 namespace Reptar;
@@ -13,7 +14,8 @@ public interface IJsonCodec
     byte[] SerializeUtf8<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value);
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value) =>
+        Encoding.UTF8.GetBytes(Serialize(value));
 
     T? Deserialize<
         [DynamicallyAccessedMembers(
@@ -23,7 +25,8 @@ public interface IJsonCodec
     T? Deserialize<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties)] T>(ReadOnlySpan<byte> utf8Json);
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(ReadOnlySpan<byte> utf8Json) =>
+        Deserialize<T>(Encoding.UTF8.GetString(utf8Json));
 }
 
 public sealed class DefaultJsonCodec : IJsonCodec
