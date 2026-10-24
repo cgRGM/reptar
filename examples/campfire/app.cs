@@ -13,23 +13,21 @@ var app = ReptarApp.Create(new ReptarConfig
 });
 
 // Schema Definitions
-var Rooms = ReptarApi.DefineTable("rooms", new
-{
-    Id = ReptarApi.Col.Int("id").PrimaryKey(),
-    Name = ReptarApi.Col.Text("name").NotNull(),
-    Topic = ReptarApi.Col.Text("topic"),
-    CreatedAt = ReptarApi.Col.Text("created_at").Default("CURRENT_TIMESTAMP"),
-});
+var Rooms = ReptarApi.DefineTable("rooms",
+    ReptarApi.Col.Int("id").PrimaryKey(),
+    ReptarApi.Col.Text("name").NotNull(),
+    ReptarApi.Col.Text("topic"),
+    ReptarApi.Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+);
 
-var Messages = ReptarApi.DefineTable("messages", new
-{
-    Id = ReptarApi.Col.Int("id").PrimaryKey(),
-    RoomId = ReptarApi.Col.Int("room_id").NotNull().References(Rooms),
-    UserId = ReptarApi.Col.Int("user_id").NotNull(),
-    UserName = ReptarApi.Col.Text("user_name").NotNull(),
-    Body = ReptarApi.Col.Text("body").NotNull(),
-    CreatedAt = ReptarApi.Col.Text("created_at").Default("CURRENT_TIMESTAMP"),
-});
+var Messages = ReptarApi.DefineTable("messages",
+    ReptarApi.Col.Int("id").PrimaryKey(),
+    ReptarApi.Col.Int("room_id").NotNull().References(Rooms),
+    ReptarApi.Col.Int("user_id").NotNull(),
+    ReptarApi.Col.Text("user_name").NotNull(),
+    ReptarApi.Col.Text("body").NotNull(),
+    ReptarApi.Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+);
 
 app.RegisterSchema(Rooms, Messages);
 await app.EnsureCreatedAsync();
