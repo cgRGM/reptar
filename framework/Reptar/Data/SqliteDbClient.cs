@@ -21,7 +21,12 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         command.ExecuteNonQuery();
     }
 
-    public async Task<List<T>> QueryAsync<T>(string sql, object? param = null)
+    public async Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        object? param = null)
     {
         await _gate.WaitAsync();
 
@@ -43,7 +48,48 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
-    public async Task<T?> QuerySingleOrDefaultAsync<T>(string sql, object? param = null)
+    public async Task<List<T>> QueryMappedAsync<T>(
+        string sql,
+        object? param,
+        Func<IReadOnlyDictionary<string, object?>, T> map)
+    {
+        await _gate.WaitAsync();
+
+        try
+        {
+            await using var command = BuildCommand(sql, param);
+            await using var reader = await command.ExecuteReaderAsync();
+            var results = new List<T>();
+
+            while (await reader.ReadAsync())
+            {
+                var values = new Dictionary<string, object?>(
+                    StringComparer.OrdinalIgnoreCase);
+
+                for (var index = 0; index < reader.FieldCount; index++)
+                {
+                    values[reader.GetName(index)] = reader.IsDBNull(index)
+                        ? null
+                        : reader.GetValue(index);
+                }
+
+                results.Add(map(values));
+            }
+
+            return results;
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        object? param = null)
     {
         var results = await QueryAsync<T>(sql, param);
         return results.Count == 0 ? default : results[0];
@@ -117,7 +163,12 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
-    public Task<T?> GetAsync<T>(TableDef table, object id)
+    public Task<T?> GetAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        TableDef table,
+        object id)
     {
         var primaryKey = table.SinglePrimaryKey
             ?? throw new InvalidOperationException(
@@ -128,7 +179,10 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             new { id });
     }
 
-    public Task<List<T>> ListAsync<T>(
+    public Task<List<T>> ListAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         TableDef table,
         string? clause = null,
         object? param = null,
@@ -398,6 +452,12 @@ internal static class RowMapper
 {
     public static Func<SqliteDataReader, T> Resolve<[System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors)] T>(SqliteDataReader reader)
     {
+        var targetType = Nullable.GetUnderlyingType(typeof(T)) ?? typeof(T);
+        if (targetType.IsPrimitive || targetType == typeof(string) || targetType == typeof(decimal) || targetType == typeof(Guid) || targetType == typeof(DateTime) || targetType == typeof(DateTimeOffset))
+        {
+            return readerInstance => readerInstance.IsDBNull(0) ? default! : (T)ConvertValue(readerInstance.GetValue(0), targetType)!;
+        }
+
         var constructors = typeof(T).GetConstructors();
         if (constructors.Length == 0)
         {

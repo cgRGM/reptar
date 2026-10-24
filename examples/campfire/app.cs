@@ -129,12 +129,19 @@ app.Post("/rooms/:id/messages", async ctx =>
         ["created_at"] = now,
     });
 
-    var inserted = await ctx.Db.QuerySingleOrDefaultAsync<MessageRecord>(
-        "SELECT * FROM \"messages\" WHERE room_id = @room_id ORDER BY id DESC LIMIT 1",
-        new Dictionary<string, object?> { ["room_id"] = roomId }
-    );
-
-    var messageId = inserted?.Id ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    var messageId = await ctx.Db.QuerySingleOrDefaultAsync<long>("SELECT last_insert_rowid()");
+    if (messageId <= 0)
+    {
+        var inserted = await ctx.Db.QuerySingleOrDefaultAsync<MessageRecord>(
+            "SELECT * FROM \"messages\" WHERE room_id = @room_id ORDER BY id DESC LIMIT 1",
+            new Dictionary<string, object?> { ["room_id"] = roomId }
+        );
+        messageId = inserted?.Id ?? 0;
+        if (messageId <= 0)
+        {
+            messageId = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        }
+    }
 
     var messageObj = new CampfireMessage(
         Id: messageId,
