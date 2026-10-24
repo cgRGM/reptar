@@ -75,6 +75,28 @@ export default {
       return env.ASSETS.fetch(request);
     }
 
+    if (url.pathname === "/upload" && request.method === "POST") {
+      const key =
+        url.searchParams.get("key") ?? crypto.randomUUID().replaceAll("-", "");
+      const contentType =
+        request.headers.get("content-type") ?? "application/octet-stream";
+
+      await env.BUCKET.put(key, request.body ?? new Uint8Array(), {
+        httpMetadata: { contentType },
+      });
+
+      return withCors(
+        Response.json(
+          {
+            key,
+            url: `/images/${encodeURIComponent(key)}`,
+          },
+          { status: 201 }
+        ),
+        origin
+      );
+    }
+
     if (url.pathname.startsWith("/images/") && request.method === "GET") {
       const key = decodeURIComponent(url.pathname.slice("/images/".length));
       const object = await env.BUCKET.get(key);
