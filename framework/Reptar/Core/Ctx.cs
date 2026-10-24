@@ -27,9 +27,12 @@ public sealed class Ctx
     public IClock Clock => _services.Clock;
     public ICrypto Crypto => _services.Crypto;
     public IEnvironment Environment => _services.Environment;
+    public IAppLogger Log => _services.Log;
+    public IWebSocketTransport WebSocket => _services.WebSocket;
     public IJsonCodec JsonCodec => _services.Json;
     public CookieJar Cookies { get; }
     public SessionUser? User { get; set; }
+    public JwtPayload? Claims { get; set; }
 
     internal Dictionary<string, string> PendingHeaders { get; } = new();
 
@@ -60,8 +63,45 @@ public sealed class Ctx
         Body = body,
     };
 
+    public ReptarResponse Stream(
+        Func<CancellationToken, IAsyncEnumerable<byte[]>> body,
+        string contentType,
+        int status = 200) => new()
+    {
+        Status = status,
+        ContentType = contentType,
+        BodyStream = body,
+    };
+
+    public ReptarResponse Sse(
+        IAsyncEnumerable<string> events,
+        int status = 200) => Sse(_ => events, status);
+
+    public ReptarResponse Sse(
+        Func<CancellationToken, IAsyncEnumerable<string>> events,
+        int status = 200) => new()
+    {
+        Status = status,
+        ContentType = "text/event-stream",
+        Headers =
+        {
+            ["cache-control"] = "no-cache",
+            ["connection"] = "keep-alive",
+        },
+        BodyStream = cancellationToken => SseBody(events(cancellationToken)),
+    };
+
+    private static async IAsyncEnumerable<byte[]> SseBody(
+        IAsyncEnumerable<string> events)
+    {
+        await foreach (var message in events)
+        {
+            yield return Encoding.UTF8.GetBytes($"data: {message}\n\n");
+        }
+    }
+
     public ReptarResponse Error(int status, string code, string message) =>
-        Json(new ErrorBody(code, message, RequestId), status);
+        _services.Errors.Error(this, status, code, message);
 
     public ReptarResponse NotFound(string message = "Not found.") =>
         Error(404, "not_found", message);
@@ -79,13 +119,7 @@ public sealed class Ctx
         Error(400, "bad_request", message);
 
     public ReptarResponse Invalid(IReadOnlyList<ValidationIssue> issues) =>
-        Json(
-            new ValidationError(
-                "validation_error",
-                "Validation failed.",
-                RequestId,
-                issues.ToArray()),
-            400);
+        _services.Errors.Validation(this, issues);
 }
 
 internal sealed record ServiceSet(
@@ -100,4 +134,7 @@ internal sealed record ServiceSet(
     IClock Clock,
     ICrypto Crypto,
     IEnvironment Environment,
-    IJsonCodec Json);
+    IJsonCodec Json,
+    IErrorMapper Errors,
+    IAppLogger Log,
+    IWebSocketTransport WebSocket);

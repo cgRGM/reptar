@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
   cpSync,
+  existsSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -117,7 +118,7 @@ const run = (args: string[], cwd = repoRoot): void => {
 const formatGenerated = (): void => {
   const result = spawnSync(
     process.execPath,
-    ["x", "oxfmt", "--write", "examples/blog/rpc", "packages/rpc/src"],
+    ["x", "oxfmt", "--write", "examples/blog/rpc", "packages/rpc"],
     {
       cwd: repoRoot,
       env: dotnetEnv(),
@@ -143,6 +144,10 @@ const syncRpcContracts = (): void => {
   copyFileSync(
     path.join(generated, "types.ts"),
     path.join(rpcSource, "types.ts")
+  );
+  copyFileSync(
+    path.join(generated, "schemas.ts"),
+    path.join(rpcSource, "schemas.ts")
   );
   copyFileSync(
     path.join(generated, "openapi.json"),
@@ -210,11 +215,20 @@ switch (command) {
     const browserRoot = path.join(workerRoot, "public/browser");
 
     run(["publish", "-c", "Release"], csharpRoot);
-    rmSync(browserRoot, { force: true, recursive: true });
-    cpSync(publishRoot, browserRoot, { recursive: true });
+    if (existsSync(publishRoot)) {
+      rmSync(browserRoot, { force: true, recursive: true });
+      cpSync(publishRoot, browserRoot, { recursive: true });
+    }
 
-    const patched = patchNetWasmHost(browserRoot);
-    console.log(`Patched ${patched} NetWasm host replacement(s).`);
+    if (existsSync(browserRoot)) {
+      const patched = patchNetWasmHost(browserRoot);
+      console.log(`Patched ${patched} NetWasm host replacement(s).`);
+    } else {
+      console.error(
+        `Error: No NetWasm browser artifacts found at ${browserRoot} or ${publishRoot}`
+      );
+      process.exit(1);
+    }
     break;
   }
 

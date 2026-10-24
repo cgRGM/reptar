@@ -33,6 +33,9 @@ app.Get("/example", async c =>
 | `c.Clock` | Host Clock | Deterministic time: `IsoNow()`, `IsoIn(duration)` |
 | `c.Crypto` | Host WebCrypto | PBKDF2 password hashing, SHA-256 tokens, and HMAC-SHA256 signatures |
 | `c.Environment` | Worker env | Reads string env vars/secrets: `Get("STRIPE_KEY")` |
+| `c.Log` | Structured logger | `Info`, `Warn`, and `Error` with request IDs |
+| `c.Claims` | JWT middleware | Verified JWT claims when using `Auth.RequireJwt` |
+| `c.WebSocket` | Host WebSocket transport | Sends and closes live WebSocket sessions |
 | `c.User` | Auth Slice | Authenticated user record populated by `Auth.RequireUser` |
 | `c.Json()` | Core Framework | Serializes typed JSON responses with HTTP status codes |
 | `c.Status()` | Core Framework | Returns empty or status responses (e.g. `c.Status(204)`) |

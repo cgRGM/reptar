@@ -174,24 +174,104 @@ public static class Auth
         return await next();
     };
 
+    public static readonly ReptarMiddleware OptionalUser = async (ctx, next) =>
+    {
+        ctx.User = await CurrentUser(ctx);
+        return await next();
+    };
+
+    public static readonly ReptarMiddleware RequireJwt = async (ctx, next) =>
+    {
+        var options = _options.Jwt;
+
+        if (options is null)
+        {
+            return ctx.Unauthorized("JWT authentication is not configured.");
+        }
+
+        var token = Jwt.ExtractToken(ctx.Req);
+
+        if (token is null)
+        {
+            return ctx.Unauthorized();
+        }
+
+        var payload = await Jwt.VerifyAsync(ctx.Crypto, options, token);
+
+        if (payload is null)
+        {
+            return ctx.Unauthorized();
+        }
+
+        var user = await FindUserById(ctx, payload.Subject);
+
+        if (user is null)
+        {
+            return ctx.Unauthorized();
+        }
+
+        ctx.User = user;
+        ctx.Claims = payload;
+        return await next();
+    };
+
     public static async Task<SessionUser?> CurrentUser(Ctx ctx)
     {
         var token = ctx.Cookies.Get(_options.CookieName);
 
-        if (token is null)
+        if (token is not null)
         {
-            return null;
+            var sessionUser = await ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
+                """
+                select u.id as id, u.email as email, u.name as name
+                from sessions s
+                join users u on u.id = s.user_id
+                where s.token_hash = ? and s.expires_at > ?
+                """,
+                Params(await ctx.Crypto.Sha256(token), ctx.Clock.IsoNow()));
+
+            if (sessionUser is not null)
+                return sessionUser;
         }
 
-        return await ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
-            """
-            select u.id as id, u.email as email, u.name as name
-            from sessions s
-            join users u on u.id = s.user_id
-            where s.token_hash = ? and s.expires_at > ?
-            """,
-            Params(await ctx.Crypto.Sha256(token), ctx.Clock.IsoNow()));
+        var jwt = _options.Jwt;
+        var headerToken = Jwt.ExtractToken(ctx.Req);
+
+        if (jwt is null || headerToken is null)
+            return null;
+
+        var payload = await Jwt.VerifyAsync(ctx.Crypto, jwt, headerToken);
+
+        if (payload is null)
+            return null;
+
+        ctx.Claims = payload;
+        return await FindUserById(ctx, payload.Subject);
     }
+
+    public static async Task<string> IssueJwtAsync(
+        Ctx ctx,
+        SessionUser user,
+        string? role = null)
+    {
+        var options = _options.Jwt
+            ?? throw new InvalidOperationException(
+                "JWT authentication is not configured.");
+
+        var payload = Jwt.CreatePayload(
+            user,
+            role,
+            TimeSpan.FromMinutes(options.LifetimeMinutes));
+
+        return await Jwt.SignAsync(ctx.Crypto, options, payload);
+    }
+
+    public static Task<SessionUser?> FindUserById(Ctx ctx, string id) =>
+        ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
+            """
+            select id, email, name from users where id = ?
+            """,
+            Params(id));
 
     private static async Task StartSession(Ctx ctx, string userId)
     {

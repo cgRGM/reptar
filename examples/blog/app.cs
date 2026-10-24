@@ -10,10 +10,15 @@ global using Reptar;
 global using Reptar.Hosting;
 global using static Reptar.ReptarApi;
 
+var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
+var database = !string.IsNullOrWhiteSpace(databaseUrl)
+    ? Db.Postgres(databaseUrl)
+    : Db.Sqlite("blog.db");
+
 var app = ReptarApp.Create(new ReptarConfig
 {
     Auth = BuiltIn(),
-    Database = Db.Sqlite("blog.db"),
+    Database = database,
     Storage = new LocalR2Client(
         Path.Combine(Directory.GetCurrentDirectory(), "uploads")),
 });

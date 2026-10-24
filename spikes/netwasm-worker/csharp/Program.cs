@@ -4,6 +4,7 @@ using System.Runtime.InteropServices.JavaScript;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
 using Reptar;
 using static Reptar.ReptarApi;
@@ -78,7 +79,7 @@ public static partial class PageExports
             Respond(
                 ExtractRequestId(requestJson),
                 JsonSerializer.Serialize(
-                    new HostResponse(400, [], "{\"error\":\"bad_request\"}", []),
+                    new HostResponse(400, [], "e30=", []),
                     ReptarJson.Options));
             return;
         }
@@ -90,12 +91,10 @@ public static partial class PageExports
             Query = request.Query.TrimStart('?'),
             Headers = request.Headers,
             Cookies = ParseCookies(request.Headers),
-            Body = Encoding.UTF8.GetBytes(request.Body),
+            Body = string.IsNullOrEmpty(request.Body)
+                ? []
+                : Convert.FromBase64String(request.Body),
         });
-
-        var body = response.Body is null
-            ? ""
-            : Encoding.UTF8.GetString(response.Body);
 
         var headers = new Dictionary<string, string>(response.Headers);
 
@@ -103,6 +102,10 @@ public static partial class PageExports
         {
             headers["content-type"] = response.ContentType;
         }
+
+        var body = response.Body is null
+            ? ""
+            : Convert.ToBase64String(response.Body);
 
         Respond(
             request.RequestId,
@@ -238,40 +241,9 @@ public static partial class PageExports
             return ReptarResponse.Json("{\"sent\":true}", 202);
         });
 
-        app.Get("/platform/durable", async ctx =>
+        app.OnQueue("events", async (ctx, msg) =>
         {
-            var body = await ctx.Durable.FetchAsync(
-                "counter",
-                "demo",
-                "/",
-                "GET");
-
-            return ReptarResponse.Json(body);
-        });
-
-        app.Post("/platform/ai", async ctx =>
-        {
-            using var document = JsonDocument.Parse(ctx.Req.BodyText ?? "{}");
-            var prompt = document.RootElement.TryGetProperty(
-                "prompt",
-                out var promptElement)
-                ? promptElement.GetString() ?? ""
-                : "";
-
-            if (string.IsNullOrWhiteSpace(prompt))
-                return ctx.BadRequest("Prompt is required.");
-
-            var model = document.RootElement.TryGetProperty(
-                "model",
-                out var modelElement)
-                ? modelElement.GetString() ?? "@cf/meta/llama-3.2-1b-instruct"
-                : "@cf/meta/llama-3.2-1b-instruct";
-
-            var result = await ctx.AI.GenerateAsync(
-                new AiRequest(model, prompt));
-
-            return ReptarResponse.Json(
-                $"{{\"model\":{JsonSerializer.Serialize(result.Model, ReptarJson.Options)},\"text\":{JsonSerializer.Serialize(result.Text, ReptarJson.Options)},\"tokensIn\":{result.TokensIn},\"tokensOut\":{result.TokensOut}}}");
+            await ctx.Cache.PutAsync($"queue:{msg.Id}", msg.Body, 300);
         });
 
         return app;

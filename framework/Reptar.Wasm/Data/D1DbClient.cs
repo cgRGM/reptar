@@ -16,6 +16,9 @@ public sealed class D1DbClient : IDbClient
     [JSImport("execute", "app.host")]
     private static extern Task<int> Execute(string sql, string paramsJson);
 
+    [JSImport("batch", "app.host")]
+    private static extern Task<int> Batch(string batchJson);
+
     public async Task<List<T>> QueryAsync<T>(string sql, object? param = null)
     {
         var (normSql, paramsJson) = NormalizeSqlAndParams(sql, param);
@@ -35,6 +38,22 @@ public sealed class D1DbClient : IDbClient
     {
         var (normSql, paramsJson) = NormalizeSqlAndParams(sql, param);
         return Execute(normSql, paramsJson);
+    }
+
+    public Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
+    {
+        var parts = new List<string>();
+
+        foreach (var statement in statements)
+        {
+            var (sql, paramsJson) = NormalizeSqlAndParams(
+                statement.Sql,
+                statement.Param);
+            parts.Add(
+                $"{{\"sql\":{JsonSerializer.Serialize(sql, ReptarJson.Options)},\"params\":{paramsJson}}}");
+        }
+
+        return Batch($"[{string.Join(",", parts)}]");
     }
 
     public Task<T?> GetAsync<T>(TableDef table, object id)

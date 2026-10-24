@@ -407,4 +407,644 @@ public class StripeTests
 
         Assert.Equal(503, res.Status);
     }
+
+    [Fact]
+    public void SqlParamParser_rewrites_positional_and_named_params_for_postgres()
+    {
+        var input = "SELECT * FROM posts WHERE id = ? AND title = @title AND author_id = $author";
+        var (sql, names) = SqlParamParser.ParsePostgresParameters(input);
+
+        Assert.Equal("SELECT * FROM posts WHERE id = $1 AND title = $2 AND author_id = $3", sql);
+        Assert.Equal(["title", "author"], names);
+    }
+
+    [Fact]
+    public void SqlParamParser_ignores_literals_and_comments_for_postgres()
+    {
+        var input = "SELECT * FROM posts WHERE title = 'What @about ?' -- check @me\nAND id = ? /* block ? */";
+        var (sql, names) = SqlParamParser.ParsePostgresParameters(input);
+
+        Assert.Equal("SELECT * FROM posts WHERE title = 'What @about ?' -- check @me\nAND id = $1 /* block ? */", sql);
+        Assert.Empty(names);
+    }
+
+    [Fact]
+    public async Task PostgresDbClient_generates_correct_crud_sql()
+    {
+        var client = new PostgresDbClient("mock:test");
+
+        await client.GetAsync<Widget>(TestSchema.Widgets, "w_123");
+        Assert.Equal("SELECT * FROM \"widgets\" WHERE \"id\" = $1 LIMIT 1", client.LastExecutedSql);
+        Assert.Equal(["w_123"], client.LastExecutedParams);
+
+        await client.ListAsync<Widget>(TestSchema.Widgets, "count > 5", limit: 10, offset: 20);
+        Assert.Equal("SELECT * FROM \"widgets\" WHERE count > 5 LIMIT 10 OFFSET 20", client.LastExecutedSql);
+
+        var widget = new Widget("w_456", "Hammer", 42);
+        await client.InsertAsync(TestSchema.Widgets, widget);
+        Assert.Equal("INSERT INTO \"widgets\" (\"id\", \"name\", \"count\") VALUES ($1, $2, $3)", client.LastExecutedSql);
+        Assert.Equal(new object?[] { "w_456", "Hammer", 42L }, client.LastExecutedParams);
+
+        await client.DeleteAsync(TestSchema.Widgets, "w_456");
+        Assert.Equal("DELETE FROM \"widgets\" WHERE \"id\" = $1", client.LastExecutedSql);
+        Assert.Equal(["w_456"], client.LastExecutedParams);
+    }
+
+    [Fact]
+    public void PostgresDbClient_generates_valid_table_ddl()
+    {
+        var ddl = PostgresDbClient.GenerateCreateTableSql(TestSchema.Widgets);
+        Assert.Contains("CREATE TABLE IF NOT EXISTS \"widgets\"", ddl);
+        Assert.Contains("\"id\" TEXT PRIMARY KEY", ddl);
+        Assert.Contains("\"name\" TEXT NOT NULL", ddl);
+        Assert.Contains("\"count\" INTEGER NOT NULL DEFAULT 0", ddl);
+    }
+
+    [Fact]
+    public void PostgresDbClient_converts_uri_to_connection_string()
+    {
+        var uri = "postgres://myuser:mypassword@db.supabase.co:5432/postgres?sslmode=require";
+        var connStr = PostgresDbClient.ConvertUrlToConnectionString(uri);
+
+        Assert.Contains("Host=db.supabase.co", connStr);
+        Assert.Contains("Port=5432", connStr);
+        Assert.Contains("Database=postgres", connStr);
+        Assert.Contains("Username=myuser", connStr);
+        Assert.Contains("Password=mypassword", connStr);
+        Assert.Contains("SSL Mode=Require", connStr);
+    }
+}
+
+public class RateLimiterTests
+{
+    [Fact]
+    public async Task Limits_requests_when_threshold_exceeded()
+    {
+        var limiter = new MemoryRateLimiter(defaultLimit: 3, TimeSpan.FromSeconds(60));
+
+        Assert.True(await limiter.LimitAsync("api", "user_1"));
+        Assert.True(await limiter.LimitAsync("api", "user_1"));
+        Assert.True(await limiter.LimitAsync("api", "user_1"));
+        // 4th request exceeds limit
+        Assert.False(await limiter.LimitAsync("api", "user_1"));
+
+        // Different user is not blocked
+        Assert.True(await limiter.LimitAsync("api", "user_2"));
+    }
+
+    [Fact]
+    public async Task Middleware_returns_429_with_retry_after_header()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            RateLimit = new MemoryRateLimiter(defaultLimit: 2, TimeSpan.FromSeconds(30)),
+        });
+
+        app.Use(ReptarApi.RateLimit(limit: 2, windowSeconds: 30, keySelector: ctx => "test-client"));
+        app.Get("/ping", ctx => Task.FromResult(ctx.Text("pong")));
+
+        var res1 = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/ping" });
+        Assert.Equal(200, res1.Status);
+
+        var res2 = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/ping" });
+        Assert.Equal(200, res2.Status);
+
+        var res3 = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/ping" });
+        Assert.Equal(429, res3.Status);
+        Assert.Equal("30", res3.Headers["Retry-After"]);
+        Assert.Contains("rate_limited", Encoding.UTF8.GetString(res3.Body!));
+    }
+}
+
+public class QueueTests
+{
+    private sealed record DemoPayload(string Message, int Priority);
+
+    [Fact]
+    public async Task Dispatches_queue_batch_to_registered_handler()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+        var received = new List<string>();
+
+        app.OnQueue("jobs", (ctx, msg) =>
+        {
+            received.Add($"{msg.Id}:{msg.Body}");
+            return Task.CompletedTask;
+        });
+
+        var batch = new QueueBatch("batch_1", "jobs", [
+            new QueueMessage("msg_1", "do work 1", DateTimeOffset.UtcNow.ToString("O"), 1),
+            new QueueMessage("msg_2", "do work 2", DateTimeOffset.UtcNow.ToString("O"), 1),
+        ]);
+
+        var result = await app.HandleQueueBatchAsync(batch);
+
+        Assert.True(result.Success);
+        Assert.Empty(result.FailedMessageIds);
+        Assert.Equal(2, received.Count);
+        Assert.Equal("msg_1:do work 1", received[0]);
+        Assert.Equal("msg_2:do work 2", received[1]);
+    }
+
+    [Fact]
+    public async Task Dispatches_typed_queue_messages()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+        var processed = new List<DemoPayload>();
+
+        app.OnQueue<DemoPayload>("jobs", (ctx, msg, payload) =>
+        {
+            processed.Add(payload);
+            return Task.CompletedTask;
+        });
+
+        var batch = new QueueBatch("batch_2", "jobs", [
+            new QueueMessage("m1", "{\"message\":\"sync\",\"priority\":10}", DateTimeOffset.UtcNow.ToString("O"), 1),
+        ]);
+
+        var result = await app.HandleQueueBatchAsync(batch);
+
+        Assert.True(result.Success);
+        Assert.Single(processed);
+        Assert.Equal("sync", processed[0].Message);
+        Assert.Equal(10, processed[0].Priority);
+    }
+
+    [Fact]
+    public async Task Reports_failed_message_ids_when_handler_throws()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+
+        app.OnQueue("jobs", (ctx, msg) =>
+        {
+            if (msg.Id == "bad_msg")
+                throw new InvalidOperationException("boom");
+
+            return Task.CompletedTask;
+        });
+
+        var batch = new QueueBatch("batch_3", "jobs", [
+            new QueueMessage("good_msg", "ok", DateTimeOffset.UtcNow.ToString("O"), 1),
+            new QueueMessage("bad_msg", "crash", DateTimeOffset.UtcNow.ToString("O"), 1),
+        ]);
+
+        var result = await app.HandleQueueBatchAsync(batch);
+
+        Assert.False(result.Success);
+        Assert.Single(result.FailedMessageIds);
+        Assert.Equal("bad_msg", result.FailedMessageIds[0]);
+    }
+}
+
+public class StandardSchemaMetadataTests
+{
+    private sealed record UserRegistration(string Email, string Password, int Age, string? Website);
+
+    private static readonly Validator<UserRegistration> UserSchema = ReptarApi.Rule<UserRegistration>()
+        .Prop(x => x.Email, r => r.Email().Max(100))
+        .Prop(x => x.Password, r => r.Min(8).Max(64))
+        .Prop(x => x.Age, r => r.Min(18).Max(120))
+        .Prop(x => x.Website, r => r.Url().Optional());
+
+    [Fact]
+    public void Validator_exposes_property_rule_metadata()
+    {
+        var meta = Assert.IsAssignableFrom<IValidatorMeta>(UserSchema);
+        var rules = meta.Properties.ToDictionary(p => p.Name);
+
+        Assert.Equal(4, rules.Count);
+
+        var emailRule = rules["email"];
+        Assert.True(emailRule.IsEmail);
+        Assert.Equal(100, emailRule.MaxLength);
+        Assert.False(emailRule.IsOptional);
+
+        var passwordRule = rules["password"];
+        Assert.Equal(8, passwordRule.MinLength);
+        Assert.Equal(64, passwordRule.MaxLength);
+
+        var ageRule = rules["age"];
+        Assert.Equal(18, ageRule.MinValue);
+        Assert.Equal(120, ageRule.MaxValue);
+
+        var websiteRule = rules["website"];
+        Assert.True(websiteRule.IsUrl);
+        Assert.True(websiteRule.IsOptional);
+    }
+}
+
+public class JwtTests
+{
+    private static readonly JwtOptions Options = new()
+    {
+        Audience = "reptar-tests",
+        Issuer = "reptar-tests",
+        Secret = "test-secret",
+    };
+
+    [Fact]
+    public async Task Signs_and_verifies_a_token()
+    {
+        var crypto = new DevCrypto();
+        var payload = new JwtPayload(
+            "usr_1",
+            "jake@example.com",
+            "Jake",
+            "user",
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds());
+
+        var token = await Jwt.SignAsync(crypto, Options, payload);
+        var verified = await Jwt.VerifyAsync(crypto, Options, token);
+
+        Assert.NotNull(verified);
+        Assert.Equal("usr_1", verified!.Subject);
+        Assert.Equal("jake@example.com", verified.Email);
+    }
+
+    [Fact]
+    public async Task Rejects_tampered_and_expired_tokens()
+    {
+        var crypto = new DevCrypto();
+        var payload = new JwtPayload(
+            "usr_1",
+            null,
+            null,
+            null,
+            DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
+            DateTimeOffset.UtcNow.AddMinutes(10).ToUnixTimeSeconds());
+
+        var token = await Jwt.SignAsync(crypto, Options, payload);
+        var tampered = token[..^1] + (token[^1] == 'A' ? 'B' : 'A');
+
+        Assert.Null(await Jwt.VerifyAsync(crypto, Options, tampered));
+
+        var expired = payload with
+        {
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-1).ToUnixTimeSeconds(),
+        };
+        var expiredToken = await Jwt.SignAsync(crypto, Options, expired);
+
+        Assert.Null(await Jwt.VerifyAsync(crypto, Options, expiredToken));
+    }
+
+    [Fact]
+    public void Extracts_token_and_bearer_schemes()
+    {
+        var request = new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/",
+            Headers = new Dictionary<string, string>
+            {
+                ["authorization"] = "Token abc.def.ghi",
+            },
+        };
+
+        Assert.Equal("abc.def.ghi", Jwt.ExtractToken(request));
+
+        request.Headers["authorization"] = "Bearer xyz";
+        Assert.Equal("xyz", Jwt.ExtractToken(request));
+    }
+}
+
+public class ErrorMapperTests
+{
+    private sealed record Input(string Email);
+
+    private sealed class RealWorldErrors : IErrorMapper
+    {
+        public ReptarResponse Error(
+            Ctx ctx,
+            int status,
+            string code,
+            string message) =>
+            ctx.Json(new { errors = new { code, message } }, status);
+
+        public ReptarResponse Validation(
+            Ctx ctx,
+            IReadOnlyList<ValidationIssue> issues) =>
+            ctx.Json(
+                new
+                {
+                    errors = issues.ToDictionary(
+                        issue => issue.Path?.FirstOrDefault() ?? "base",
+                        issue => new[] { issue.Message }),
+                },
+                422);
+    }
+
+    [Fact]
+    public async Task Maps_validation_errors_to_a_custom_envelope()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Errors = new RealWorldErrors(),
+        });
+
+        app.Post(
+            "/users",
+            ReptarApi.Rule<Input>().Prop(x => x.Email, rules => rules.Email()),
+            (ctx, input) => Task.FromResult(ctx.Json(input)));
+
+        var response = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/users",
+            Headers = new Dictionary<string, string>
+            {
+                ["content-type"] = "application/json",
+            },
+            Body = Encoding.UTF8.GetBytes("{\"email\":\"not-an-email\"}"),
+        });
+
+        Assert.Equal(422, response.Status);
+        Assert.Contains("\"errors\"", Encoding.UTF8.GetString(response.Body!));
+    }
+}
+
+public class CountAndBatchTests
+{
+    [Fact]
+    public async Task Counts_rows_and_executes_an_atomic_batch()
+    {
+        using var db = new SqliteDbClient(":memory:");
+        await db.EnsureCreatedAsync(TestSchema.Widgets);
+
+        await db.InsertAsync(TestSchema.Widgets, new Widget("w1", "Alpha", 1));
+        Assert.Equal(1, await db.CountAsync(TestSchema.Widgets));
+
+        var changes = await db.BatchAsync([
+            new DbStatement(
+                "insert into widgets (id, name, count) values (@id, @name, @count)",
+                new { id = "w2", name = "Beta", count = 2 }),
+            new DbStatement(
+                "insert into widgets (id, name, count) values (@id, @name, @count)",
+                new { id = "w3", name = "Gamma", count = 3 }),
+        ]);
+
+        Assert.Equal(2, changes);
+        Assert.Equal(3, await db.CountAsync(TestSchema.Widgets));
+    }
+
+    [Fact]
+    public async Task Rolls_back_a_failed_batch()
+    {
+        using var db = new SqliteDbClient(":memory:");
+        await db.EnsureCreatedAsync(TestSchema.Widgets);
+
+        await Assert.ThrowsAnyAsync<Exception>(() => db.BatchAsync([
+            new DbStatement(
+                "insert into widgets (id, name, count) values (@id, @name, @count)",
+                new { id = "w1", name = "Alpha", count = 1 }),
+            new DbStatement("insert into missing_table (id) values (@id)", new { id = "bad" }),
+        ]));
+
+        Assert.Equal(0, await db.CountAsync(TestSchema.Widgets));
+    }
+}
+
+public class SlugTests
+{
+    [Fact]
+    public async Task Generates_a_unique_slug()
+    {
+        using var db = new SqliteDbClient(":memory:");
+        var table = ReptarApi.DefineTable("slugged", new
+        {
+            Id = ReptarApi.Col.Text("id").PrimaryKey(),
+            Slug = ReptarApi.Col.Text("slug").NotNull(),
+        });
+        await db.EnsureCreatedAsync(table);
+        await db.InsertAsync(table, new { Id = "1", Slug = "hello-world" });
+
+        var slug = await Slugs.UniqueAsync(
+            db,
+            table,
+            "slug",
+            "Hello World");
+
+        Assert.Equal("hello-world-2", slug);
+    }
+}
+
+public class MultipartTests
+{
+    [Fact]
+    public void Parses_fields_and_file_bytes()
+    {
+        var boundary = "reptar-boundary";
+        var body = Encoding.UTF8.GetBytes(
+            $"--{boundary}\r\n" +
+            "Content-Disposition: form-data; name=\"title\"\r\n\r\n" +
+            "Hello\r\n" +
+            $"--{boundary}\r\n" +
+            "Content-Disposition: form-data; name=\"image\"; filename=\"pixel.png\"\r\n" +
+            "Content-Type: image/png\r\n\r\n" +
+            "PNG\r\n" +
+            $"--{boundary}--\r\n");
+
+        var request = new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/upload",
+            Headers = new Dictionary<string, string>
+            {
+                ["content-type"] = $"multipart/form-data; boundary={boundary}",
+            },
+            Body = body,
+        };
+
+        var form = request.Form;
+
+        Assert.NotNull(form);
+        Assert.Equal("Hello", form!.Value("title"));
+        Assert.NotNull(form.File("image"));
+        Assert.Equal("pixel.png", form.File("image")!.FileName);
+        Assert.Equal("PNG", Encoding.UTF8.GetString(form.File("image")!.Data));
+    }
+}
+
+public class StreamingTests
+{
+    [Fact]
+    public async Task Returns_an_sse_body_stream()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+        });
+
+        app.Get("/stream", ctx => Task.FromResult(ctx.Sse(
+            Events())));
+
+        var response = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/stream",
+        });
+
+        Assert.Equal("text/event-stream", response.ContentType);
+        Assert.NotNull(response.BodyStream);
+
+        var chunks = new List<string>();
+
+        await foreach (var chunk in response.BodyStream!(CancellationToken.None))
+            chunks.Add(Encoding.UTF8.GetString(chunk));
+
+        Assert.Equal(["data: one\n\n", "data: two\n\n"], chunks);
+    }
+
+    private static async IAsyncEnumerable<string> Events()
+    {
+        yield return "one";
+        await Task.Yield();
+        yield return "two";
+    }
+}
+
+public class ScheduledTests
+{
+    [Fact]
+    public async Task Runs_matching_scheduled_handlers()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+        });
+        var calls = new List<string>();
+
+        app.OnScheduled("*", (ctx, evt) =>
+        {
+            calls.Add($"{evt.Cron}:{ctx.Req.Method}");
+            return Task.CompletedTask;
+        });
+
+        var result = await app.HandleScheduledAsync(
+            new ScheduledEvent("*/5 * * * *", DateTimeOffset.UtcNow.ToString("O")));
+
+        Assert.True(result.Success);
+        Assert.Single(calls);
+        Assert.StartsWith("*/5", calls[0]);
+    }
+}
+
+public class LambdaTests
+{
+    [Fact]
+    public void Parses_api_gateway_v2_event_correctly()
+    {
+        var json = """
+        {
+            "rawPath": "/posts/123",
+            "rawQueryString": "filter=recent",
+            "headers": {
+                "content-type": "application/json",
+                "x-custom-header": "test-val"
+            },
+            "cookies": [
+                "reptar_session=abc123xyz"
+            ],
+            "requestContext": {
+                "http": {
+                    "method": "POST"
+                }
+            },
+            "body": "eyAidGl0bGUiOiAiSGVsbG8iIH0=",
+            "isBase64Encoded": true
+        }
+        """;
+
+        var request = Reptar.Hosting.Lambda.LambdaHost.ParseApiGatewayV2Event(json);
+
+        Assert.Equal("POST", request.Method);
+        Assert.Equal("/posts/123", request.Path);
+        Assert.Equal("filter=recent", request.Query);
+        Assert.Equal("test-val", request.Headers["x-custom-header"]);
+        Assert.Equal("abc123xyz", request.Cookies["reptar_session"]);
+        Assert.NotNull(request.Body);
+        Assert.Equal("{ \"title\": \"Hello\" }", Encoding.UTF8.GetString(request.Body!));
+    }
+
+    [Fact]
+    public void Formats_api_gateway_v2_response_correctly()
+    {
+        var response = new ReptarResponse
+        {
+            Status = 201,
+            ContentType = "application/json",
+            Body = Encoding.UTF8.GetBytes("{\"id\":\"p1\"}"),
+        };
+        response.Headers["x-powered-by"] = "Reptar";
+        response.SetCookies.Add("reptar_session=xyz; Path=/; HttpOnly");
+
+        var formatted = Reptar.Hosting.Lambda.LambdaHost.FormatApiGatewayV2Response(response);
+        var doc = System.Text.Json.Nodes.JsonNode.Parse(formatted)!;
+
+        Assert.Equal(201, doc["statusCode"]!.GetValue<int>());
+        Assert.True(doc["isBase64Encoded"]!.GetValue<bool>());
+        Assert.Equal("application/json", doc["headers"]!["content-type"]!.GetValue<string>());
+        Assert.Equal("Reptar", doc["headers"]!["x-powered-by"]!.GetValue<string>());
+        Assert.Equal("reptar_session=xyz; Path=/; HttpOnly", doc["cookies"]![0]!.GetValue<string>());
+
+        var bodyBase64 = doc["body"]!.GetValue<string>();
+        var bodyBytes = Convert.FromBase64String(bodyBase64);
+        Assert.Equal("{\"id\":\"p1\"}", Encoding.UTF8.GetString(bodyBytes));
+    }
+}
+
+public class WebSocketTests
+{
+    private sealed class TestTransport : IWebSocketTransport
+    {
+        public List<string> Sent { get; } = [];
+        public List<string> Closed { get; } = [];
+
+        public void Send(string sessionId, string message) =>
+            Sent.Add($"{sessionId}:{message}");
+
+        public void Close(string sessionId, int code, string reason) =>
+            Closed.Add($"{sessionId}:{code}:{reason}");
+    }
+
+    [Fact]
+    public async Task Routes_open_message_and_close_events()
+    {
+        var transport = new TestTransport();
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            WebSocket = transport,
+        });
+        var closed = false;
+
+        app.OnWebSocket("/ws", new WebSocketHandlers
+        {
+            Open = connection => connection.SendAsync("connected"),
+            Message = (connection, message) =>
+                connection.SendAsync($"echo:{message}"),
+            Close = connection =>
+            {
+                closed = true;
+                return Task.CompletedTask;
+            },
+        });
+
+        var request = new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ws",
+        };
+
+        await app.HandleWebSocketOpenAsync("session_1", request);
+        await app.HandleWebSocketMessageAsync("session_1", "hello");
+        await app.HandleWebSocketCloseAsync("session_1");
+
+        Assert.Equal(
+            ["session_1:connected", "session_1:echo:hello"],
+            transport.Sent);
+        Assert.True(closed);
+    }
 }

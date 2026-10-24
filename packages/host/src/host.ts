@@ -1,4 +1,4 @@
-import { d1Execute, d1Query } from "./bindings";
+import { d1Batch, d1Execute, d1Query } from "./bindings";
 import type { ReptarBindings } from "./bindings";
 import {
   hashPassword,
@@ -10,7 +10,30 @@ import {
 
 export interface ReptarWasmApp {
   handle?: (requestJson: string) => void;
+  handleQueue?: (batchJson: string) => void;
+  handleScheduled?: (scheduledJson: string) => void;
+  handleWebSocketClose?: (closeJson: string) => void;
+  handleWebSocketMessage?: (messageJson: string) => void;
+  handleWebSocketOpen?: (openJson: string) => void;
   [key: string]: unknown;
+}
+
+export interface MessageBatch<T = unknown> {
+  ackAll?: () => void;
+  readonly messages: readonly {
+    ack?: () => void;
+    readonly attempts: number;
+    readonly body: T;
+    readonly id: string;
+    retry?: () => void;
+    readonly timestamp: Date | string;
+  }[];
+  readonly queue: string;
+  retryAll?: () => void;
+}
+
+interface WorkerWebSocket extends WebSocket {
+  accept: () => void;
 }
 
 export interface ReptarHostOptions<TEnv> {
@@ -26,6 +49,11 @@ export interface ReptarHostOptions<TEnv> {
 
 export interface ReptarHost<TEnv> {
   fetch: (request: Request, env: TEnv) => Promise<Response>;
+  queue: (batch: MessageBatch<unknown>, env: TEnv) => Promise<void>;
+  scheduled: (
+    event: { cron: string; scheduledTime: number | Date },
+    env: TEnv
+  ) => Promise<void>;
 }
 
 interface HostResponseEnvelope {
@@ -45,6 +73,7 @@ interface ReptarScope {
     password: string,
     hash: string
   ) => Promise<boolean>;
+  __REPTAR_DB_BATCH?: (batchJson: string) => Promise<number>;
   __REPTAR_DB_EXECUTE?: (sql: string, paramsJson: string) => Promise<number>;
   __REPTAR_DB_QUERY?: (sql: string, paramsJson: string) => Promise<string>;
   __REPTAR_DURABLE_FETCH?: (
@@ -73,6 +102,8 @@ interface ReptarScope {
     ttlSeconds?: number
   ) => Promise<void>;
   __REPTAR_MANIFEST_URL?: string;
+  __REPTAR_PG_EXECUTE?: (sql: string, paramsJson: string) => Promise<number>;
+  __REPTAR_PG_QUERY?: (sql: string, paramsJson: string) => Promise<string>;
   __REPTAR_QUEUE_SEND?: (
     queueName: string,
     messageJson: string
@@ -86,8 +117,50 @@ interface ReptarScope {
     contentType: string
   ) => Promise<string>;
   __REPTAR_RESPOND?: (requestId: string, value: string) => void;
+  __REPTAR_RESPOND_QUEUE?: (batchId: string, value: string) => void;
+  __REPTAR_RESPOND_SCHEDULED?: (scheduleId: string, value: string) => void;
+  __REPTAR_STREAM_CHUNK?: (requestId: string, base64: string) => void;
+  __REPTAR_STREAM_END?: (requestId: string) => void;
+  __REPTAR_STREAM_ERROR?: (requestId: string, message: string) => void;
+  __REPTAR_WS_CLOSE?: (sessionId: string, code: number, reason: string) => void;
+  __REPTAR_WS_SEND?: (sessionId: string, message: string) => void;
+  __REPTAR_STREAM_START?: (
+    requestId: string,
+    status: number,
+    headersJson: string,
+    cookiesJson: string
+  ) => void;
   __REPTAR_WASM_MODULE?: WebAssembly.Module;
 }
+
+const bytesToBase64 = (bytes: Uint8Array): string => {
+  let binary = "";
+  const chunkSize = 0x80_00;
+
+  for (let index = 0; index < bytes.length; index += chunkSize) {
+    binary += String.fromCodePoint(...bytes.subarray(index, index + chunkSize));
+  }
+
+  return btoa(binary);
+};
+
+const base64ToBytes = (value: string): Uint8Array => {
+  if (!value) {
+    return new Uint8Array(0);
+  }
+  try {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.codePointAt(index) ?? 0;
+    }
+
+    return bytes;
+  } catch {
+    return new TextEncoder().encode(value);
+  }
+};
 
 const defaultManifestUrl = (origin: string): string =>
   new URL("/browser/deployment.json", origin).href;
@@ -116,6 +189,22 @@ const registerDbBindings = (
   scope.__REPTAR_DB_QUERY ??= (sql, paramsJson) => d1Query(db, sql, paramsJson);
   scope.__REPTAR_DB_EXECUTE ??= (sql, paramsJson) =>
     d1Execute(db, sql, paramsJson);
+  scope.__REPTAR_DB_BATCH ??= (batchJson) => d1Batch(db, batchJson);
+};
+
+const registerPostgresBindings = (
+  scope: ReptarScope,
+  postgres: ReptarBindings["postgres"]
+): void => {
+  if (postgres) {
+    scope.__REPTAR_PG_QUERY = (sql, paramsJson) =>
+      postgres.query(sql, paramsJson);
+    scope.__REPTAR_PG_EXECUTE = (sql, paramsJson) =>
+      postgres.execute(sql, paramsJson);
+  } else {
+    scope.__REPTAR_PG_QUERY ??= () => Promise.resolve("[]");
+    scope.__REPTAR_PG_EXECUTE ??= () => Promise.resolve(0);
+  }
 };
 
 const registerR2Bindings = (
@@ -339,6 +428,16 @@ export const createReptarHost = <TEnv>(
 ): ReptarHost<TEnv> => {
   let appPromise: Promise<ReptarWasmApp> | null = null;
   const pending = new Map<string, (value: string) => void>();
+  const pendingQueue = new Map<string, (value: string) => void>();
+  const pendingScheduled = new Map<string, (value: string) => void>();
+  const sockets = new Map<string, WorkerWebSocket>();
+  const pendingStreams = new Map<
+    string,
+    {
+      controller?: ReadableStreamDefaultController<Uint8Array>;
+      resolve: (response: Response) => void;
+    }
+  >();
   const scope = globalThis as typeof globalThis & ReptarScope;
 
   scope.__REPTAR_RESPOND = (requestId, value) => {
@@ -348,6 +447,91 @@ export const createReptarHost = <TEnv>(
       pending.delete(requestId);
       resolve(value);
     }
+  };
+
+  scope.__REPTAR_RESPOND_QUEUE = (batchId, value) => {
+    const resolve = pendingQueue.get(batchId);
+
+    if (resolve) {
+      pendingQueue.delete(batchId);
+      resolve(value);
+    }
+  };
+
+  scope.__REPTAR_RESPOND_SCHEDULED = (scheduleId, value) => {
+    const resolve = pendingScheduled.get(scheduleId);
+
+    if (resolve) {
+      pendingScheduled.delete(scheduleId);
+      resolve(value);
+    }
+  };
+
+  scope.__REPTAR_WS_SEND = (sessionId, message) => {
+    sockets.get(sessionId)?.send(message);
+  };
+
+  scope.__REPTAR_WS_CLOSE = (sessionId, code, reason) => {
+    const socket = sockets.get(sessionId);
+    sockets.delete(sessionId);
+    socket?.close(code, reason);
+  };
+
+  scope.__REPTAR_STREAM_START = (
+    requestId,
+    status,
+    headersJson,
+    cookiesJson
+  ) => {
+    const state = pendingStreams.get(requestId);
+
+    if (!state) {
+      return;
+    }
+
+    const headers = new Headers(
+      JSON.parse(headersJson || "{}") as Record<string, string>
+    );
+    const cookies = JSON.parse(cookiesJson || "[]") as string[];
+
+    for (const cookie of cookies) {
+      headers.append("set-cookie", cookie);
+    }
+
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        state.controller = controller;
+      },
+    });
+
+    state.resolve(new Response(stream, { headers, status }));
+  };
+
+  scope.__REPTAR_STREAM_CHUNK = (requestId, base64) => {
+    const state = pendingStreams.get(requestId);
+    state?.controller?.enqueue(base64ToBytes(base64));
+  };
+
+  scope.__REPTAR_STREAM_END = (requestId) => {
+    const state = pendingStreams.get(requestId);
+
+    if (!state) {
+      return;
+    }
+
+    pendingStreams.delete(requestId);
+    state.controller?.close();
+  };
+
+  scope.__REPTAR_STREAM_ERROR = (requestId, message) => {
+    const state = pendingStreams.get(requestId);
+
+    if (!state) {
+      return;
+    }
+
+    pendingStreams.delete(requestId);
+    state.controller?.error(new Error(message));
   };
 
   const getApp = (origin: string, env: TEnv): Promise<ReptarWasmApp> => {
@@ -363,6 +547,7 @@ export const createReptarHost = <TEnv>(
 
     const bindings = options.bindings(env);
     registerDbBindings(scope, bindings.db);
+    registerPostgresBindings(scope, bindings.postgres);
     registerR2Bindings(scope, bindings.r2);
     registerKvBindings(scope, bindings.kv);
     registerQueuesBinding(scope, bindings.queues);
@@ -385,18 +570,84 @@ export const createReptarHost = <TEnv>(
     return appPromise;
   };
 
-  const handleRequest = async (
+  const handleWebSocket = async (
     request: Request,
     env: TEnv
   ): Promise<Response> => {
     const url = new URL(request.url);
     const app = await getApp(url.origin, env);
 
+    if (typeof app.handleWebSocketOpen !== "function") {
+      return errorResponse(
+        "Reptar app does not export handleWebSocketOpen()",
+        501
+      );
+    }
+
+    const Pair = (
+      globalThis as unknown as {
+        WebSocketPair: new () => [WorkerWebSocket, WorkerWebSocket];
+      }
+    ).WebSocketPair;
+    const [client, server] = new Pair();
+    const sessionId = crypto.randomUUID();
+    server.accept();
+    sockets.set(sessionId, server);
+
+    const close = () => {
+      sockets.delete(sessionId);
+      app.handleWebSocketClose?.(JSON.stringify({ sessionId }));
+    };
+
+    server.addEventListener("message", (event: MessageEvent) => {
+      const message =
+        typeof event.data === "string"
+          ? event.data
+          : bytesToBase64(new Uint8Array(event.data as ArrayBuffer));
+      app.handleWebSocketMessage?.(JSON.stringify({ message, sessionId }));
+    });
+    server.addEventListener("close", close);
+    server.addEventListener("error", close);
+
+    try {
+      app.handleWebSocketOpen(
+        JSON.stringify({
+          headers: Object.fromEntries(request.headers.entries()),
+          path: url.pathname,
+          query: url.search.replace(/^\?/u, ""),
+          sessionId,
+        })
+      );
+    } catch (error) {
+      close();
+      return errorResponse(
+        error instanceof Error ? error.message : "WebSocket open failed"
+      );
+    }
+
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+    } as ResponseInit & { webSocket: WebSocket });
+  };
+
+  const handleRequest = async (
+    request: Request,
+    env: TEnv
+  ): Promise<Response> => {
+    const url = new URL(request.url);
+
+    if (request.headers.get("upgrade")?.toLowerCase() === "websocket") {
+      return handleWebSocket(request, env);
+    }
+
+    const app = await getApp(url.origin, env);
+
     if (typeof app.handle !== "function") {
       return errorResponse("Reptar app does not export handle()");
     }
 
-    const body = await request.text();
+    const body = bytesToBase64(new Uint8Array(await request.arrayBuffer()));
     const requestId = crypto.randomUUID();
 
     // The C# app responds through a JS import, so the host owns the promise.
@@ -404,6 +655,10 @@ export const createReptarHost = <TEnv>(
     // eslint-disable-next-line promise/avoid-new
     const response = new Promise<string>((resolve) => {
       pending.set(requestId, resolve);
+    });
+    // eslint-disable-next-line promise/avoid-new
+    const streaming = new Promise<Response>((resolve) => {
+      pendingStreams.set(requestId, { resolve });
     });
 
     try {
@@ -419,14 +674,26 @@ export const createReptarHost = <TEnv>(
       );
     } catch (error) {
       pending.delete(requestId);
+      pendingStreams.delete(requestId);
       return errorResponse(
         error instanceof Error ? error.message : "Reptar app failed"
       );
     }
 
-    const json = await response;
+    const first = await Promise.race([
+      response.then((json) => ({ json, kind: "normal" as const })),
+      streaming.then((stream) => ({ kind: "stream" as const, stream })),
+    ]);
+
     pending.delete(requestId);
 
+    if (first.kind === "stream") {
+      return first.stream;
+    }
+
+    pendingStreams.delete(requestId);
+
+    const { json } = first;
     let payload: HostResponseEnvelope;
 
     try {
@@ -444,13 +711,122 @@ export const createReptarHost = <TEnv>(
     const status = payload.status ?? 200;
     const nullBody = status === 204 || status === 205 || status === 304;
 
-    return new Response(nullBody ? null : (payload.body ?? ""), {
-      headers,
-      status,
+    return new Response(
+      nullBody
+        ? null
+        : (base64ToBytes(payload.body ?? "") as unknown as BodyInit),
+      {
+        headers,
+        status,
+      }
+    );
+  };
+
+  const handleQueue = async (
+    batch: MessageBatch<unknown>,
+    env: TEnv
+  ): Promise<void> => {
+    const app = await getApp("https://queue.local", env);
+
+    if (typeof app.handleQueue !== "function") {
+      console.warn("Reptar app does not export handleQueue()");
+      return;
+    }
+
+    const batchId = crypto.randomUUID();
+    // eslint-disable-next-line promise/avoid-new
+    const response = new Promise<string>((resolve) => {
+      pendingQueue.set(batchId, resolve);
     });
+
+    const payload = {
+      batchId,
+      messages: batch.messages.map((message) => ({
+        attempts: message.attempts,
+        body:
+          typeof message.body === "string"
+            ? message.body
+            : JSON.stringify(message.body),
+        id: message.id,
+        timestamp:
+          message.timestamp instanceof Date
+            ? message.timestamp.toISOString()
+            : String(message.timestamp),
+      })),
+      queue: batch.queue,
+    };
+
+    try {
+      app.handleQueue(JSON.stringify(payload));
+    } catch (error) {
+      pendingQueue.delete(batchId);
+      throw error;
+    }
+
+    const json = await response;
+    pendingQueue.delete(batchId);
+
+    try {
+      const result = JSON.parse(json) as {
+        failedMessageIds?: string[];
+        success?: boolean;
+      };
+      const failed = new Set(result.failedMessageIds);
+
+      for (const message of batch.messages) {
+        if (failed.has(message.id)) {
+          message.retry?.();
+        } else {
+          message.ack?.();
+        }
+      }
+    } catch {
+      // Fall back to batch completion
+    }
+  };
+
+  const handleScheduled = async (
+    event: { cron: string; scheduledTime: number | Date },
+    env: TEnv
+  ): Promise<void> => {
+    const app = await getApp("https://scheduled.local", env);
+
+    if (typeof app.handleScheduled !== "function") {
+      console.warn("Reptar app does not export handleScheduled()");
+      return;
+    }
+
+    const scheduleId = crypto.randomUUID();
+    // eslint-disable-next-line promise/avoid-new
+    const response = new Promise<string>((resolve) => {
+      pendingScheduled.set(scheduleId, resolve);
+    });
+
+    const scheduledTime =
+      event.scheduledTime instanceof Date
+        ? event.scheduledTime.toISOString()
+        : new Date(event.scheduledTime).toISOString();
+
+    try {
+      app.handleScheduled(
+        JSON.stringify({
+          cron: event.cron,
+          scheduleId,
+          scheduledTime,
+        })
+      );
+    } catch (error) {
+      pendingScheduled.delete(scheduleId);
+      throw error;
+    }
+
+    await response;
+    pendingScheduled.delete(scheduleId);
   };
 
   return {
     fetch: handleRequest,
+    queue: handleQueue,
+    scheduled: handleScheduled,
   };
 };

@@ -9,6 +9,7 @@ public sealed class RouteMeta
     public Type? InputType { get; internal set; }
     public List<(int Status, Type? Type)> Produces { get; } = new();
     public string? Name { get; internal set; }
+    public object? Validator { get; internal set; }
 
     internal RouteMeta CloneWithPath(string path)
     {
@@ -18,6 +19,7 @@ public sealed class RouteMeta
             Path = path,
             InputType = InputType,
             Name = Name,
+            Validator = Validator,
         };
 
         clone.Produces.AddRange(Produces);
@@ -35,10 +37,41 @@ internal sealed class RouteEntry
     public required RouteMeta Meta { get; init; }
 }
 
+public sealed record QueueMessage(
+    string Id,
+    string Body,
+    string Timestamp,
+    int Attempts);
+
+public sealed record QueueBatch(
+    string BatchId,
+    string Queue,
+    List<QueueMessage> Messages);
+
+public sealed record QueueBatchResult(
+    bool Success,
+    string[] FailedMessageIds);
+
+public sealed record ScheduledEvent(
+    string Cron,
+    string ScheduledTime);
+
+public sealed record ScheduledResult(
+    bool Success,
+    string[] Errors);
+
 public sealed class ReptarApp
 {
     private readonly List<RouteEntry> _routes = new();
     private readonly List<ReptarMiddleware> _middlewares = new();
+    private readonly Dictionary<string, Func<Ctx, QueueMessage, Task>> _queueHandlers =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, Func<Ctx, ScheduledEvent, Task>> _scheduledHandlers =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, WebSocketHandlers> _webSocketHandlers =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (WebSocketConnection Connection, WebSocketHandlers Handlers)> _webSocketSessions =
+        new(StringComparer.Ordinal);
     private readonly ReptarConfig _config;
     private ServiceSet? _services;
 
@@ -176,7 +209,222 @@ public sealed class ReptarApp
         }
 
         Tables.AddRange(subApp.Tables);
+
+        foreach (var (queueName, handler) in subApp._queueHandlers)
+        {
+            _queueHandlers[queueName] = handler;
+        }
+
+        foreach (var (cron, handler) in subApp._scheduledHandlers)
+        {
+            _scheduledHandlers[cron] = handler;
+        }
+
+        foreach (var (path, handlers) in subApp._webSocketHandlers)
+        {
+            _webSocketHandlers[path] = handlers;
+        }
+
         return this;
+    }
+
+    public ReptarApp OnQueue(string queueName, Func<Ctx, QueueMessage, Task> handler)
+    {
+        _queueHandlers[queueName] = handler;
+        return this;
+    }
+
+    public ReptarApp OnQueue<T>(string queueName, Func<Ctx, QueueMessage, T, Task> handler)
+    {
+        _queueHandlers[queueName] = async (ctx, msg) =>
+        {
+            var input = ctx.JsonCodec.Deserialize<T>(msg.Body);
+            if (input is not null)
+            {
+                await handler(ctx, msg, input);
+            }
+        };
+        return this;
+    }
+
+    public ReptarApp OnScheduled(
+        string cron,
+        Func<Ctx, ScheduledEvent, Task> handler)
+    {
+        _scheduledHandlers[cron] = handler;
+        return this;
+    }
+
+    public ReptarApp OnWebSocket(string path, WebSocketHandlers handlers)
+    {
+        _webSocketHandlers[Normalize(path)] = handlers;
+        return this;
+    }
+
+    public async Task HandleWebSocketOpenAsync(
+        string sessionId,
+        ReptarRequest request)
+    {
+        var path = Normalize(request.Path);
+
+        if (!_webSocketHandlers.TryGetValue(path, out var handlers))
+        {
+            Services.WebSocket.Close(sessionId, 1008, "No WebSocket handler.");
+            return;
+        }
+
+        var ctx = new Ctx(request, Services)
+        {
+            RequestId = sessionId,
+        };
+        var connection = new WebSocketConnection(sessionId, ctx);
+        _webSocketSessions[sessionId] = (connection, handlers);
+
+        if (handlers.Open is null)
+            return;
+
+        try
+        {
+            await handlers.Open(connection);
+        }
+        catch (Exception exception)
+        {
+            ctx.Log.Error(
+                $"[WebSocket:{sessionId}] Open failed: {exception.Message}");
+            _webSocketSessions.Remove(sessionId);
+            Services.WebSocket.Close(sessionId, 1011, "WebSocket open failed.");
+        }
+    }
+
+    public async Task HandleWebSocketMessageAsync(
+        string sessionId,
+        string message)
+    {
+        if (!_webSocketSessions.TryGetValue(sessionId, out var session))
+            return;
+
+        if (session.Handlers.Message is null)
+            return;
+
+        try
+        {
+            await session.Handlers.Message(session.Connection, message);
+        }
+        catch (Exception exception)
+        {
+            session.Connection.Ctx.Log.Error(
+                $"[WebSocket:{sessionId}] Message failed: {exception.Message}");
+            _webSocketSessions.Remove(sessionId);
+            Services.WebSocket.Close(sessionId, 1011, "WebSocket message failed.");
+        }
+    }
+
+    public async Task HandleWebSocketCloseAsync(string sessionId)
+    {
+        if (!_webSocketSessions.Remove(sessionId, out var session))
+            return;
+
+        if (session.Handlers.Close is null)
+            return;
+
+        try
+        {
+            await session.Handlers.Close(session.Connection);
+        }
+        catch (Exception exception)
+        {
+            session.Connection.Ctx.Log.Error(
+                $"[WebSocket:{sessionId}] Close failed: {exception.Message}");
+        }
+    }
+
+    public async Task<ScheduledResult> HandleScheduledAsync(ScheduledEvent evt)
+    {
+        var errors = new List<string>();
+        var handlers = _scheduledHandlers
+            .Where(pair =>
+                pair.Key == "*" ||
+                string.Equals(pair.Key, evt.Cron, StringComparison.OrdinalIgnoreCase))
+            .Select(pair => pair.Value)
+            .ToArray();
+
+        foreach (var handler in handlers)
+        {
+            var request = new ReptarRequest
+            {
+                Method = "SCHEDULED",
+                Path = "/scheduled",
+                Query = "",
+                Headers = new Dictionary<string, string>
+                {
+                    ["x-cron"] = evt.Cron,
+                },
+                Cookies = new Dictionary<string, string>(),
+                Body = [],
+            };
+            var ctx = new Ctx(request, Services)
+            {
+                RequestId = Ids.New("cron"),
+            };
+
+            try
+            {
+                await handler(ctx, evt);
+            }
+            catch (Exception exception)
+            {
+                errors.Add(exception.Message);
+                ctx.Log.Error(
+                    $"[Cron:{evt.Cron}] {exception.Message}");
+            }
+        }
+
+        return new ScheduledResult(errors.Count == 0, errors.ToArray());
+    }
+
+    public async Task<QueueBatchResult> HandleQueueBatchAsync(QueueBatch batch)
+    {
+        if (!_queueHandlers.TryGetValue(batch.Queue, out var handler))
+        {
+            return new QueueBatchResult(false, batch.Messages.Select(m => m.Id).ToArray());
+        }
+
+        var failed = new List<string>();
+
+        foreach (var message in batch.Messages)
+        {
+            var request = new ReptarRequest
+            {
+                Method = "QUEUE",
+                Path = $"/queue/{batch.Queue}",
+                Query = "",
+                Headers = new Dictionary<string, string>
+                {
+                    ["x-queue-name"] = batch.Queue,
+                    ["x-message-id"] = message.Id,
+                },
+                Cookies = new Dictionary<string, string>(),
+                Body = System.Text.Encoding.UTF8.GetBytes(message.Body),
+            };
+
+            var ctx = new Ctx(request, Services)
+            {
+                RequestId = message.Id,
+            };
+
+            try
+            {
+                await handler(ctx, message);
+            }
+            catch (Exception exception)
+            {
+                ctx.Log.Error(
+                    $"[Queue:{batch.Queue}] Message {message.Id} processing failed: {exception.Message}");
+                failed.Add(message.Id);
+            }
+        }
+
+        return new QueueBatchResult(failed.Count == 0, failed.ToArray());
     }
 
     public async Task<ReptarResponse> HandleAsync(ReptarRequest request)
@@ -216,7 +464,7 @@ public sealed class ReptarApp
             }
             catch (Exception exception)
             {
-                Console.Error.WriteLine(exception);
+                ctx.Log.Error(exception.ToString());
                 response = ctx.Error(
                     500,
                     "internal_error",
@@ -247,6 +495,7 @@ public sealed class ReptarApp
             Method = method,
             Path = Normalize(path),
             InputType = typeof(TInput),
+            Validator = validator,
         };
 
         Func<Ctx, Task<ReptarResponse>> wrapped = async ctx =>
@@ -255,11 +504,8 @@ public sealed class ReptarApp
 
             if (string.IsNullOrWhiteSpace(body))
             {
-                return ctx.Json(new ValidationError(
-                    "validation_error",
-                    "Request body is required.",
-                    ctx.RequestId,
-                    [new ValidationIssue("Request body is required.", ["body"])]), 400);
+                return ctx.Invalid(
+                    [new ValidationIssue("Request body is required.", ["body"])]);
             }
 
             TInput? input;
@@ -270,20 +516,14 @@ public sealed class ReptarApp
             }
             catch (JsonException)
             {
-                return ctx.Json(new ValidationError(
-                    "validation_error",
-                    "Invalid JSON body.",
-                    ctx.RequestId,
-                    [new ValidationIssue("Invalid JSON body.", ["body"])]), 400);
+                return ctx.Invalid(
+                    [new ValidationIssue("Invalid JSON body.", ["body"])]);
             }
 
             if (input is null)
             {
-                return ctx.Json(new ValidationError(
-                    "validation_error",
-                    "Invalid JSON body.",
-                    ctx.RequestId,
-                    [new ValidationIssue("Invalid JSON body.", ["body"])]), 400);
+                return ctx.Invalid(
+                    [new ValidationIssue("Invalid JSON body.", ["body"])]);
             }
 
             List<ValidationIssue> issues = validator is null ? [] : validator.Validate(input);
@@ -364,7 +604,7 @@ public sealed class ReptarApp
         _config.Database ?? DefaultDatabase(),
         _config.Storage ?? DefaultStorage(),
         _config.AI ?? DefaultAI(),
-        _config.RateLimit ?? new NoopRateLimiter(),
+        _config.RateLimit ?? new MemoryRateLimiter(),
         _config.Cache ?? DefaultCache(),
         _config.Queues ?? DefaultQueues(),
         _config.Durable ?? DefaultDurable(),
@@ -372,7 +612,10 @@ public sealed class ReptarApp
         _config.Clock ?? new SystemClock(),
         _config.Crypto ?? DefaultCrypto(),
         _config.Environment ?? DefaultEnvironment(),
-        _config.Json ?? new DefaultJsonCodec());
+        _config.Json ?? new DefaultJsonCodec(),
+        _config.Errors ?? new DefaultErrorMapper(),
+        _config.Log ?? new ConsoleAppLogger(),
+        _config.WebSocket ?? new NoopWebSocketTransport());
 
     private static IDbClient DefaultDatabase()
     {

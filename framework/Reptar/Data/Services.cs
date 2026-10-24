@@ -21,7 +21,41 @@ public interface IDbClient
     Task<int> DeleteWhereAsync(TableDef table, string where, object? param = null);
     Task<bool> ExistsAsync(TableDef table, string where, object? param = null);
     Task EnsureCreatedAsync(params TableDef[] tables);
+
+    async Task<int> CountAsync(
+        TableDef table,
+        string? where = null,
+        object? param = null)
+    {
+        var clause = string.IsNullOrWhiteSpace(where)
+            ? ""
+            : where.TrimStart().StartsWith("where", StringComparison.OrdinalIgnoreCase)
+                ? " " + where.Trim()
+                : " where " + where.Trim();
+
+        var row = await QuerySingleOrDefaultAsync<DbCount>(
+            $"select count(*) as count from \"{table.Name}\"{clause}",
+            param);
+
+        return row?.Count ?? 0;
+    }
+
+    async Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
+    {
+        var changes = 0;
+
+        foreach (var statement in statements)
+        {
+            changes += await ExecuteAsync(statement.Sql, statement.Param);
+        }
+
+        return changes;
+    }
 }
+
+public sealed record DbCount(int Count);
+
+public sealed record DbStatement(string Sql, object? Param = null);
 
 public interface IClock
 {
@@ -33,6 +67,64 @@ public sealed class SystemClock : IClock
 {
     public string IsoNow() => DateTimeOffset.UtcNow.ToString("O");
     public string IsoIn(TimeSpan duration) => DateTimeOffset.UtcNow.Add(duration).ToString("O");
+}
+
+public interface IWebSocketTransport
+{
+    void Send(string sessionId, string message);
+    void Close(string sessionId, int code, string reason);
+}
+
+public sealed class NoopWebSocketTransport : IWebSocketTransport
+{
+    public void Send(string sessionId, string message) =>
+        throw new PlatformNotSupportedException(
+            "WebSockets are provided by the Workers shim.");
+
+    public void Close(string sessionId, int code, string reason) { }
+}
+
+public interface IAppLogger
+{
+    void Info(string message);
+    void Warn(string message);
+    void Error(string message);
+}
+
+public sealed class ConsoleAppLogger : IAppLogger
+{
+    public void Info(string message) => Console.WriteLine(message);
+    public void Warn(string message) => Console.WriteLine($"WARN {message}");
+    public void Error(string message) => Console.Error.WriteLine(message);
+}
+
+public interface IErrorMapper
+{
+    ReptarResponse Error(Ctx ctx, int status, string code, string message);
+    ReptarResponse Validation(Ctx ctx, IReadOnlyList<ValidationIssue> issues);
+}
+
+public sealed class DefaultErrorMapper : IErrorMapper
+{
+    public ReptarResponse Error(
+        Ctx ctx,
+        int status,
+        string code,
+        string message) =>
+        ReptarResponse.Json(
+            ctx.JsonCodec.Serialize(new ErrorBody(code, message, ctx.RequestId)),
+            status);
+
+    public ReptarResponse Validation(
+        Ctx ctx,
+        IReadOnlyList<ValidationIssue> issues) =>
+        ReptarResponse.Json(
+            ctx.JsonCodec.Serialize(new ValidationError(
+                "validation_error",
+                "Validation failed.",
+                ctx.RequestId,
+                issues.ToArray())),
+            400);
 }
 
 public interface IEnvironment
@@ -164,11 +256,106 @@ public sealed class NoopAiClient : IAiClient
 public interface IRateLimiter
 {
     Task<bool> LimitAsync(string category, string key);
+    Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window);
 }
 
 public sealed class NoopRateLimiter : IRateLimiter
 {
     public Task<bool> LimitAsync(string category, string key) => Task.FromResult(true);
+    public Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window) => Task.FromResult(true);
+}
+
+public sealed class MemoryRateLimiter : IRateLimiter
+{
+    private readonly int _defaultLimit;
+    private readonly TimeSpan _defaultWindow;
+    private readonly Dictionary<string, (int Limit, TimeSpan Window)> _rules = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, List<long>> _buckets = new(StringComparer.Ordinal);
+    private readonly object _sync = new();
+    private long _lastCleanup;
+
+    public MemoryRateLimiter(int defaultLimit = 60, TimeSpan? defaultWindow = null)
+    {
+        _defaultLimit = defaultLimit;
+        _defaultWindow = defaultWindow ?? TimeSpan.FromMinutes(1);
+    }
+
+    public MemoryRateLimiter Configure(string category, int limit, TimeSpan window)
+    {
+        lock (_sync)
+        {
+            _rules[category] = (limit, window);
+        }
+        return this;
+    }
+
+    public Task<bool> LimitAsync(string category, string key)
+    {
+        (int Limit, TimeSpan Window) rule;
+        lock (_sync)
+        {
+            if (!_rules.TryGetValue(category, out rule))
+                rule = (_defaultLimit, _defaultWindow);
+        }
+        return LimitAsync(category, key, rule.Limit, rule.Window);
+    }
+
+    public Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var windowMs = (long)window.TotalMilliseconds;
+        var bucketKey = $"{category}:{key}";
+
+        lock (_sync)
+        {
+            if (now - _lastCleanup > 60_000)
+            {
+                CleanupStaleBuckets(now);
+                _lastCleanup = now;
+            }
+
+            if (!_buckets.TryGetValue(bucketKey, out var timestamps))
+            {
+                timestamps = new List<long>();
+                _buckets[bucketKey] = timestamps;
+            }
+
+            var cutoff = now - windowMs;
+            var removeCount = 0;
+            while (removeCount < timestamps.Count && timestamps[removeCount] <= cutoff)
+            {
+                removeCount++;
+            }
+            if (removeCount > 0)
+            {
+                timestamps.RemoveRange(0, removeCount);
+            }
+
+            if (timestamps.Count >= limit)
+            {
+                return Task.FromResult(false);
+            }
+
+            timestamps.Add(now);
+            return Task.FromResult(true);
+        }
+    }
+
+    private void CleanupStaleBuckets(long now)
+    {
+        var staleKeys = new List<string>();
+        foreach (var (k, list) in _buckets)
+        {
+            if (list.Count == 0 || now - list[^1] > 300_000)
+            {
+                staleKeys.Add(k);
+            }
+        }
+        foreach (var k in staleKeys)
+        {
+            _buckets.Remove(k);
+        }
+    }
 }
 
 public interface IKvClient

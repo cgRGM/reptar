@@ -14,7 +14,7 @@ import type {
   ValidationIssue,
 } from "./types";
 
-export interface AppType {
+export type AppType = {
   auth: {
     anonymous: {
       $post: Endpoint<undefined, SessionUser | ErrorBody, 201 | 404>;
@@ -70,4 +70,4 @@ export interface AppType {
   upload: {
     $post: Endpoint<undefined, UploadResult, 201>;
   };
-}
+};

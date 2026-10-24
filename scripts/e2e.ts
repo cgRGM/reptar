@@ -96,6 +96,55 @@ const benchmarkPosts = async (): Promise<void> => {
   );
 };
 
+const testWebSocket = async (): Promise<void> => {
+  // eslint-disable-next-line promise/avoid-new
+  await new Promise<void>((resolve, reject) => {
+    const socket = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+    const timer = setTimeout(() => {
+      socket.close();
+      reject(new Error("WebSocket timed out"));
+    }, 5000);
+    let connected = false;
+
+    socket.addEventListener("message", (event) => {
+      const message =
+        typeof event.data === "string"
+          ? event.data
+          : new TextDecoder().decode(event.data as ArrayBuffer);
+
+      if (!connected) {
+        connected = true;
+
+        if (message !== "connected") {
+          clearTimeout(timer);
+          reject(new Error(`unexpected WebSocket greeting: ${message}`));
+          return;
+        }
+
+        socket.send("hello");
+        return;
+      }
+
+      clearTimeout(timer);
+
+      if (message !== "echo:hello") {
+        reject(new Error(`unexpected WebSocket echo: ${message}`));
+        return;
+      }
+
+      socket.close();
+      resolve();
+    });
+
+    socket.addEventListener("error", () => {
+      clearTimeout(timer);
+      reject(new Error("WebSocket connection failed"));
+    });
+  });
+
+  console.log("  ✓ WebSocket echo");
+};
+
 const run = async (): Promise<void> => {
   rmSync(persistDir, { force: true, recursive: true });
   mkdirSync(persistDir, { recursive: true });
@@ -175,20 +224,28 @@ const run = async (): Promise<void> => {
     );
 
     console.log("\nR2");
+    const binary = new Uint8Array([0, 1, 2, 255, 254]);
     await assertStatus(
-      "POST /upload",
-      await fetch(`${baseUrl}/upload?key=e2e.svg`, {
-        body: new Uint8Array([60, 115, 118, 103, 62]),
-        headers: { "content-type": "image/svg+xml" },
+      "POST /upload (binary)",
+      await fetch(`${baseUrl}/upload?key=e2e.bin`, {
+        body: binary,
+        headers: { "content-type": "application/octet-stream" },
         method: "POST",
       }),
       201
     );
-    await assertStatus(
-      "GET /images/e2e.svg",
-      await fetch(`${baseUrl}/images/e2e.svg`),
+    const image = await assertStatus(
+      "GET /images/e2e.bin",
+      await fetch(`${baseUrl}/images/e2e.bin`),
       200
     );
+    const imageBytes = new Uint8Array(await image.arrayBuffer());
+    if (
+      imageBytes.length !== binary.length ||
+      binary.some((value, index) => imageBytes[index] !== value)
+    ) {
+      fail("binary upload round-trip changed the bytes");
+    }
 
     console.log("\nAuth");
     const anonymous = await assertStatus(
@@ -300,6 +357,18 @@ const run = async (): Promise<void> => {
       await fetch(`${baseUrl}/platform/durable`),
       200
     );
+
+    const stream = await assertStatus(
+      "GET /platform/stream",
+      await fetch(`${baseUrl}/platform/stream`),
+      200
+    );
+    const streamText = await stream.text();
+    if (!streamText.includes("data: chunk-1")) {
+      fail(`unexpected SSE body: ${streamText}`);
+    }
+
+    await testWebSocket();
 
     console.log("\nCORS");
     await assertStatus(

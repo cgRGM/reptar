@@ -64,6 +64,59 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
+    public async Task<int> CountAsync(
+        TableDef table,
+        string? where = null,
+        object? param = null)
+    {
+        var clause = string.IsNullOrWhiteSpace(where)
+            ? ""
+            : where.TrimStart().StartsWith("where", StringComparison.OrdinalIgnoreCase)
+                ? " " + where.Trim()
+                : " where " + where.Trim();
+
+        var row = await QuerySingleOrDefaultAsync<DbCount>(
+            $"SELECT count(*) AS count FROM \"{table.Name}\"{clause}",
+            param);
+
+        return row?.Count ?? 0;
+    }
+
+    public async Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
+    {
+        await _gate.WaitAsync();
+
+        try
+        {
+            await using var transaction = await _connection.BeginTransactionAsync();
+            var changes = 0;
+
+            try
+            {
+                foreach (var statement in statements)
+                {
+                    await using var command = BuildCommand(
+                        statement.Sql,
+                        statement.Param);
+                    command.Transaction = (SqliteTransaction)transaction;
+                    changes += await command.ExecuteNonQueryAsync();
+                }
+
+                await transaction.CommitAsync();
+                return changes;
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public Task<T?> GetAsync<T>(TableDef table, object id)
     {
         var primaryKey = table.SinglePrimaryKey
@@ -241,10 +294,15 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
 internal static class RowMapper
 {
-    public static Func<SqliteDataReader, T> Resolve<T>(SqliteDataReader reader)
+    public static Func<SqliteDataReader, T> Resolve<[System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors)] T>(SqliteDataReader reader)
     {
-        var constructor = typeof(T)
-            .GetConstructors()
+        var constructors = typeof(T).GetConstructors();
+        if (constructors.Length == 0)
+        {
+            return _ => (T)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(T));
+        }
+
+        var constructor = constructors
             .OrderByDescending(candidate => candidate.GetParameters().Length)
             .First();
 

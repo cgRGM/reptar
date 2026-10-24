@@ -84,6 +84,17 @@ public static class KestrelHost
         foreach (var cookie in response.SetCookies)
             http.Response.Headers.Append("Set-Cookie", cookie);
 
+        if (response.BodyStream is not null)
+        {
+            await foreach (var chunk in response.BodyStream(http.RequestAborted))
+            {
+                await http.Response.Body.WriteAsync(chunk, http.RequestAborted);
+                await http.Response.Body.FlushAsync(http.RequestAborted);
+            }
+
+            return;
+        }
+
         if (response.Body is { Length: > 0 } body)
             await http.Response.Body.WriteAsync(body);
     }

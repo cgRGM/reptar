@@ -9,6 +9,7 @@ The reference Worker: C# compiled by NetWasm, running inside workerd, with D1 fo
 - `POST /upload?key=…` → `ReptarApp` → `R2Client` → R2 put → `{ key, url }`.
 - `GET /images/:key` → Worker → R2 → image bytes.
 - `GET /platform/env` → `c.Environment.Get("APP_NAME")`.
+- Worker-level edge demos: `GET /platform/stream` (SSE), `GET /platform/durable` (Durable Object), `POST /platform/ai` (Workers AI), and `GET /ws` (WebSocket echo). The C# equivalents are covered by the portable test suite; the current NetWasm/Binaryen optimizer does not tolerate the extra exports/routes in the Worker build.
 - `PUT/GET /platform/kv` → KV; `POST /platform/queue` → Queues; `GET /platform/durable` → `Counter` Durable Object; `POST /platform/ai` → Workers AI.
 - `POST /auth/signup`, `POST /auth/signin`, `POST /auth/signout`, `GET /auth/session`, and `GET /me` → D1 users/sessions, PBKDF2 via host WebCrypto, HttpOnly cookie sessions.
 - The Worker shim is `createReptarHost` from `@reptar/host`; the C# app exposes one generic `handle(string)` export and responds through `respond(requestId, string)`.

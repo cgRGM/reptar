@@ -5,6 +5,9 @@ export interface D1PreparedStatementLike {
 }
 
 export interface D1DatabaseLike {
+  batch?: (
+    statements: D1PreparedStatementLike[]
+  ) => Promise<{ meta?: { changes?: number } }[]>;
   prepare: (sql: string) => D1PreparedStatementLike;
 }
 
@@ -64,11 +67,22 @@ export interface DurableObjectNamespaceLike {
   idFromString?: (id: string) => unknown;
 }
 
+export interface PostgresBindingLike {
+  execute: (sql: string, paramsJson: string) => Promise<number>;
+  query: (sql: string, paramsJson: string) => Promise<string>;
+}
+
+export interface HyperdriveLike {
+  connectionString: string;
+}
+
 export interface ReptarBindings {
   ai?: WorkersAiLike;
   db?: D1DatabaseLike;
   durable?: Record<string, DurableObjectNamespaceLike>;
+  hyperdrive?: HyperdriveLike;
   kv?: KvNamespaceLike;
+  postgres?: PostgresBindingLike;
   queues?: Record<string, QueueLike>;
   r2?: ReptarStorageBinding;
 }
@@ -129,4 +143,28 @@ export const d1Execute = async (
 ): Promise<number> => {
   const result = await bindStatement(db, sql, paramsJson).run();
   return result.meta?.changes ?? 0;
+};
+
+export const d1Batch = async (
+  db: D1DatabaseLike,
+  batchJson: string
+): Promise<number> => {
+  if (!db.batch) {
+    throw new Error("D1 batch is not supported by this binding");
+  }
+
+  const parsed = JSON.parse(batchJson) as {
+    params?: string;
+    sql?: string;
+  }[];
+
+  const statements = parsed.map((item) =>
+    bindStatement(db, item.sql ?? "", item.params ?? "[]")
+  );
+  const results = await db.batch(statements);
+
+  return results.reduce(
+    (total, result) => total + (result.meta?.changes ?? 0),
+    0
+  );
 };

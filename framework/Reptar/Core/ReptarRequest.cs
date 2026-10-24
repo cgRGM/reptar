@@ -12,6 +12,11 @@ public sealed class ReptarRequest
     public byte[]? Body { get; init; }
     public Dictionary<string, string> RouteParams { get; internal set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    private MultipartForm? _form;
+
+    public MultipartForm? Form =>
+        _form ??= MultipartForm.TryParse(Header("content-type"), Body);
+
     public string? Param(string name) =>
         RouteParams.TryGetValue(name, out var value) ? value : null;
 

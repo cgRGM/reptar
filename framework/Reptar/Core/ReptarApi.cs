@@ -17,6 +17,9 @@ public sealed class ReptarConfig
     public IClock? Clock { get; set; }
     public IEnvironment? Environment { get; set; }
     public IJsonCodec? Json { get; set; }
+    public IErrorMapper? Errors { get; set; }
+    public IAppLogger? Log { get; set; }
+    public IWebSocketTransport? WebSocket { get; set; }
     public AuthOptions? Auth { get; set; }
     public TelemetryOptions? Telemetry { get; set; }
 }
@@ -28,6 +31,7 @@ public sealed class AuthOptions
     public string? CookieDomain { get; set; }
     public bool AllowAnonymous { get; set; } = true;
     public string[] BootstrapAdmins { get; set; } = [];
+    public JwtOptions? Jwt { get; set; }
 }
 
 public sealed class TelemetryOptions
@@ -71,6 +75,13 @@ public static class ReptarApi
     public static ReptarMiddleware Cors() => Middlewares.Cors();
 
     public static ReptarMiddleware Telemetry() => Middlewares.Telemetry();
+
+    public static ReptarMiddleware RateLimit(
+        int limit = 60,
+        int windowSeconds = 60,
+        string category = "api",
+        Func<Ctx, string>? keySelector = null) =>
+        Middlewares.RateLimit(limit, windowSeconds, category, keySelector);
 }
 
 public static class Db
@@ -78,4 +89,6 @@ public static class Db
 #if !NETWASM
     public static IDbClient Sqlite(string path = "local.db") => new SqliteDbClient(path);
 #endif
+
+    public static IDbClient Postgres(string connectionString) => new PostgresDbClient(connectionString);
 }

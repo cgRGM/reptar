@@ -4,6 +4,8 @@ export const query = (sql, paramsJson) =>
 export const execute = (sql, paramsJson) =>
   globalThis.__REPTAR_DB_EXECUTE(sql, paramsJson);
 
+export const batch = (batchJson) => globalThis.__REPTAR_DB_BATCH(batchJson);
+
 export const r2put = (key, bytes, contentType) =>
   globalThis.__REPTAR_R2_PUT(key, bytes, contentType);
 
@@ -48,5 +50,43 @@ export const randomToken = (bytes) =>
 
 export const envGet = (name) => globalThis.__REPTAR_ENV_GET(name);
 
+export const wsCommand = (sessionId, json) => {
+  const command = JSON.parse(json);
+
+  if (command.type === "send") {
+    globalThis.__REPTAR_WS_SEND(sessionId, command.message);
+  } else if (command.type === "close") {
+    globalThis.__REPTAR_WS_CLOSE(sessionId, command.code, command.reason);
+  }
+};
+
 export const respond = (requestId, json) =>
   globalThis.__REPTAR_RESPOND(requestId, json);
+
+export const streamStart = (requestId, status, headersJson, cookiesJson) =>
+  globalThis.__REPTAR_STREAM_START(requestId, status, headersJson, cookiesJson);
+
+export const streamChunk = (requestId, base64) =>
+  globalThis.__REPTAR_STREAM_CHUNK(requestId, base64);
+
+export const streamEnd = (requestId) =>
+  globalThis.__REPTAR_STREAM_END(requestId);
+
+export const streamError = (requestId, message) =>
+  globalThis.__REPTAR_STREAM_ERROR(requestId, message);
+
+export const respondQueue = (batchId, json) =>
+  globalThis.__REPTAR_RESPOND_QUEUE(batchId, json);
+
+export const respondScheduled = (scheduleId, json) =>
+  globalThis.__REPTAR_RESPOND_SCHEDULED(scheduleId, json);
+
+export const pgQuery = (sql, paramsJson) =>
+  globalThis.__REPTAR_PG_QUERY
+    ? globalThis.__REPTAR_PG_QUERY(sql, paramsJson)
+    : Promise.resolve("[]");
+
+export const pgExecute = (sql, paramsJson) =>
+  globalThis.__REPTAR_PG_EXECUTE
+    ? globalThis.__REPTAR_PG_EXECUTE(sql, paramsJson)
+    : Promise.resolve(0);

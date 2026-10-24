@@ -3,10 +3,33 @@ using System.Reflection;
 
 namespace Reptar;
 
-public sealed class Validator<T>
+public interface IValidatorMeta
+{
+    IReadOnlyList<PropertyRuleMeta> Properties { get; }
+}
+
+public sealed class PropertyRuleMeta
+{
+    public required string Name { get; init; }
+    public required Type PropertyType { get; init; }
+    public bool IsOptional { get; internal set; }
+    public int? MinLength { get; internal set; }
+    public int? MaxLength { get; internal set; }
+    public int? ExactLength { get; internal set; }
+    public double? MinValue { get; internal set; }
+    public double? MaxValue { get; internal set; }
+    public bool IsEmail { get; internal set; }
+    public bool IsUrl { get; internal set; }
+    public string? Pattern { get; internal set; }
+}
+
+public sealed class Validator<T> : IValidatorMeta
 {
     private readonly List<PropertyRule> _properties = new();
     private readonly List<RefineRule> _refines = new();
+    private readonly List<PropertyRuleMeta> _propertyMetas = new();
+
+    public IReadOnlyList<PropertyRuleMeta> Properties => _propertyMetas;
 
     public Validator<T> Prop(
         Expression<Func<T, object?>> property,
@@ -23,13 +46,22 @@ public sealed class Validator<T>
             throw new NotSupportedException(
                 "Prop() expects a property expression like x => x.Title.");
 
-        var rules = PropertyRules.Create(propertyInfo.PropertyType);
+        var name = Camelize(propertyInfo.Name);
+        var meta = new PropertyRuleMeta
+        {
+            Name = name,
+            PropertyType = propertyInfo.PropertyType,
+        };
+
+        var rules = PropertyRules.Create(propertyInfo.PropertyType, meta);
         configure(rules);
 
         _properties.Add(new PropertyRule(
-            Camelize(propertyInfo.Name),
+            name,
             property.Compile(),
             rules));
+
+        _propertyMetas.Add(meta);
 
         return this;
     }
@@ -72,6 +104,13 @@ public sealed class Validator<T>
 
 public abstract class PropertyRules
 {
+    protected readonly PropertyRuleMeta? Meta;
+
+    protected PropertyRules(PropertyRuleMeta? meta = null)
+    {
+        Meta = meta;
+    }
+
     protected bool IsOptional { get; private set; }
 
     public abstract PropertyRules Optional();
@@ -88,21 +127,26 @@ public abstract class PropertyRules
 
     internal abstract List<ValidationIssue> Check(object? value, string path);
 
-    internal static PropertyRules Create(Type type)
+    internal static PropertyRules Create(Type type, PropertyRuleMeta? meta = null)
     {
         var target = Nullable.GetUnderlyingType(type) ?? type;
 
         if (target == typeof(string))
-            return new StringRules();
+            return new StringRules(meta);
 
         if (target == typeof(int) || target == typeof(long) || target == typeof(short) ||
             target == typeof(double) || target == typeof(decimal) || target == typeof(float))
-            return new NumberRules();
+            return new NumberRules(meta);
 
-        return new BasicRules();
+        return new BasicRules(meta);
     }
 
-    protected void MarkOptional() => IsOptional = true;
+    protected void MarkOptional()
+    {
+        IsOptional = true;
+        if (Meta is not null)
+            Meta.IsOptional = true;
+    }
 
     protected bool ShouldRequire => !IsOptional;
 }
@@ -118,14 +162,58 @@ public sealed class StringRules : PropertyRules
     private bool _email;
     private bool _url;
 
-    public override StringRules Min(int value) { _min = value; return this; }
-    public override StringRules Max(int value) { _max = value; return this; }
-    public override StringRules Length(int value) { _length = value; return this; }
+    public StringRules(PropertyRuleMeta? meta = null) : base(meta) { }
+
+    public override StringRules Min(int value)
+    {
+        _min = value;
+        if (Meta is not null)
+            Meta.MinLength = value;
+        return this;
+    }
+
+    public override StringRules Max(int value)
+    {
+        _max = value;
+        if (Meta is not null)
+            Meta.MaxLength = value;
+        return this;
+    }
+
+    public override StringRules Length(int value)
+    {
+        _length = value;
+        if (Meta is not null)
+            Meta.ExactLength = value;
+        return this;
+    }
+
 #if !NETWASM
-    public override StringRules Regex(string pattern) { _pattern = pattern; return this; }
+    public override StringRules Regex(string pattern)
+    {
+        _pattern = pattern;
+        if (Meta is not null)
+            Meta.Pattern = pattern;
+        return this;
+    }
 #endif
-    public override StringRules Email() { _email = true; return this; }
-    public override StringRules Url() { _url = true; return this; }
+
+    public override StringRules Email()
+    {
+        _email = true;
+        if (Meta is not null)
+            Meta.IsEmail = true;
+        return this;
+    }
+
+    public override StringRules Url()
+    {
+        _url = true;
+        if (Meta is not null)
+            Meta.IsUrl = true;
+        return this;
+    }
+
     public override StringRules NotNull() => this;
 
     public override PropertyRules Optional()
@@ -194,8 +282,24 @@ public sealed class NumberRules : PropertyRules
     private double? _min;
     private double? _max;
 
-    public override NumberRules Min(int value) { _min = value; return this; }
-    public override NumberRules Max(int value) { _max = value; return this; }
+    public NumberRules(PropertyRuleMeta? meta = null) : base(meta) { }
+
+    public override NumberRules Min(int value)
+    {
+        _min = value;
+        if (Meta is not null)
+            Meta.MinValue = value;
+        return this;
+    }
+
+    public override NumberRules Max(int value)
+    {
+        _max = value;
+        if (Meta is not null)
+            Meta.MaxValue = value;
+        return this;
+    }
+
     public override NumberRules NotNull() => this;
 
     public override PropertyRules Optional()
@@ -230,6 +334,8 @@ public sealed class NumberRules : PropertyRules
 
 public sealed class BasicRules : PropertyRules
 {
+    public BasicRules(PropertyRuleMeta? meta = null) : base(meta) { }
+
     public override BasicRules NotNull() => this;
 
     public override PropertyRules Optional()

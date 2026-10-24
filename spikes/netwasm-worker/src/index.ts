@@ -1,6 +1,7 @@
 import { createReptarHost } from "@reptar/host";
 import type {
   D1DatabaseLike,
+  MessageBatch,
   ReptarBindings,
   ReptarWasmApp,
 } from "@reptar/host";
@@ -69,6 +70,48 @@ const withCors = (
   return response;
 };
 
+interface WorkerWebSocket extends WebSocket {
+  accept: () => void;
+}
+
+const handleWebSocketEcho = (): Response => {
+  const Pair = (
+    globalThis as unknown as {
+      WebSocketPair: new () => [WorkerWebSocket, WorkerWebSocket];
+    }
+  ).WebSocketPair;
+  const [client, server] = new Pair();
+  server.accept();
+  server.send("connected");
+  server.addEventListener("message", (event: MessageEvent) => {
+    server.send(`echo:${typeof event.data === "string" ? event.data : ""}`);
+  });
+
+  return new Response(null, {
+    status: 101,
+    webSocket: client,
+  } as ResponseInit & { webSocket: WorkerWebSocket });
+};
+
+const sseResponse = (): Response => {
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (let index = 1; index <= 3; index += 1) {
+        controller.enqueue(encoder.encode(`data: chunk-${index}\n\n`));
+      }
+      controller.close();
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "cache-control": "no-cache",
+      "content-type": "text/event-stream",
+    },
+  });
+};
+
 const host = createReptarHost<Env>({
   assets: (env) => env.ASSETS,
   bindings: (env) => ({
@@ -122,6 +165,54 @@ export default {
     const origin = request.headers.get("origin");
     const cors = corsHeaders(origin, env.CORS_ORIGINS);
 
+    if (
+      url.pathname === "/ws" &&
+      request.headers.get("upgrade")?.toLowerCase() === "websocket"
+    ) {
+      return handleWebSocketEcho();
+    }
+
+    if (url.pathname === "/platform/stream") {
+      return withCors(sseResponse(), origin, env.CORS_ORIGINS);
+    }
+
+    if (url.pathname === "/platform/durable") {
+      const id = env.COUNTER.idFromName("demo");
+      const response = await env.COUNTER.get(id).fetch(
+        new Request("https://do/")
+      );
+
+      return withCors(
+        new Response(await response.text(), {
+          headers: { "content-type": "application/json" },
+        }),
+        origin,
+        env.CORS_ORIGINS
+      );
+    }
+
+    if (url.pathname === "/platform/ai" && request.method === "POST") {
+      const input = (await request.json()) as {
+        model?: string;
+        prompt?: string;
+      };
+
+      if (!input.prompt) {
+        return withCors(
+          Response.json({ error: "Prompt is required." }, { status: 400 }),
+          origin,
+          env.CORS_ORIGINS
+        );
+      }
+
+      const result = await env.AI.run(
+        input.model ?? "@cf/meta/llama-3.2-1b-instruct",
+        { prompt: input.prompt }
+      );
+
+      return withCors(Response.json(result), origin, env.CORS_ORIGINS);
+    }
+
     if (request.method === "OPTIONS") {
       if (origin && !cors["access-control-allow-origin"]) {
         return new Response(null, { status: 403 });
@@ -160,5 +251,14 @@ export default {
     }
 
     return withCors(await host.fetch(request, env), origin, env.CORS_ORIGINS);
+  },
+  async queue(batch: MessageBatch<unknown>, env: Env) {
+    await host.queue(batch, env);
+  },
+  async scheduled(
+    event: { cron: string; scheduledTime: number | Date },
+    env: Env
+  ) {
+    await host.scheduled(event, env);
   },
 };

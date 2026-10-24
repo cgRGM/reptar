@@ -1,20 +1,24 @@
+using System.Diagnostics.CodeAnalysis;
 using Reptar;
 using static Reptar.ReptarApi;
 
 public static class Posts
 {
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)]
     public sealed record CreatePost(
         string Title,
         string Content,
         string? Excerpt = null,
         string? ImageKey = null);
 
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)]
     public sealed record UpdatePost(
         string? Title = null,
         string? Content = null,
         string? Excerpt = null,
         string? ImageKey = null);
 
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.All)]
     public sealed record Post(
         string Id,
         string AuthorId,

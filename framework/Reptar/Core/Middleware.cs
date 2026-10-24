@@ -43,9 +43,40 @@ public static class Middlewares
 
     public static ReptarMiddleware Telemetry() => async (ctx, next) =>
     {
+        var stopwatch = Stopwatch.StartNew();
         var response = await next();
-        Console.WriteLine(
-            $"{DateTimeOffset.UtcNow:O} {ctx.Req.Method} {ctx.Req.Path} -> {response.Status}");
+        stopwatch.Stop();
+
+        ctx.Log.Info(
+            $"{ctx.RequestId} {ctx.Req.Method} {ctx.Req.Path} -> {response.Status} ({stopwatch.Elapsed.TotalMilliseconds:0.0}ms)");
+
         return response;
+    };
+
+    public static ReptarMiddleware RateLimit(
+        int limit = 60,
+        int windowSeconds = 60,
+        string category = "api",
+        Func<Ctx, string>? keySelector = null) => async (ctx, next) =>
+    {
+        var key = keySelector?.Invoke(ctx)
+            ?? ctx.User?.Id
+            ?? ctx.Req.Header("CF-Connecting-IP")
+            ?? ctx.Req.Header("X-Forwarded-For")
+            ?? "anonymous";
+
+        var allowed = await ctx.RateLimit.LimitAsync(
+            category,
+            key,
+            limit,
+            TimeSpan.FromSeconds(windowSeconds));
+
+        if (!allowed)
+        {
+            ctx.SetHeader("Retry-After", windowSeconds.ToString());
+            return ctx.Error(429, "rate_limited", "Rate limit exceeded. Try again later.");
+        }
+
+        return await next();
     };
 }

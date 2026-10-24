@@ -8,26 +8,25 @@ public static class Auth
 
     public static void Configure(AuthOptions options) => _options = options;
 
-    public static readonly TableDef Users = DefineTable("users", new
-    {
-        Id = Col.Text("id").PrimaryKey(),
-        Email = Col.Text("email").NotNull().Unique(),
-        Name = Col.Text("name").NotNull(),
-        PasswordHash = Col.Text("password_hash").NotNull(),
-        IsAnonymous = Col.Int("is_anonymous").NotNull().Default(0),
-        Role = Col.Text("role").NotNull().Default("user"),
-        CreatedAt = Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP"),
-    });
+    public static readonly TableDef Users = DefineTable("users",
+        Col.Text("id").PrimaryKey(),
+        Col.Text("email").NotNull().Unique(),
+        Col.Text("name").NotNull(),
+        Col.Text("password_hash").NotNull(),
+        Col.Int("is_anonymous").NotNull().Default(0),
+        Col.Text("role").NotNull().Default("user"),
+        Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+    );
 
-    public static readonly TableDef Sessions = DefineTable("sessions", new
-    {
-        Id = Col.Text("id").PrimaryKey(),
-        UserId = Col.Text("user_id").NotNull().References("users", "id", onDelete: "cascade"),
-        TokenHash = Col.Text("token_hash").NotNull().Unique(),
-        ExpiresAt = Col.Text("expires_at").NotNull(),
-        CreatedAt = Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP"),
-    });
+    public static readonly TableDef Sessions = DefineTable("sessions",
+        Col.Text("id").PrimaryKey(),
+        Col.Text("user_id").NotNull().References("users", "id", onDelete: "cascade"),
+        Col.Text("token_hash").NotNull().Unique(),
+        Col.Text("expires_at").NotNull(),
+        Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+    );
 
+    [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
     public sealed record UserRow(
         string Id,
         string Email,
@@ -37,6 +36,7 @@ public static class Auth
         string Role,
         string CreatedAt);
 
+    [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
     public sealed record SessionRow(
         string Id,
         string UserId,
@@ -168,24 +168,96 @@ public static class Auth
         return await next();
     };
 
+    public static readonly ReptarMiddleware OptionalUser = async (ctx, next) =>
+    {
+        ctx.User = await CurrentUser(ctx);
+        return await next();
+    };
+
+    public static readonly ReptarMiddleware RequireJwt = async (ctx, next) =>
+    {
+        var options = _options.Jwt;
+
+        if (options is null)
+            return ctx.Unauthorized("JWT authentication is not configured.");
+
+        var token = Jwt.ExtractToken(ctx.Req);
+
+        if (token is null)
+            return ctx.Unauthorized();
+
+        var payload = await Jwt.VerifyAsync(ctx.Crypto, options, token);
+
+        if (payload is null)
+            return ctx.Unauthorized();
+
+        var user = await FindUserById(ctx, payload.Subject);
+
+        if (user is null)
+            return ctx.Unauthorized();
+
+        ctx.User = user;
+        ctx.Claims = payload;
+        return await next();
+    };
+
     public static async Task<SessionUser?> CurrentUser(Ctx ctx)
     {
         var token = ctx.Cookies.Get(_options.CookieName);
 
-        if (token is null)
+        if (token is not null)
+        {
+            var hash = await ctx.Crypto.Sha256(token);
+
+            var sessionUser = await ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
+                """
+                SELECT u.id, u.email, u.name
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.token_hash = @hash AND s.expires_at > @now
+                """,
+                new { hash, now = ctx.Clock.IsoNow() });
+
+            if (sessionUser is not null)
+                return sessionUser;
+        }
+
+        var jwt = _options.Jwt;
+        var headerToken = Jwt.ExtractToken(ctx.Req);
+
+        if (jwt is null || headerToken is null)
             return null;
 
-        var hash = await ctx.Crypto.Sha256(token);
+        var payload = await Jwt.VerifyAsync(ctx.Crypto, jwt, headerToken);
 
-        return await ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
-            """
-            SELECT u.id, u.email, u.name
-            FROM sessions s
-            JOIN users u ON u.id = s.user_id
-            WHERE s.token_hash = @hash AND s.expires_at > @now
-            """,
-            new { hash, now = ctx.Clock.IsoNow() });
+        if (payload is null)
+            return null;
+
+        ctx.Claims = payload;
+        return await FindUserById(ctx, payload.Subject);
     }
+
+    public static async Task<string> IssueJwtAsync(
+        Ctx ctx,
+        SessionUser user,
+        string? role = null)
+    {
+        var options = _options.Jwt
+            ?? throw new InvalidOperationException(
+                "JWT authentication is not configured.");
+
+        var payload = Jwt.CreatePayload(
+            user,
+            role,
+            TimeSpan.FromMinutes(options.LifetimeMinutes));
+
+        return await Jwt.SignAsync(ctx.Crypto, options, payload);
+    }
+
+    public static Task<SessionUser?> FindUserById(Ctx ctx, string id) =>
+        ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
+            "SELECT id, email, name FROM users WHERE id = @id",
+            new { id });
 
     private static async Task StartSession(Ctx ctx, string userId)
     {
