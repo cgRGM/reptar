@@ -151,6 +151,21 @@ export default {
       return new Response(null, { headers: cors });
     }
 
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
+      const body =
+        url.pathname === "/health"
+          ? { status: "ok", service: "reptar-realworld-bench" }
+          : {
+              service: "reptar-realworld-bench",
+              status: "ok",
+              api: "/api",
+              health: "/health",
+              runtime: "cloudflare-workers",
+              cacheSeconds: CACHE_SECONDS,
+            };
+      return withCors(Response.json(body), origin, env.CORS_ORIGINS);
+    }
+
     const cacheable = isCacheableRead(request, url);
     if (cacheable) {
       const cached = await readCache(url);
