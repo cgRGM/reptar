@@ -527,21 +527,12 @@ public sealed class PostgresDbClient : IDbClient
 
             await using var reader = await cmd.ExecuteReaderAsync();
             var results = new List<T>();
+            Func<System.Data.Common.DbDataReader, T>? mapper = null;
 
             while (await reader.ReadAsync())
             {
-                var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-                for (var i = 0; i < reader.FieldCount; i++)
-                {
-                    dict[reader.GetName(i)] = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
-                }
-
-                var json = _json.Serialize(dict);
-                var item = _json.Deserialize<T>(json);
-                if (item is not null)
-                {
-                    results.Add(item);
-                }
+                mapper ??= RowMapper.Resolve<T>(reader);
+                results.Add(mapper(reader));
             }
 
             return results;
