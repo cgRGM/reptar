@@ -26,14 +26,15 @@ RUN dotnet publish app.cs \
     -c Release \
     --self-contained \
     -p:PublishAot=true \
-    -o /app/publish
+    -o /app/publish && \
+    (mv /app/publish/app /app/publish/reptar || true)
 
 # Runtime stage: Ubuntu 24.04 Chiseled distroless (matches SDK glibc, minimal attack surface, no shell, no package manager)
 FROM mcr.microsoft.com/dotnet/nightly/runtime-deps:10.0-noble-chiseled
 WORKDIR /app
 
-# Copy the standalone compiled binary
-COPY --from=build /app/publish/app /app/reptar
+# Copy the standalone compiled binary and all native dependencies (such as libe_sqlite3.so)
+COPY --chown=1654:1654 --from=build /app/publish/ /app/
 
 # Default environment
 ENV PORT=8787
