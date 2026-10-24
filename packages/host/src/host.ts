@@ -437,9 +437,12 @@ export const createReptarHost = <TEnv>(
       headers.append("set-cookie", cookie);
     }
 
-    return new Response(payload.body ?? "", {
+    const status = payload.status ?? 200;
+    const nullBody = status === 204 || status === 205 || status === 304;
+
+    return new Response(nullBody ? null : (payload.body ?? ""), {
       headers,
-      status: payload.status ?? 200,
+      status,
     });
   };
 
