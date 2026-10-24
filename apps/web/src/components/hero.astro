@@ -8,9 +8,8 @@
         Reptar is the backend.
       </h1>
       <p class="mt-6 text-lg sm:text-xl text-zinc-400 leading-relaxed max-w-3xl">
-        A C# web framework that compiles to a small Wasm module and runs on Cloudflare Workers.
-        Hono-like routing, Drizzle-like schema, Zod-like validation, built-in auth, native Cloudflare bindings,
-        and a generated typed client for any frontend.
+        A C# web framework compiled to WebAssembly for Cloudflare Workers and Native AOT for AWS Lambda.
+        Hono-like routing, Drizzle-like schemas, sub-2ms isolate execution, and auto-generated TypeScript contracts for any frontend.
       </p>
 
       <div class="mt-8 flex flex-wrap items-center gap-4">
@@ -52,20 +51,20 @@
       <!-- Technical specifications row -->
       <div class="mt-14 pt-8 border-t border-[#1a1d24] grid grid-cols-2 gap-4 sm:grid-cols-4">
         <div class="border-l border-[#232730] pl-4">
-          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Host Target</div>
-          <div class="mt-1 font-mono text-sm font-medium text-white">NetWasm 0.1 / AOT</div>
+          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Deploy Targets</div>
+          <div class="mt-1 font-mono text-sm font-medium text-white">Workers / Lambda / VPS</div>
+        </div>
+        <div class="border-l border-[#232730] pl-4">
+          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Isolate Speed</div>
+          <div class="mt-1 font-mono text-sm font-medium text-white">&lt; 2ms (Server-Timing)</div>
         </div>
         <div class="border-l border-[#232730] pl-4">
           <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Reflection</div>
           <div class="mt-1 font-mono text-sm font-medium text-white">Zero (Source Gen)</div>
         </div>
         <div class="border-l border-[#232730] pl-4">
-          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Frontend Surface</div>
-          <div class="mt-1 font-mono text-sm font-medium text-white">Generated Contracts</div>
-        </div>
-        <div class="border-l border-[#232730] pl-4">
-          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Platform Bindings</div>
-          <div class="mt-1 font-mono text-sm font-medium text-white">D1, R2, AI, RateLimit</div>
+          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Database Drivers</div>
+          <div class="mt-1 font-mono text-sm font-medium text-white">D1, SQLite, PostgreSQL</div>
         </div>
       </div>
     </div>

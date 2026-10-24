@@ -13,6 +13,10 @@ export default defineConfig({
             { label: "Documentation Home", slug: "index" },
             { label: "The One Rule", slug: "overview/the-one-rule" },
             { label: "System Architecture", slug: "overview/architecture" },
+            {
+              label: "Deployment Targets",
+              slug: "overview/deployment-targets",
+            },
           ],
           label: "Overview",
         },

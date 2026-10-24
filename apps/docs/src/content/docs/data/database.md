@@ -116,3 +116,49 @@ int affectedRows = await c.Db.ExecuteAsync(
     postId
 );
 ```
+
+---
+
+## 4. Supported Database Drivers
+
+Reptar abstracts database access through the `IDbClient` interface, allowing you to run against local embedded SQLite during development and scale to distributed databases in production:
+
+### Cloudflare D1 (Edge Relational SQLite)
+
+The default relational database on Cloudflare Workers. Zero setup, replicated at the edge, and queried without external connection pools.
+
+```csharp
+var app = Reptar(new ReptarConfig
+{
+    Database = D1()
+});
+```
+
+### Local SQLite
+
+Embedded zero-dependency SQLite for local testing, CI pipelines, and standalone CLI utilities:
+
+```csharp
+var app = Reptar(new ReptarConfig
+{
+    Database = Db.Sqlite("blog.db")
+});
+```
+
+### PostgreSQL & Cloudflare Hyperdrive
+
+To connect your edge backend to central PostgreSQL databases (Supabase, Neon, AWS RDS, Tembo), Reptar supports **Cloudflare Hyperdrive**:
+
+- **Edge Connection Pooling:** Reuses established TCP connections from Cloudflare's nearest point of presence to your database.
+- **Query Acceleration:** Automatically caches read queries across the edge network.
+- **Dialect Adaptation:** `SqlParamParser` automatically translates SQLite positional parameters (`?`) or named parameters (`@id`) to PostgreSQL positional parameters (`$1, $2`).
+
+```csharp
+var app = Reptar(new ReptarConfig
+{
+    // Connects via Cloudflare Hyperdrive connection pool
+    Database = Db.Postgres(env.Get("HYPERDRIVE_URL"))
+});
+```
+
+When running under **.NET Native AOT** on AWS Lambda or Docker, Reptar utilizes native `Npgsql` for direct high-performance connection pooling.
