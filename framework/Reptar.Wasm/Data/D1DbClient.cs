@@ -51,7 +51,7 @@ public sealed class D1DbClient : IDbClient
                 statement.Sql,
                 statement.Param);
             parts.Add(
-                $"{{\"sql\":{JsonSerializer.Serialize(sql, ReptarJson.Options)},\"params\":{paramsJson}}}");
+                $"{{\"sql\":{JsonSerializer.Serialize(sql, ReptarJson.Options)},\"params\":{JsonSerializer.Serialize(paramsJson, ReptarJson.Options)}}}");
         }
 
         return Batch($"[{string.Join(",", parts)}]");

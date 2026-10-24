@@ -43,6 +43,10 @@ public sealed class RealWorldJsonCodec : IJsonCodec
             return (T)(object)TagIds(json);
         if (typeof(T) == typeof(List<RwArticleTagRow>))
             return (T)(object)ArticleTags(json);
+        if (typeof(T) == typeof(List<RwArticleFavoriteRow>))
+            return (T)(object)ArticleFavorites(json);
+        if (typeof(T) == typeof(List<RwTagNameIdRow>))
+            return (T)(object)TagNameIds(json);
         if (typeof(T) == typeof(List<RwCommentRow>))
             return (T)(object)Comments(json);
         if (typeof(T) == typeof(List<DbCount>))
@@ -152,6 +156,35 @@ public sealed class RealWorldJsonCodec : IJsonCodec
         foreach (var item in document.RootElement.EnumerateArray())
             rows.Add(new RwArticleTagRow(
                 Str(item, "articleId"),
+                Str(item, "name")));
+
+        return rows;
+    }
+
+    private static List<RwArticleFavoriteRow> ArticleFavorites(string json)
+    {
+        var rows = new List<RwArticleFavoriteRow>();
+
+        using var document = JsonDocument.Parse(json);
+
+        foreach (var item in document.RootElement.EnumerateArray())
+            rows.Add(new RwArticleFavoriteRow(
+                Str(item, "articleId"),
+                Int(item, "favoritesCount"),
+                Int(item, "favorited")));
+
+        return rows;
+    }
+
+    private static List<RwTagNameIdRow> TagNameIds(string json)
+    {
+        var rows = new List<RwTagNameIdRow>();
+
+        using var document = JsonDocument.Parse(json);
+
+        foreach (var item in document.RootElement.EnumerateArray())
+            rows.Add(new RwTagNameIdRow(
+                Str(item, "id"),
                 Str(item, "name")));
 
         return rows;

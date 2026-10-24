@@ -51,6 +51,15 @@ public sealed record RwTagIdRow(string Id);
 [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
 public sealed record RwArticleTagRow(string ArticleId, string Name);
 
+[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
+public sealed record RwArticleFavoriteRow(
+    string ArticleId,
+    int FavoritesCount,
+    int Favorited);
+
+[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
+public sealed record RwTagNameIdRow(string Id, string Name);
+
 public sealed record RwArticleInsert(
     string Id,
     string AuthorId,
@@ -102,6 +111,8 @@ public sealed record RwCommentRow(
 
 public static class RealWorld
 {
+    private sealed record TagPlan(string Name, string Id, bool IsNew);
+
     private static long _commentSequence =
         DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
@@ -431,7 +442,7 @@ public static class RealWorld
         if (!string.IsNullOrWhiteSpace(favorited))
         {
             where.Add(
-                "exists (select 1 from rw_favorites f join rw_users fu on fu.id = f.user_id where f.article_id = a.id and fu.username = @favorited)");
+                "a.id in (select f.article_id from rw_favorites f join rw_users fu on fu.id = f.user_id where fu.username = @favorited)");
             parameters["favorited"] = favorited;
         }
 
@@ -441,7 +452,7 @@ public static class RealWorld
                 return TokenMissing(ctx);
 
             where.Add(
-                "exists (select 1 from rw_follows fo where fo.follower_id = @viewerId and fo.followed_id = a.author_id)");
+                "a.author_id in (select fo.followed_id from rw_follows fo where fo.follower_id = @viewerId)");
         }
 
         var whereSql = where.Count == 0
@@ -462,12 +473,18 @@ public static class RealWorld
             countParameters,
             MapCount);
 
+        var listParameters = new Dictionary<string, object?>(parameters);
+        if (!whereSql.Contains("@viewerId", StringComparison.Ordinal))
+            listParameters.Remove("viewerId");
+
         var rows = await Mapped(
             ctx,
-            $"{ArticleSelect}{whereSql} order by a.created_at desc limit @limit offset @offset",
-            parameters,
+            $"{ArticleSummarySelect}{whereSql} order by a.created_at desc limit @limit offset @offset",
+            listParameters,
             MapArticle);
 
+        var favoriteStats = await FavoriteStats(ctx, rows, viewerId);
+        var following = await FollowingSet(ctx, rows, viewerId);
         var tagsByArticle = await TagMap(ctx, rows);
 
         var articles = new StringBuilder("[");
@@ -477,10 +494,24 @@ public static class RealWorld
             if (index > 0)
                 articles.Append(',');
 
-            var tags = tagsByArticle.TryGetValue(rows[index].Id, out var value)
+            var article = rows[index];
+
+            if (favoriteStats.TryGetValue(article.Id, out var stats))
+            {
+                article = article with
+                {
+                    FavoritesCount = stats.FavoritesCount,
+                    Favorited = stats.Favorited,
+                };
+            }
+
+            if (following.Contains(article.AuthorId))
+                article = article with { Following = 1 };
+
+            var tags = tagsByArticle.TryGetValue(article.Id, out var value)
                 ? value
                 : [];
-            articles.Append(ArticleJson(rows[index], tags, includeBody: false));
+            articles.Append(ArticleJson(article, tags, includeBody: false));
         }
 
         articles.Append(']');
@@ -550,9 +581,10 @@ public static class RealWorld
 
         for (var attempt = 0; attempt < 3; attempt++)
         {
-            try
+            var tagPlans = await PlanTags(ctx, TagValues(input));
+            var statements = new List<DbStatement>
             {
-                await ctx.Db.ExecuteAsync(
+                new(
                     """
                     insert into rw_articles
                       (id, author_id, slug, title, description, body, created_at, updated_at)
@@ -567,18 +599,44 @@ public static class RealWorld
                         ("description", article.Description),
                         ("body", article.Body),
                         ("createdAt", article.CreatedAt),
-                        ("updatedAt", article.UpdatedAt)));
+                        ("updatedAt", article.UpdatedAt))),
+            };
+
+            foreach (var tag in tagPlans)
+            {
+                if (tag.IsNew)
+                {
+                    statements.Add(new DbStatement(
+                        "insert into rw_tags (id, name) values (@id, @name)",
+                        Args(("id", tag.Id), ("name", tag.Name))));
+                }
+            }
+
+            foreach (var tag in tagPlans)
+            {
+                statements.Add(new DbStatement(
+                    """
+                    insert into rw_article_tags (id, article_id, tag_id)
+                    values (@id, @article, @tag)
+                    """,
+                    Args(
+                        ("id", $"{article.Id}:{tag.Name}"),
+                        ("article", article.Id),
+                        ("tag", tag.Id))));
+            }
+
+            try
+            {
+                await ctx.Db.BatchAsync(statements);
                 break;
             }
             catch when (attempt < 2)
             {
-                // Another concurrent request took the slug.
+                // Another concurrent request took the slug or created a tag.
                 slug = $"{slug}-{Ids.New("rwa").ToLowerInvariant()}";
                 article = article with { Slug = slug };
             }
         }
-
-        await ReplaceTags(ctx, article.Id, TagValues(input));
 
         var row = await FindArticle(ctx, slug, user.Id);
         var tags = await TagList(ctx, article.Id);
@@ -876,6 +934,23 @@ public static class RealWorld
         join rw_users u on u.id = a.author_id
         """;
 
+    // List responses do not include body, favorite counts, or follow state.
+    // Those values are fetched in batches for the whole page.
+    private const string ArticleSummarySelect = """
+        select a.id as "id",
+               a.slug as "slug",
+               a.title as "title",
+               a.description as "description",
+               a.created_at as "createdAt",
+               a.updated_at as "updatedAt",
+               a.author_id as "authorId",
+               u.username as "username",
+               u.bio as "bio",
+               u.image as "image"
+        from rw_articles a
+        join rw_users u on u.id = a.author_id
+        """;
+
     private const string CommentSelect = """
         select c.id as "id",
                c.body as "body",
@@ -919,6 +994,173 @@ public static class RealWorld
             $"{CommentSelect} where c.article_id = @article order by c.created_at asc",
             Args(("article", articleId), ("viewerId", viewerId)),
             MapComment);
+
+    private static async Task<Dictionary<string, RwArticleFavoriteRow>>
+        FavoriteStats(
+            Ctx ctx,
+            IReadOnlyList<RwArticleRow> articles,
+            string viewerId)
+    {
+        var result = new Dictionary<string, RwArticleFavoriteRow>(
+            StringComparer.Ordinal);
+
+        if (articles.Count == 0)
+            return result;
+
+        const int chunkSize = 50;
+
+        for (var start = 0; start < articles.Count; start += chunkSize)
+        {
+            var count = Math.Min(chunkSize, articles.Count - start);
+            var args = new Dictionary<string, object?>(count + 1)
+            {
+                ["viewerId"] = viewerId,
+            };
+            var placeholders = new string[count];
+
+            for (var index = 0; index < count; index++)
+            {
+                var name = $"article{index}";
+                args[name] = articles[start + index].Id;
+                placeholders[index] = $"@{name}";
+            }
+
+            var rows = await Mapped(
+                ctx,
+                $"""
+                select f.article_id as "articleId",
+                       count(*) as "favoritesCount",
+                       sum(case when f.user_id = @viewerId then 1 else 0 end) as "favorited"
+                from rw_favorites f
+                where f.article_id in ({string.Join(", ", placeholders)})
+                group by f.article_id
+                """,
+                args,
+                MapArticleFavorite);
+
+            foreach (var row in rows)
+                result[row.ArticleId] = row;
+        }
+
+        return result;
+    }
+
+    private static async Task<HashSet<string>> FollowingSet(
+        Ctx ctx,
+        IReadOnlyList<RwArticleRow> articles,
+        string viewerId)
+    {
+        var result = new HashSet<string>(StringComparer.Ordinal);
+
+        if (articles.Count == 0 || string.IsNullOrEmpty(viewerId))
+            return result;
+
+        var authors = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var article in articles)
+        {
+            if (seen.Add(article.AuthorId))
+                authors.Add(article.AuthorId);
+        }
+
+        const int chunkSize = 50;
+
+        for (var start = 0; start < authors.Count; start += chunkSize)
+        {
+            var count = Math.Min(chunkSize, authors.Count - start);
+            var args = new Dictionary<string, object?>(count + 1)
+            {
+                ["viewerId"] = viewerId,
+            };
+            var placeholders = new string[count];
+
+            for (var index = 0; index < count; index++)
+            {
+                var name = $"author{index}";
+                args[name] = authors[start + index];
+                placeholders[index] = $"@{name}";
+            }
+
+            var rows = await Mapped(
+                ctx,
+                $"""
+                select followed_id as "id"
+                from rw_follows
+                where follower_id = @viewerId
+                  and followed_id in ({string.Join(", ", placeholders)})
+                """,
+                args,
+                MapTagId);
+
+            foreach (var row in rows)
+                result.Add(row.Id);
+        }
+
+        return result;
+    }
+
+    private static async Task<List<TagPlan>> PlanTags(
+        Ctx ctx,
+        IReadOnlyList<string> tags)
+    {
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var tag in tags)
+        {
+            if (string.IsNullOrWhiteSpace(tag))
+                continue;
+
+            var trimmed = tag.Trim();
+            if (seen.Add(trimmed))
+                names.Add(trimmed);
+        }
+
+        if (names.Count == 0)
+            return [];
+
+        var existing = new Dictionary<string, string>(StringComparer.Ordinal);
+        const int chunkSize = 50;
+
+        for (var start = 0; start < names.Count; start += chunkSize)
+        {
+            var count = Math.Min(chunkSize, names.Count - start);
+            var args = new Dictionary<string, object?>(count);
+            var placeholders = new string[count];
+
+            for (var index = 0; index < count; index++)
+            {
+                var name = $"tag{index}";
+                args[name] = names[start + index];
+                placeholders[index] = $"@{name}";
+            }
+
+            var rows = await Mapped(
+                ctx,
+                $"""
+                select id as "id", name as "name"
+                from rw_tags
+                where name in ({string.Join(", ", placeholders)})
+                """,
+                args,
+                MapTagNameId);
+
+            foreach (var row in rows)
+                existing[row.Name] = row.Id;
+        }
+
+        var plans = new List<TagPlan>(names.Count);
+
+        foreach (var name in names)
+        {
+            plans.Add(existing.TryGetValue(name, out var id)
+                ? new TagPlan(name, id, false)
+                : new TagPlan(name, Ids.New("rwt"), true));
+        }
+
+        return plans;
+    }
 
     private static async Task<Dictionary<string, List<string>>> TagMap(
         Ctx ctx,
@@ -1309,6 +1551,17 @@ public static class RealWorld
     internal static RwArticleTagRow MapArticleTag(
         IReadOnlyDictionary<string, object?> row) =>
         new(Text(row, "articleId"), Text(row, "name"));
+
+    internal static RwArticleFavoriteRow MapArticleFavorite(
+        IReadOnlyDictionary<string, object?> row) =>
+        new(
+            Text(row, "articleId"),
+            Number(row, "favoritesCount"),
+            Number(row, "favorited"));
+
+    internal static RwTagNameIdRow MapTagNameId(
+        IReadOnlyDictionary<string, object?> row) =>
+        new(Text(row, "id"), Text(row, "name"));
 
     internal static DbCount MapCount(IReadOnlyDictionary<string, object?> row) =>
         new(Number(row, "count"));

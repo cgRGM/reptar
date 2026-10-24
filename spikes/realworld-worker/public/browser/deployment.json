@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "f121b243e443b49aad70f6b65b3762fcc627bb27e612c0f15815e3c236c6ac91",
+  "semanticBuildId": "01759ffed903d78d474914d7e5d979e77010e3acae0e8df1d12826138157aaf8",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "ccc68d50169b29ead3895e6fdab538a2139ad76fa8b69d5851e48128caa76ebb",
+  "buildFingerprint": "ee9a0703dc450678c6e5867bbb354041156c684dd0b1c213089ffb2502ce5f9b",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,7 +23,7 @@
       "relativePath": "RealWorld.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "d1f8017385d29cacb5980bc10b12dce15e22dcd67cce156be6e92a81865b5b6e",
+      "sha256": "269124ad80a8458f0cd5587cb07ed501c24d7443d9fbafe483b07fab265333b2",
       "schemaVersion": 2
     },
     {
@@ -37,14 +37,14 @@
       "relativePath": "RealWorld.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "1e5dd925dcbaac8bcac123103f24de56203130cc101d5ecca9562c8298206f84",
+      "sha256": "1658b46f807768a0b3e190afef3e4c939f92a3186ff26da66f498daec4eec1f8",
       "schemaVersion": null
     },
     {
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "49dd2a3f202bf7f746e6406676304b232cda62b77b766af5928446e1150e27c7",
+      "sha256": "06f5ffa37d6ffd6015998aa78c0e196d84bc930a55f73b1c202e6d450fb7c4f8",
       "schemaVersion": 1
     },
     {
@@ -58,7 +58,7 @@
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "d1eeb4356203dd437239a6f65d4d2e11e2723df8265d6be67856c9fe2a653770",
+      "sha256": "e96de3a1365a757f08fafa9b6ae2cbe8041626a4fd3dadaa0f1becead69340f9",
       "schemaVersion": 1
     }
   ],

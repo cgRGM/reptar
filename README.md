@@ -135,14 +135,14 @@ VPS Native AOT results with 300 seeded articles and autocannon:
 
 | Scenario                      | Req/sec |    p50 |
 | ----------------------------- | ------: | -----: |
-| `GET /api/tags`               |   3,911 |  23 ms |
-| `GET /api/articles/:slug`     |   2,174 |  40 ms |
-| `GET /api/articles?limit=20`  |     327 | 260 ms |
-| `GET /api/articles/feed`      |     325 | 299 ms |
-| `GET /api/articles?tag=bench` |     240 | 404 ms |
-| `POST /api/articles`          |      60 | 164 ms |
+| `GET /api/tags`               |   4,220 |  22 ms |
+| `GET /api/articles/:slug`     |   2,627 |  36 ms |
+| `GET /api/articles?limit=20`  |     901 | 110 ms |
+| `GET /api/articles/feed`      |     755 | 129 ms |
+| `GET /api/articles?tag=bench` |     592 | 164 ms |
+| `POST /api/articles`          |     210 |  42 ms |
 
-The article list now batches tag lookups for the whole page instead of issuing one tag query per article. That raised feed throughput from ~200 to ~325 req/sec and tag-filter from ~200 to ~240 req/sec; the unfiltered list remains limited by its main query's correlated subqueries and the single SQLite connection gate. SQLite defaults to WAL with `synchronous=NORMAL`; write throughput rose from ~28 to ~60 req/sec (a new-code `DELETE`/`FULL` control measured ~20 req/sec). The image is **38.3 MB uncompressed / 11.6 MB compressed** after removing the 22 MB `.dbg` symbols.
+List responses now omit the article body and fetch tags, favorite counts, favorite state, and follow state in page-level batches instead of per-row correlated subqueries. The SQLite WAL read pool added in `461be2e` lets those reads run concurrently, and article creation batches the article, tag, and junction writes into one transaction. The image remains **38.3 MB uncompressed / 11.6 MB compressed** after removing the 22 MB `.dbg` symbols.
 
 The Native AOT run surfaced and fixed AOT-unsafe anonymous parameter binding and reflection-only row mapping. `QueryMappedAsync` is now the AOT-safe row-mapping path, and `SqliteDbClient` binds deletes/gets with dictionaries.
 

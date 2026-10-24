@@ -47,16 +47,16 @@ Measured on a small Lightsail VPS with the Native AOT container and SQLite, 300 
 
 | Scenario                          | Connections | Req/sec |    p50 |  p97.5 |
 | --------------------------------- | ----------: | ------: | -----: | -----: |
-| `GET /api/tags`                   |         100 |   3,911 |  23 ms |  51 ms |
-| `GET /api/articles/:slug`         |         100 |   2,174 |  40 ms |  83 ms |
-| `GET /api/articles?limit=20`      |         100 |     327 | 260 ms | 619 ms |
-| `GET /api/articles/feed?limit=20` |         100 |     325 | 299 ms | 346 ms |
-| `GET /api/articles?tag=bench`     |         100 |     240 | 404 ms | 448 ms |
-| `POST /api/articles`              |          10 |      60 | 164 ms | 203 ms |
+| `GET /api/tags`                   |         100 |   4,220 |  22 ms |  47 ms |
+| `GET /api/articles/:slug`         |         100 |   2,627 |  36 ms |  59 ms |
+| `GET /api/articles?limit=20`      |         100 |     901 | 110 ms | 172 ms |
+| `GET /api/articles/feed?limit=20` |         100 |     755 | 129 ms | 200 ms |
+| `GET /api/articles?tag=bench`     |         100 |     592 | 164 ms | 200 ms |
+| `POST /api/articles`              |          10 |     210 |  42 ms | 101 ms |
 
-Batching tag lookups raised feed throughput from ~200 to ~325 req/sec and tag-filter from ~200 to ~240 req/sec. The unfiltered list only moved from ~300 to ~327 req/sec: its main query still has three correlated subqueries per row, and `SqliteDbClient` serializes access through one connection.
+List responses omit the article body and fetch tags, favorite counts, favorite state, and follow state in page-level batches. This removes the three correlated subqueries per row; `SqliteDbClient`'s WAL read pool runs those reads concurrently. Article creation batches the article, tag, and junction writes into one transaction. The image is 38.3 MB uncompressed / 11.6 MB compressed after removing the 22 MB `.dbg` symbols.
 
-SQLite now defaults to WAL with `synchronous=NORMAL` and a 5-second busy timeout. Write throughput rose from ~28 to ~60 req/sec; a new-code control with `DELETE`/`FULL` measured ~20 req/sec. `synchronous=NORMAL` is a durability tradeoff; override it with `REPTAR_SQLITE_SYNCHRONOUS=FULL` if required. The image is 38.3 MB uncompressed / 11.6 MB compressed after removing the 22 MB `.dbg` symbols.
+`synchronous=NORMAL` is a durability tradeoff; override it with `REPTAR_SQLITE_SYNCHRONOUS=FULL` if required.
 
 ## AOT lessons
 
@@ -65,3 +65,6 @@ The Native AOT build exposed three framework issues that are now fixed:
 1. `SqliteDbClient.DeleteAsync` and `GetAsync` no longer bind primary keys via anonymous types; they use dictionaries so trimming cannot remove the reflected properties.
 2. `QueryMappedAsync` allows explicit row mapping without constructor reflection. The RealWorld models use it for AOT-safe reads.
 3. `ReptarApp.ExecuteAsync` lets app startup create composite indexes after `EnsureCreatedAsync`; the D1 migration carries the same indexes.
+4. Native AOT publishes a large `.dbg` file; the Dockerfile removes it after publish, taking the image from 67.9 MB to 38.3 MB.
+5. SQLite WAL/NORMAL/busy_timeout are configurable through `REPTAR_SQLITE_JOURNAL_MODE` and `REPTAR_SQLITE_SYNCHRONOUS`.
+6. D1 batch statements accept both JSON-string and array parameters in the host shim; `D1DbClient` now emits the string form. Article creation uses one transaction for the article, tags, and junction rows.

@@ -87,19 +87,25 @@ export interface ReptarBindings {
   r2?: ReptarStorageBinding;
 }
 
-const parseParams = (paramsJson: string): unknown[] => {
-  const parsed = JSON.parse(paramsJson) as unknown;
+const parseParams = (params: unknown): unknown[] => {
+  if (Array.isArray(params)) {
+    return params;
+  }
+  if (typeof params !== "string") {
+    return [];
+  }
+  const parsed = JSON.parse(params) as unknown;
   return Array.isArray(parsed) ? parsed : [];
 };
 
 const bindStatement = (
   db: D1DatabaseLike,
   sql: string,
-  paramsJson: string
+  params: unknown
 ): D1PreparedStatementLike => {
   const statement = db.prepare(sql);
-  const params = parseParams(paramsJson);
-  return params.length > 0 ? statement.bind(...params) : statement;
+  const values = parseParams(params);
+  return values.length > 0 ? statement.bind(...values) : statement;
 };
 
 const SNAKE_CASE_REGEX = /_(?<char>[a-z0-9])/gu;
@@ -154,12 +160,12 @@ export const d1Batch = async (
   }
 
   const parsed = JSON.parse(batchJson) as {
-    params?: string;
+    params?: unknown;
     sql?: string;
   }[];
 
   const statements = parsed.map((item) =>
-    bindStatement(db, item.sql ?? "", item.params ?? "[]")
+    bindStatement(db, item.sql ?? "", item.params ?? [])
   );
   const results = await db.batch(statements);
 

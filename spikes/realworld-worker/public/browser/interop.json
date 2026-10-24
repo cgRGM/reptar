@@ -16,6 +16,18 @@
   "imports": [
     {
       "module": "app.host",
+      "name": "batch",
+      "parameters": [
+        "string"
+      ],
+      "result": "i32",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060003f8",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060003f8",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060003f8"
+    },
+    {
+      "module": "app.host",
       "name": "envGet",
       "parameters": [
         "string"
