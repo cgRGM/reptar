@@ -1,0 +1,22 @@
+{
+  "avg_bytes": 301,
+  "conc": 16,
+  "errors": 0,
+  "gzip": true,
+  "invalid_reasons": {},
+  "invalid_responses": 0,
+  "latency": {
+    "max_ms": 34.495,
+    "mean_ms": 5.16,
+    "n": 30986,
+    "p50_ms": 5.175,
+    "p90_ms": 6.395,
+    "p99_ms": 9.983
+  },
+  "ok": 30986,
+  "path": "/rooms/1/messages",
+  "rps": 3097.0,
+  "secs": 10.01,
+  "statuses": { "200": 30986 },
+  "validation": "status-only"
+}

@@ -1,0 +1,22 @@
+{
+  "avg_bytes": 4,
+  "conc": 16,
+  "errors": 0,
+  "gzip": true,
+  "invalid_reasons": {},
+  "invalid_responses": 0,
+  "latency": {
+    "max_ms": 33.919,
+    "mean_ms": 3.04,
+    "n": 52635,
+    "p50_ms": 2.871,
+    "p90_ms": 4.451,
+    "p99_ms": 6.887
+  },
+  "ok": 52635,
+  "path": "/rooms",
+  "rps": 5260.8,
+  "secs": 10.01,
+  "statuses": { "200": 52635 },
+  "validation": "status-only"
+}
