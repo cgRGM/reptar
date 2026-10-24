@@ -1,6 +1,12 @@
 import { d1Execute, d1Query } from "./bindings";
 import type { ReptarBindings } from "./bindings";
-import { hashPassword, randomToken, sha256, verifyPassword } from "./crypto";
+import {
+  hashPassword,
+  hmacSha256,
+  randomToken,
+  sha256,
+  verifyPassword,
+} from "./crypto";
 
 export interface ReptarWasmApp {
   handle?: (requestJson: string) => void;
@@ -29,7 +35,9 @@ interface HostResponseEnvelope {
 }
 
 interface ReptarScope {
+  __REPTAR_AI_RUN?: (model: string, prompt: string) => Promise<string>;
   __REPTAR_CRYPTO_HASH_PASSWORD?: (password: string) => Promise<string>;
+  __REPTAR_CRYPTO_HMAC_SHA256?: (key: string, msg: string) => Promise<string>;
   __REPTAR_CRYPTO_RANDOM_TOKEN?: (bytes: number) => string;
   __REPTAR_CRYPTO_SHA256?: (input: string) => Promise<string>;
   __REPTAR_CRYPTO_VERIFY_PASSWORD?: (
@@ -38,11 +46,38 @@ interface ReptarScope {
   ) => Promise<boolean>;
   __REPTAR_DB_EXECUTE?: (sql: string, paramsJson: string) => Promise<number>;
   __REPTAR_DB_QUERY?: (sql: string, paramsJson: string) => Promise<string>;
+  __REPTAR_DURABLE_FETCH?: (
+    namespace: string,
+    id: string,
+    path: string,
+    method: string,
+    body: string
+  ) => Promise<string>;
   __REPTAR_FETCH?: (
     input: RequestInfo | URL,
     init?: RequestInit
   ) => Promise<Response>;
+  __REPTAR_HTTP_FETCH?: (
+    url: string,
+    method: string,
+    headersJson: string,
+    body: string
+  ) => Promise<string>;
+  __REPTAR_KV_DELETE?: (key: string) => Promise<void>;
+  __REPTAR_KV_GET?: (key: string) => Promise<string | null>;
+  __REPTAR_KV_PUT?: (
+    key: string,
+    value: string,
+    ttlSeconds?: number
+  ) => Promise<void>;
   __REPTAR_MANIFEST_URL?: string;
+  __REPTAR_QUEUE_SEND?: (
+    queueName: string,
+    messageJson: string
+  ) => Promise<void>;
+  __REPTAR_R2_DELETE?: (key: string) => Promise<void>;
+  __REPTAR_R2_EXISTS?: (key: string) => Promise<boolean>;
+  __REPTAR_R2_GET?: (key: string) => Promise<Uint8Array | null>;
   __REPTAR_R2_PUT?: (
     key: string,
     bytes: Uint8Array,
@@ -61,13 +96,144 @@ const errorResponse = (message: string, status = 500): Response =>
     status,
   });
 
+const registerCryptoBindings = (scope: ReptarScope): void => {
+  scope.__REPTAR_CRYPTO_HASH_PASSWORD ??= hashPassword;
+  scope.__REPTAR_CRYPTO_RANDOM_TOKEN ??= randomToken;
+  scope.__REPTAR_CRYPTO_SHA256 ??= sha256;
+  scope.__REPTAR_CRYPTO_HMAC_SHA256 ??= hmacSha256;
+  scope.__REPTAR_CRYPTO_VERIFY_PASSWORD ??= verifyPassword;
+};
+
+const registerDbBindings = (
+  scope: ReptarScope,
+  db: ReptarBindings["db"]
+): void => {
+  if (!db) {
+    return;
+  }
+  scope.__REPTAR_DB_QUERY ??= (sql, paramsJson) => d1Query(db, sql, paramsJson);
+  scope.__REPTAR_DB_EXECUTE ??= (sql, paramsJson) =>
+    d1Execute(db, sql, paramsJson);
+};
+
+const registerR2Bindings = (
+  scope: ReptarScope,
+  r2: ReptarBindings["r2"]
+): void => {
+  if (!r2) {
+    return;
+  }
+  scope.__REPTAR_R2_PUT ??= (key, bytes, contentType) =>
+    r2.put(key, bytes, contentType);
+  scope.__REPTAR_R2_GET ??= async (key) => (r2.get ? await r2.get(key) : null);
+  scope.__REPTAR_R2_EXISTS ??= async (key) =>
+    r2.exists ? await r2.exists(key) : false;
+  scope.__REPTAR_R2_DELETE ??= async (key) => {
+    if (r2.delete) {
+      await r2.delete(key);
+    }
+  };
+};
+
+const registerKvBindings = (
+  scope: ReptarScope,
+  kv: ReptarBindings["kv"]
+): void => {
+  if (!kv) {
+    return;
+  }
+  scope.__REPTAR_KV_GET ??= async (key) => await kv.get(key);
+  scope.__REPTAR_KV_PUT ??= async (key, val, ttl) => {
+    await kv.put(key, val, ttl ? { expirationTtl: ttl } : undefined);
+  };
+  scope.__REPTAR_KV_DELETE ??= async (key) => {
+    await kv.delete(key);
+  };
+};
+
+const registerQueuesBinding = (
+  scope: ReptarScope,
+  queues: ReptarBindings["queues"]
+): void => {
+  if (!queues) {
+    return;
+  }
+  scope.__REPTAR_QUEUE_SEND ??= async (queueName, messageJson) => {
+    const queue = queues[queueName];
+    if (!queue) {
+      throw new Error(`Queue binding '${queueName}' not found`);
+    }
+    await queue.send(JSON.parse(messageJson) as unknown);
+  };
+};
+
+const registerAiBinding = (
+  scope: ReptarScope,
+  ai: ReptarBindings["ai"]
+): void => {
+  if (!ai) {
+    return;
+  }
+  scope.__REPTAR_AI_RUN ??= async (model, prompt) => {
+    const result = await ai.run(model, { prompt });
+    return JSON.stringify(result);
+  };
+};
+
+const registerDurableBinding = (
+  scope: ReptarScope,
+  durable: ReptarBindings["durable"]
+): void => {
+  if (!durable) {
+    return;
+  }
+  scope.__REPTAR_DURABLE_FETCH ??= async (
+    namespace,
+    id,
+    path,
+    method,
+    body
+  ) => {
+    const ns = durable[namespace];
+    if (!ns) {
+      throw new Error(`Durable Object namespace '${namespace}' not found`);
+    }
+    const stubId = ns.idFromString ? ns.idFromString(id) : ns.idFromName(id);
+    const stub = ns.get(stubId);
+    const res = await stub.fetch(
+      new Request(`https://do${path}`, {
+        body: body || undefined,
+        method: method || "GET",
+      })
+    );
+    return await res.text();
+  };
+};
+
+const registerHttpFetch = (scope: ReptarScope): void => {
+  scope.__REPTAR_HTTP_FETCH ??= async (url, method, headersJson, body) => {
+    const headers = JSON.parse(headersJson || "{}") as Record<string, string>;
+    const res = await fetch(url, {
+      body: body || undefined,
+      headers,
+      method: method || "GET",
+    });
+    const text = await res.text();
+    return JSON.stringify({
+      body: text,
+      headers: Object.fromEntries(res.headers.entries()),
+      status: res.status,
+    });
+  };
+};
+
 /**
  * Wraps a NetWasm app in a Cloudflare Worker host.
  *
  * Contract with the C# app:
  * - export `handle(string)` and return void
  * - call the `respond(string)` JS import when the response is ready
- * - call async JS imports (db, AI, storage) and await them before responding
+ * - call async JS imports (db, AI, storage, etc.) and await them before responding
  */
 export const createReptarHost = <TEnv>(
   options: ReptarHostOptions<TEnv>
@@ -81,24 +247,16 @@ export const createReptarHost = <TEnv>(
       origin
     );
     scope.__REPTAR_WASM_MODULE ??= options.wasm;
-    scope.__REPTAR_CRYPTO_HASH_PASSWORD ??= hashPassword;
-    scope.__REPTAR_CRYPTO_RANDOM_TOKEN ??= randomToken;
-    scope.__REPTAR_CRYPTO_SHA256 ??= sha256;
-    scope.__REPTAR_CRYPTO_VERIFY_PASSWORD ??= verifyPassword;
+    registerCryptoBindings(scope);
 
-    const { db, r2 } = options.bindings(env);
-
-    if (db) {
-      scope.__REPTAR_DB_QUERY ??= (sql, paramsJson) =>
-        d1Query(db, sql, paramsJson);
-      scope.__REPTAR_DB_EXECUTE ??= (sql, paramsJson) =>
-        d1Execute(db, sql, paramsJson);
-    }
-
-    if (r2) {
-      scope.__REPTAR_R2_PUT ??= (key, bytes, contentType) =>
-        r2.put(key, bytes, contentType);
-    }
+    const bindings = options.bindings(env);
+    registerDbBindings(scope, bindings.db);
+    registerR2Bindings(scope, bindings.r2);
+    registerKvBindings(scope, bindings.kv);
+    registerQueuesBinding(scope, bindings.queues);
+    registerAiBinding(scope, bindings.ai);
+    registerDurableBinding(scope, bindings.durable);
+    registerHttpFetch(scope);
 
     scope.__REPTAR_FETCH ??= (input, init) => {
       const request = new Request(input, init);

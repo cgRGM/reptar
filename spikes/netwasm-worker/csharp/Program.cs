@@ -42,6 +42,8 @@ public sealed record UploadResult(string Key, string Url);
 [JsonSerializable(typeof(ValidationError))]
 [JsonSerializable(typeof(string))]
 [JsonSerializable(typeof(string[]))]
+[JsonSerializable(typeof(List<string>))]
+[JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(SessionUser))]
 [JsonSerializable(typeof(SessionResponse))]
 [JsonSerializable(typeof(Auth.UserRow))]
@@ -51,6 +53,10 @@ public sealed record UploadResult(string Key, string Url);
 [JsonSerializable(typeof(List<SessionUser>))]
 [JsonSerializable(typeof(Auth.SignUpInput))]
 [JsonSerializable(typeof(Auth.SignInInput))]
+[JsonSerializable(typeof(CheckoutSession))]
+[JsonSerializable(typeof(CreateCheckoutInput))]
+[JsonSerializable(typeof(StripeLineItem))]
+[JsonSerializable(typeof(List<StripeLineItem>))]
 internal partial class BlogJsonContext : JsonSerializerContext
 {
 }
@@ -60,6 +66,14 @@ public static partial class PageExports
     private static readonly Validator<CreatePost> CreateSchema = Rule<CreatePost>()
         .Prop(x => x.Title, rules => rules.Min(3).Max(120))
         .Prop(x => x.Content, rules => rules.Min(1));
+
+    public static readonly TableDef PostsTable = DefineTable("posts",
+        Col.Text("id").PrimaryKey(),
+        Col.Text("title").NotNull(),
+        Col.Text("content").NotNull(),
+        Col.Text("image_key"),
+        Col.Text("created_at")
+    );
 
     private static readonly ReptarApp App;
 
@@ -160,6 +174,7 @@ public static partial class PageExports
 
         var app = ReptarApp.Create(new ReptarConfig
         {
+            Debug = true,
             Auth = BuiltIn(),
             Database = new D1DbClient(json),
             Storage = new R2Client(),
@@ -172,30 +187,58 @@ public static partial class PageExports
         app.Get("/me", Auth.RequireUser, async ctx =>
             ctx.Json(new SessionResponse(ctx.User)));
 
+        // Real CRUD helpers backed by TableDef and D1DbClient
         app.Get("/posts", async ctx => ctx.Json(
-            await ctx.Db.QueryAsync<Post>(
-                """
-                select id, title, content, image_key as imageKey, created_at as createdAt
-                from posts
-                order by created_at desc
-                """)));
+            await ctx.Db.ListAsync<Post>(PostsTable, "order by created_at desc")));
+
+        app.Get("/posts/:id", async ctx =>
+        {
+            var post = await ctx.Db.GetAsync<Post>(PostsTable, ctx.Req.Param("id")!);
+            return post is null ? ctx.NotFound("Post not found.") : ctx.Json(post);
+        });
 
         app.Post("/posts", CreateSchema, async (ctx, input) =>
         {
-            var id = Guid.NewGuid().ToString("N");
-            var now = DateTimeOffset.UtcNow.ToString("O");
+            var post = new Post(
+                Id: Ids.New("post"),
+                Title: input.Title.Trim(),
+                Content: input.Content,
+                ImageKey: input.ImageKey,
+                CreatedAt: ctx.Clock.IsoNow());
 
-            var paramsJson = JsonSerializer.Serialize(
-                new[] { id, input.Title, input.Content, input.ImageKey ?? "", now },
-                ReptarJson.Options);
+            await ctx.Db.InsertAsync(PostsTable, post);
+            return ctx.Json(post, 201);
+        });
 
-            await ctx.Db.ExecuteAsync(
-                "insert into posts (id, title, content, image_key, created_at) values (?, ?, ?, ?, ?)",
-                paramsJson);
+        app.Put("/posts/:id", CreateSchema, async (ctx, input) =>
+        {
+            var post = await ctx.Db.GetAsync<Post>(PostsTable, ctx.Req.Param("id")!);
+            if (post is null)
+            {
+                return ctx.NotFound("Post not found.");
+            }
 
-            return ctx.Json(
-                new Post(id, input.Title, input.Content, input.ImageKey, now),
-                201);
+            var updated = post with
+            {
+                Title = input.Title.Trim(),
+                Content = input.Content,
+                ImageKey = input.ImageKey ?? post.ImageKey,
+            };
+
+            await ctx.Db.UpdateAsync(PostsTable, updated, updated.Id);
+            return ctx.Json(updated);
+        });
+
+        app.Delete("/posts/:id", async ctx =>
+        {
+            var post = await ctx.Db.GetAsync<Post>(PostsTable, ctx.Req.Param("id")!);
+            if (post is null)
+            {
+                return ctx.NotFound("Post not found.");
+            }
+
+            await ctx.Db.DeleteAsync(PostsTable, post.Id);
+            return ctx.Status(204);
         });
 
         app.Post("/upload", async ctx =>
@@ -207,6 +250,13 @@ public static partial class PageExports
             var url = await ctx.Storage.PutAsync(key, body, contentType);
             return ctx.Json(new UploadResult(key, url), 201);
         });
+
+        // Built-in Stripe module
+        app.Route("/stripe", Stripe.Routes(new StripeConfig
+        {
+            ApiKey = "sk_test_placeholder",
+            WebhookSecret = "whsec_placeholder",
+        }));
 
         return app;
     }

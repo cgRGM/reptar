@@ -23,9 +23,9 @@
       ],
       "result": "i32",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.060001c7",
-      "rejectExport": "netwasm.async.import.reject.Reptar.060001c7",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.060001c7"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.0600029b",
+      "rejectExport": "netwasm.async.import.reject.Reptar.0600029b",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.0600029b"
     },
     {
       "module": "app.host",
@@ -35,9 +35,37 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.060001dd",
-      "rejectExport": "netwasm.async.import.reject.Reptar.060001dd",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.060001dd"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060002bb",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060002bb",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060002bb"
+    },
+    {
+      "module": "app.host",
+      "name": "hmacSha256",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060002be",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060002be",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060002be"
+    },
+    {
+      "module": "app.host",
+      "name": "httpFetch",
+      "parameters": [
+        "string",
+        "string",
+        "string",
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060002c6",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060002c6",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060002c6"
     },
     {
       "module": "app.host",
@@ -48,9 +76,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.060001c6",
-      "rejectExport": "netwasm.async.import.reject.Reptar.060001c6",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.060001c6"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.0600029a",
+      "rejectExport": "netwasm.async.import.reject.Reptar.0600029a",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.0600029a"
     },
     {
       "module": "app.host",
@@ -62,9 +90,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.060001d6",
-      "rejectExport": "netwasm.async.import.reject.Reptar.060001d6",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.060001d6"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060002b2",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060002b2",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060002b2"
     },
     {
       "module": "app.host",
@@ -98,9 +126,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.060001df",
-      "rejectExport": "netwasm.async.import.reject.Reptar.060001df",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.060001df"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060002bd",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060002bd",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060002bd"
     },
     {
       "module": "app.host",
@@ -111,9 +139,9 @@
       ],
       "result": "bool",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.060001de",
-      "rejectExport": "netwasm.async.import.reject.Reptar.060001de",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.060001de"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.060002bc",
+      "rejectExport": "netwasm.async.import.reject.Reptar.060002bc",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.060002bc"
     }
   ],
   "exports": [

@@ -23,7 +23,11 @@ export type ClientResponse<O = unknown, S extends number = number> = Response &
         status: S;
       });
 
-type HasKeys<T> = keyof T extends never ? false : true;
+type HasKeys<T> = [T] extends [undefined | null | Record<string, never>]
+  ? false
+  : [keyof T] extends [never]
+    ? false
+    : true;
 
 export type Client<T> = {
   [K in keyof T]: T[K] extends Endpoint<infer I, infer O, infer S>
@@ -81,7 +85,7 @@ const buildUrl = (
   return url;
 };
 
-export const createClient = <T extends RouteTree>(
+export const createClient = <T extends object = RouteTree>(
   baseUrl: string,
   options: ClientOptions = {}
 ): Client<T> => {

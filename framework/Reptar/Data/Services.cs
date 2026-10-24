@@ -13,7 +13,9 @@ public interface IDbClient
         int limit = 0,
         int offset = 0);
     Task<int> InsertAsync(TableDef table, object values);
+    Task<int> InsertAsync<T>(TableDef table, T values) where T : class;
     Task<int> UpdateAsync(TableDef table, object values, object id);
+    Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class;
     Task<int> DeleteAsync(TableDef table, object id);
     Task<int> DeleteAsync<T>(TableDef table, object id);
     Task<int> DeleteWhereAsync(TableDef table, string where, object? param = null);
@@ -38,6 +40,7 @@ public interface ICrypto
     Task<string> HashPassword(string password);
     Task<bool> VerifyPassword(string password, string hash);
     Task<string> Sha256(string input);
+    Task<string> HmacSha256(string key, string message);
     string RandomToken(int bytes = 32);
 }
 
@@ -87,6 +90,14 @@ public sealed class DevCrypto : ICrypto
         var hash = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(input));
 
+        return Task.FromResult(Convert.ToHexString(hash).ToLowerInvariant());
+    }
+
+    public Task<string> HmacSha256(string key, string message)
+    {
+        using var hmac = new System.Security.Cryptography.HMACSHA256(
+            System.Text.Encoding.UTF8.GetBytes(key));
+        var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(message));
         return Task.FromResult(Convert.ToHexString(hash).ToLowerInvariant());
     }
 
@@ -145,3 +156,75 @@ public sealed class NoopRateLimiter : IRateLimiter
 {
     public Task<bool> LimitAsync(string category, string key) => Task.FromResult(true);
 }
+
+public interface IKvClient
+{
+    Task<string?> GetAsync(string key);
+    Task PutAsync(string key, string value, int? ttlSeconds = null);
+    Task DeleteAsync(string key);
+}
+
+public sealed class NoopKvClient : IKvClient
+{
+    public Task<string?> GetAsync(string key) => Task.FromResult<string?>(null);
+    public Task PutAsync(string key, string value, int? ttlSeconds = null) => Task.CompletedTask;
+    public Task DeleteAsync(string key) => Task.CompletedTask;
+}
+
+public interface IQueueClient
+{
+    Task SendAsync(string queueName, string messageJson);
+}
+
+public sealed class NoopQueueClient : IQueueClient
+{
+    public Task SendAsync(string queueName, string messageJson) => Task.CompletedTask;
+}
+
+public interface IDurableBridge
+{
+    Task<string> FetchAsync(string namespaceName, string id, string path, string method = "GET", string body = "");
+}
+
+public sealed class NoopDurableBridge : IDurableBridge
+{
+    public Task<string> FetchAsync(string namespaceName, string id, string path, string method = "GET", string body = "") =>
+        throw new PlatformNotSupportedException("Durable Objects bridge is provided by the Workers shim.");
+}
+
+public sealed record HttpResponseData(int Status, Dictionary<string, string> Headers, string Body);
+
+public interface IHttpClient
+{
+    Task<HttpResponseData> FetchAsync(string url, string method = "GET", Dictionary<string, string>? headers = null, string body = "");
+}
+
+#if !NETWASM
+public sealed class DefaultHttpClient : IHttpClient
+{
+    public async Task<HttpResponseData> FetchAsync(string url, string method = "GET", Dictionary<string, string>? headers = null, string body = "")
+    {
+        using var client = new System.Net.Http.HttpClient();
+        using var request = new System.Net.Http.HttpRequestMessage(new System.Net.Http.HttpMethod(method), url);
+        if (headers is not null)
+        {
+            foreach (var (k, v) in headers)
+            {
+                request.Headers.TryAddWithoutValidation(k, v);
+            }
+        }
+        if (!string.IsNullOrEmpty(body) && (method == "POST" || method == "PUT" || method == "PATCH"))
+        {
+            request.Content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+        }
+        using var response = await client.SendAsync(request);
+        var responseBody = await response.Content.ReadAsStringAsync();
+        var respHeaders = new Dictionary<string, string>();
+        foreach (var h in response.Headers)
+        {
+            respHeaders[h.Key] = string.Join(",", h.Value);
+        }
+        return new HttpResponseData((int)response.StatusCode, respHeaders, responseBody);
+    }
+}
+#endif

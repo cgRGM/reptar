@@ -14,7 +14,14 @@ export interface R2PutOptions {
   };
 }
 
+export interface R2ObjectLike {
+  arrayBuffer: () => Promise<ArrayBuffer>;
+}
+
 export interface R2BucketLike {
+  delete: (key: string) => Promise<unknown>;
+  get: (key: string) => Promise<R2ObjectLike | null>;
+  head: (key: string) => Promise<unknown | null>;
   put: (
     key: string,
     value: Uint8Array,
@@ -23,11 +30,46 @@ export interface R2BucketLike {
 }
 
 export interface ReptarStorageBinding {
+  delete?: (key: string) => Promise<void>;
+  exists?: (key: string) => Promise<boolean>;
+  get?: (key: string) => Promise<Uint8Array | null>;
   put: (key: string, bytes: Uint8Array, contentType: string) => Promise<string>;
 }
 
+export interface KvNamespaceLike {
+  delete: (key: string) => Promise<unknown>;
+  get: (key: string) => Promise<string | null>;
+  put: (
+    key: string,
+    value: string,
+    options?: { expirationTtl?: number }
+  ) => Promise<unknown>;
+}
+
+export interface QueueLike {
+  send: (message: unknown) => Promise<void>;
+}
+
+export interface WorkersAiLike {
+  run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
+}
+
+export interface DurableObjectStubLike {
+  fetch: (request: Request) => Promise<Response>;
+}
+
+export interface DurableObjectNamespaceLike {
+  get: (id: unknown) => DurableObjectStubLike;
+  idFromName: (name: string) => unknown;
+  idFromString?: (id: string) => unknown;
+}
+
 export interface ReptarBindings {
+  ai?: WorkersAiLike;
   db?: D1DatabaseLike;
+  durable?: Record<string, DurableObjectNamespaceLike>;
+  kv?: KvNamespaceLike;
+  queues?: Record<string, QueueLike>;
   r2?: ReptarStorageBinding;
 }
 
@@ -46,13 +88,38 @@ const bindStatement = (
   return params.length > 0 ? statement.bind(...params) : statement;
 };
 
+const SNAKE_CASE_REGEX = /_(?<char>[a-z0-9])/gu;
+
+const snakeToCamel = (str: string): string =>
+  str.replaceAll(SNAKE_CASE_REGEX, (_, char: string) => char.toUpperCase());
+
+const normalizeRowKeys = (
+  row: Record<string, unknown>
+): Record<string, unknown> => {
+  const normalized: Record<string, unknown> = { ...row };
+  for (const [key, value] of Object.entries(row)) {
+    if (key.includes("_")) {
+      const camel = snakeToCamel(key);
+      if (!(camel in normalized)) {
+        normalized[camel] = value;
+      }
+    }
+  }
+  return normalized;
+};
+
 export const d1Query = async (
   db: D1DatabaseLike,
   sql: string,
   paramsJson = "[]"
 ): Promise<string> => {
   const result = await bindStatement(db, sql, paramsJson).all();
-  return JSON.stringify(result.results);
+  const rows = (result.results ?? []).map((row) =>
+    row && typeof row === "object"
+      ? normalizeRowKeys(row as Record<string, unknown>)
+      : row
+  );
+  return JSON.stringify(rows);
 };
 
 export const d1Execute = async (

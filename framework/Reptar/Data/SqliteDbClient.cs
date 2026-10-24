@@ -118,6 +118,9 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return ExecuteAsync(sql.ToString(), values);
     }
 
+    public Task<int> InsertAsync<T>(TableDef table, T values) where T : class =>
+        InsertAsync(table, (object)values);
+
     public Task<int> UpdateAsync(TableDef table, object values, object id)
     {
         var primaryKey = table.SinglePrimaryKey
@@ -149,6 +152,9 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         return ExecuteAsync(sql.ToString(), parameters);
     }
+
+    public Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class =>
+        UpdateAsync(table, (object)values, id);
 
     public Task<int> DeleteAsync(TableDef table, object id)
     {

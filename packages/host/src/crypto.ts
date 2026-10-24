@@ -110,5 +110,24 @@ export const sha256 = async (input: string): Promise<string> => {
   return bytesToHex(new Uint8Array(digest));
 };
 
+export const hmacSha256 = async (
+  key: string,
+  message: string
+): Promise<string> => {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(key),
+    { hash: "SHA-256", name: "HMAC" },
+    false,
+    ["sign"]
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    encoder.encode(message)
+  );
+  return bytesToHex(new Uint8Array(signature));
+};
+
 export const randomToken = (bytes = 32): string =>
   toBase64Url(crypto.getRandomValues(new Uint8Array(bytes)));

@@ -351,9 +351,13 @@ public sealed class ReptarApp
 
     private ServiceSet Services => _services ??= new ServiceSet(
         _config.Database ?? DefaultDatabase(),
-        _config.Storage ?? new NoopR2Client(),
-        _config.AI ?? new NoopAiClient(),
+        _config.Storage ?? DefaultStorage(),
+        _config.AI ?? DefaultAI(),
         _config.RateLimit ?? new NoopRateLimiter(),
+        _config.Cache ?? DefaultCache(),
+        _config.Queues ?? DefaultQueues(),
+        _config.Durable ?? DefaultDurable(),
+        _config.Http ?? DefaultHttp(),
         _config.Clock ?? new SystemClock(),
         _config.Crypto ?? DefaultCrypto(),
         _config.Json ?? new DefaultJsonCodec());
@@ -361,10 +365,63 @@ public sealed class ReptarApp
     private static IDbClient DefaultDatabase()
     {
 #if NETWASM
-        throw new InvalidOperationException(
-            "Configure ReptarConfig.Database for the Wasm host.");
+        return new D1DbClient(new DefaultJsonCodec());
 #else
         return new SqliteDbClient("reptar.db");
+#endif
+    }
+
+    private static IR2Client DefaultStorage()
+    {
+#if NETWASM
+        return new R2Client();
+#else
+        return new NoopR2Client();
+#endif
+    }
+
+    private static IAiClient DefaultAI()
+    {
+#if NETWASM
+        return new AiClient();
+#else
+        return new NoopAiClient();
+#endif
+    }
+
+    private static IKvClient DefaultCache()
+    {
+#if NETWASM
+        return new KvClient();
+#else
+        return new NoopKvClient();
+#endif
+    }
+
+    private static IQueueClient DefaultQueues()
+    {
+#if NETWASM
+        return new QueueClient();
+#else
+        return new NoopQueueClient();
+#endif
+    }
+
+    private static IDurableBridge DefaultDurable()
+    {
+#if NETWASM
+        return new DurableBridge();
+#else
+        return new NoopDurableBridge();
+#endif
+    }
+
+    private static IHttpClient DefaultHttp()
+    {
+#if NETWASM
+        return new WasmHttpClient();
+#else
+        return new DefaultHttpClient();
 #endif
     }
 

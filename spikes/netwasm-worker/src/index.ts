@@ -4,9 +4,11 @@ import type { D1DatabaseLike, ReptarWasmApp } from "@reptar/host";
 import wasmModule from "../public/browser/HelloReptar.wasm";
 
 interface Env {
+  AI?: unknown;
   ASSETS: { fetch: (request: Request) => Promise<Response> };
   BUCKET: R2Bucket;
   DB: D1Database;
+  KV?: KVNamespace;
 }
 
 const corsHeaders = (origin: string | null) => ({
@@ -30,6 +32,21 @@ const host = createReptarHost<Env>({
   bindings: (env) => ({
     db: env.DB as unknown as D1DatabaseLike,
     r2: {
+      delete: async (key) => {
+        await env.BUCKET.delete(key);
+      },
+      exists: async (key) => {
+        const head = await env.BUCKET.head(key);
+        return head !== null;
+      },
+      get: async (key) => {
+        const obj = await env.BUCKET.get(key);
+        if (!obj) {
+          return null;
+        }
+        const buf = await obj.arrayBuffer();
+        return new Uint8Array(buf);
+      },
       put: async (key, bytes, contentType) => {
         await env.BUCKET.put(key, bytes, {
           httpMetadata: { contentType },

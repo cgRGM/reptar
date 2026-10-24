@@ -10,18 +10,21 @@ public sealed class R2Client : IR2Client
         byte[] body,
         string contentType);
 
+    [JSImport("r2get", "app.host")]
+    private static extern Task<byte[]?> Get(string key);
+
+    [JSImport("r2exists", "app.host")]
+    private static extern Task<bool> Exists(string key);
+
+    [JSImport("r2delete", "app.host")]
+    private static extern Task Delete(string key);
+
     public Task<string> PutAsync(string key, byte[] body, string contentType) =>
         Put(key, body, contentType);
 
-    public Task<byte[]?> GetAsync(string key) =>
-        throw Unsupported("GetAsync");
+    public Task<byte[]?> GetAsync(string key) => Get(key);
 
-    public Task<bool> ExistsAsync(string key) =>
-        throw Unsupported("ExistsAsync");
+    public Task<bool> ExistsAsync(string key) => Exists(key);
 
-    public Task DeleteAsync(string key) =>
-        throw Unsupported("DeleteAsync");
-
-    private static NotSupportedException Unsupported(string operation) =>
-        new($"{operation} is handled by the Worker image route.");
+    public Task DeleteAsync(string key) => Delete(key);
 }

@@ -27,6 +27,7 @@ export default Alchemy.Stack(
         DB: db,
       },
       main: "../../spikes/netwasm-worker/src/index.ts",
+      name: "reptar-api",
     });
 
     const webWorker = yield* Cloudflare.Website.Astro("web", {
@@ -40,6 +41,7 @@ export default Alchemy.Stack(
         PUBLIC_API_URL: Output.map(api.url, (url) => url ?? ""),
         SESSION: Cloudflare.KV.Namespace("session"),
       },
+      name: "reptar-web",
       rootDir: "../../apps/web",
     });
 

@@ -1,0 +1,82 @@
+import type { Endpoint } from "./client";
+import type {
+  CheckoutSession,
+  CreateCheckoutInput,
+  CreatePost,
+  ErrorBody,
+  Post,
+  SessionResponse,
+  SessionUser,
+  SignInInput,
+  SignUpInput,
+  UpdatePost,
+  UploadResult,
+  ValidationError,
+} from "./types";
+
+export interface AppType {
+  auth: {
+    anonymous: {
+      $post: Endpoint<undefined, SessionUser | ErrorBody, 201 | 404>;
+    };
+    session: {
+      $get: Endpoint<undefined, SessionResponse, 200>;
+    };
+    signin: {
+      $post: Endpoint<
+        { json: SignInInput },
+        SessionUser | ValidationError | ErrorBody,
+        200 | 400 | 401
+      >;
+    };
+    signout: {
+      $post: Endpoint<undefined, null, 204>;
+    };
+    signup: {
+      $post: Endpoint<
+        { json: SignUpInput },
+        SessionUser | ValidationError | ErrorBody,
+        201 | 400 | 409
+      >;
+    };
+  };
+  me: {
+    $get: Endpoint<undefined, SessionResponse | ErrorBody, 200 | 401>;
+  };
+  posts: {
+    $get: Endpoint<undefined, Post[], 200>;
+    $post: Endpoint<
+      { json: CreatePost },
+      Post | ValidationError | ErrorBody,
+      201 | 400 | 401
+    >;
+    ":id": {
+      $delete: Endpoint<
+        { param: { id: string } },
+        ErrorBody | null,
+        204 | 401 | 403 | 404
+      >;
+      $get: Endpoint<{ param: { id: string } }, Post | ErrorBody, 200 | 404>;
+      $put: Endpoint<
+        { json: UpdatePost; param: { id: string } },
+        Post | ValidationError | ErrorBody,
+        200 | 400 | 401 | 403 | 404
+      >;
+    };
+  };
+  stripe: {
+    checkout: {
+      $post: Endpoint<
+        { json: CreateCheckoutInput },
+        CheckoutSession | ValidationError | ErrorBody,
+        201 | 400
+      >;
+    };
+    webhook: {
+      $post: Endpoint<undefined, ErrorBody | null, 200 | 400>;
+    };
+  };
+  upload: {
+    $post: Endpoint<{ query?: { key?: string } }, UploadResult, 201>;
+  };
+}

@@ -11,6 +11,7 @@
     "env:generate": "varlock codegen"
   },
   "dependencies": {
+    "@reptar/client": "workspace:*",
     "astro": "^7.3.1",
     "varlock": "catalog:",
     "zod": "catalog:"

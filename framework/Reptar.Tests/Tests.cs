@@ -237,3 +237,70 @@ public class E2eTests
         Assert.Equal(404, response.Status);
     }
 }
+
+public class StripeTests
+{
+    [Fact]
+    public async Task HmacSha256_computes_correct_signature()
+    {
+        var crypto = new DevCrypto();
+        var hash = await crypto.HmacSha256("secret_key", "test_message");
+        Assert.NotNull(hash);
+        Assert.Equal(64, hash.Length);
+
+        var hash2 = await crypto.HmacSha256("secret_key", "test_message");
+        Assert.Equal(hash, hash2);
+    }
+
+    [Fact]
+    public async Task Webhook_verifies_valid_signature()
+    {
+        var secret = "whsec_test_secret_123";
+        var receivedEvent = false;
+
+        var app = ReptarApp.Create();
+        app.Route("/stripe", Stripe.Routes(new StripeConfig
+        {
+            ApiKey = "sk_test_123",
+            WebhookSecret = secret,
+        }, (ctx, evt) =>
+        {
+            receivedEvent = true;
+            Assert.Equal("evt_123", evt.Id);
+            return Task.FromResult(ctx.Status(200));
+        }));
+
+        var payload = "{\"id\":\"evt_123\",\"type\":\"checkout.session.completed\",\"data\":{}}";
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var signedPayload = $"{timestamp}.{payload}";
+        var crypto = new DevCrypto();
+        var sig = await crypto.HmacSha256(secret, signedPayload);
+
+        var res = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/stripe/webhook",
+            Headers = new Dictionary<string, string>
+            {
+                ["stripe-signature"] = $"t={timestamp},v1={sig}",
+            },
+            Body = Encoding.UTF8.GetBytes(payload),
+        });
+
+        Assert.Equal(200, res.Status);
+        Assert.True(receivedEvent);
+
+        var badRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/stripe/webhook",
+            Headers = new Dictionary<string, string>
+            {
+                ["stripe-signature"] = $"t={timestamp},v1=bad_sig",
+            },
+            Body = Encoding.UTF8.GetBytes(payload),
+        });
+
+        Assert.Equal(400, badRes.Status);
+    }
+}

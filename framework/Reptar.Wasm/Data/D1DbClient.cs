@@ -1,4 +1,6 @@
 using System.Runtime.InteropServices.JavaScript;
+using System.Text;
+using System.Text.Json;
 
 namespace Reptar;
 
@@ -16,7 +18,8 @@ public sealed class D1DbClient : IDbClient
 
     public async Task<List<T>> QueryAsync<T>(string sql, object? param = null)
     {
-        var json = await Query(sql, Params(param));
+        var (normSql, paramsJson) = NormalizeSqlAndParams(sql, param);
+        var json = await Query(normSql, paramsJson);
         return _json.Deserialize<List<T>>(json) ?? [];
     }
 
@@ -28,49 +31,335 @@ public sealed class D1DbClient : IDbClient
         return rows.Count == 0 ? default : rows[0];
     }
 
-    public Task<int> ExecuteAsync(string sql, object? param = null) =>
-        Execute(sql, Params(param));
+    public Task<int> ExecuteAsync(string sql, object? param = null)
+    {
+        var (normSql, paramsJson) = NormalizeSqlAndParams(sql, param);
+        return Execute(normSql, paramsJson);
+    }
 
-    public Task<T?> GetAsync<T>(TableDef table, object id) =>
-        throw Unsupported("GetAsync");
+    public Task<T?> GetAsync<T>(TableDef table, object id)
+    {
+        var pk = table.SinglePrimaryKey;
+        var sql = $"select * from \"{table.Name}\" where \"{pk}\" = ? limit 1";
+        var paramsJson = SerializeParams([id]);
+        return QuerySingleOrDefaultAsync<T>(sql, paramsJson);
+    }
 
     public Task<List<T>> ListAsync<T>(
         TableDef table,
         string? clause = null,
         object? param = null,
         int limit = 0,
-        int offset = 0) =>
-        throw Unsupported("ListAsync");
+        int offset = 0)
+    {
+        var sql = new StringBuilder($"select * from \"{table.Name}\"");
 
-    public Task<int> InsertAsync(TableDef table, object values) =>
-        throw Unsupported("InsertAsync");
+        if (!string.IsNullOrWhiteSpace(clause))
+        {
+            sql.Append(' ').Append(clause);
+        }
 
-    public Task<int> UpdateAsync(TableDef table, object values, object id) =>
-        throw Unsupported("UpdateAsync");
+        if (limit > 0)
+        {
+            sql.Append($" limit {limit}");
 
-    public Task<int> DeleteAsync(TableDef table, object id) =>
-        throw Unsupported("DeleteAsync");
+            if (offset > 0)
+            {
+                sql.Append($" offset {offset}");
+            }
+        }
+
+        return QueryAsync<T>(sql.ToString(), param);
+    }
+
+    public Task<int> InsertAsync<T>(TableDef table, T values) where T : class
+    {
+        var json = _json.Serialize(values);
+        return InsertFromJsonAsync(table, json);
+    }
+
+    public Task<int> InsertAsync(TableDef table, object values)
+    {
+        var json = values is string s && s.TrimStart().StartsWith("{")
+            ? s
+            : _json.Serialize(values);
+        return InsertFromJsonAsync(table, json);
+    }
+
+    private Task<int> InsertFromJsonAsync(TableDef table, string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var cols = new List<string>();
+        var placeholders = new List<string>();
+        var paramValues = new List<object?>();
+
+        foreach (var prop in doc.RootElement.EnumerateObject())
+        {
+            var colName = ResolveColumnName(table, prop.Name);
+            cols.Add($"\"{colName}\"");
+            placeholders.Add("?");
+            paramValues.Add(JsonElementToValue(prop.Value));
+        }
+
+        var sql = $"insert into \"{table.Name}\" ({string.Join(", ", cols)}) values ({string.Join(", ", placeholders)})";
+        return ExecuteAsync(sql, SerializeParams(paramValues));
+    }
+
+    public Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class
+    {
+        var json = _json.Serialize(values);
+        return UpdateFromJsonAsync(table, json, id);
+    }
+
+    public Task<int> UpdateAsync(TableDef table, object values, object id)
+    {
+        var json = values is string s && s.TrimStart().StartsWith("{")
+            ? s
+            : _json.Serialize(values);
+        return UpdateFromJsonAsync(table, json, id);
+    }
+
+    private Task<int> UpdateFromJsonAsync(TableDef table, string json, object id)
+    {
+        var pk = table.SinglePrimaryKey;
+        using var doc = JsonDocument.Parse(json);
+        var setClauses = new List<string>();
+        var paramValues = new List<object?>();
+
+        foreach (var prop in doc.RootElement.EnumerateObject())
+        {
+            var colName = ResolveColumnName(table, prop.Name);
+            if (string.Equals(colName, pk, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(colName, "created_at", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            setClauses.Add($"\"{colName}\" = ?");
+            paramValues.Add(JsonElementToValue(prop.Value));
+        }
+
+        paramValues.Add(id);
+        var sql = $"update \"{table.Name}\" set {string.Join(", ", setClauses)} where \"{pk}\" = ?";
+        return ExecuteAsync(sql, SerializeParams(paramValues));
+    }
+
+    public Task<int> DeleteAsync(TableDef table, object id)
+    {
+        var pk = table.SinglePrimaryKey;
+        var sql = $"delete from \"{table.Name}\" where \"{pk}\" = ?";
+        return ExecuteAsync(sql, SerializeParams([id]));
+    }
 
     public Task<int> DeleteAsync<T>(TableDef table, object id) =>
-        throw Unsupported("DeleteAsync");
+        DeleteAsync(table, id);
 
     public Task<int> DeleteWhereAsync(
         TableDef table,
         string where,
-        object? param = null) =>
-        throw Unsupported("DeleteWhereAsync");
+        object? param = null)
+    {
+        var sql = $"delete from \"{table.Name}\" where {where}";
+        return ExecuteAsync(sql, param);
+    }
 
-    public Task<bool> ExistsAsync(
+    public async Task<bool> ExistsAsync(
         TableDef table,
         string where,
-        object? param = null) =>
-        throw Unsupported("ExistsAsync");
+        object? param = null)
+    {
+        var sql = $"select 1 as count from \"{table.Name}\" where {where} limit 1";
+        var rows = await QueryAsync<CountRow>(sql, param);
+        return rows.Count > 0;
+    }
 
     public Task EnsureCreatedAsync(params TableDef[] tables) =>
         Task.CompletedTask;
 
-    private static string Params(object? param) => param as string ?? "[]";
+    private (string Sql, string ParamsJson) NormalizeSqlAndParams(string sql, object? param)
+    {
+        if (param is null)
+        {
+            return (sql, "[]");
+        }
 
-    private static NotSupportedException Unsupported(string operation) =>
-        new($"{operation} requires source-generated table metadata on the Wasm target.");
+        if (param is string s && s.TrimStart().StartsWith("["))
+        {
+            return (sql, s);
+        }
+
+        if (param is string or int or long or double or float or decimal or bool or Guid)
+        {
+            return (sql, SerializeParams([param]));
+        }
+
+        if (param is System.Collections.IEnumerable list and not string and not System.Collections.IDictionary)
+        {
+            var items = new List<object?>();
+            foreach (var item in list)
+            {
+                items.Add(item);
+            }
+            return (sql, SerializeParams(items));
+        }
+
+        var json = _json.Serialize(param);
+        using var doc = JsonDocument.Parse(json);
+        var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var prop in doc.RootElement.EnumerateObject())
+        {
+            dict[prop.Name] = JsonElementToValue(prop.Value);
+            var snake = ToSnakeCase(prop.Name);
+            if (!dict.ContainsKey(snake))
+            {
+                dict[snake] = dict[prop.Name];
+            }
+        }
+
+        if (sql.Contains('@') || sql.Contains('$'))
+        {
+            var (rewrittenSql, paramNames) = ParseNamedParameters(sql);
+            var positionalValues = new List<object?>();
+
+            foreach (var name in paramNames)
+            {
+                if (dict.TryGetValue(name, out var val))
+                {
+                    positionalValues.Add(val);
+                }
+                else
+                {
+                    positionalValues.Add(null);
+                }
+            }
+
+            return (rewrittenSql, SerializeParams(positionalValues));
+        }
+
+        var valuesList = new List<object?>();
+        foreach (var val in dict.Values)
+        {
+            valuesList.Add(val);
+        }
+        return (sql, SerializeParams(valuesList));
+    }
+
+    private static (string Sql, List<string> ParamNames) ParseNamedParameters(string sql)
+    {
+        var sb = new StringBuilder();
+        var names = new List<string>();
+
+        for (var i = 0; i < sql.Length; i++)
+        {
+            var c = sql[i];
+            if ((c == '@' || c == '$') && i + 1 < sql.Length && (char.IsLetter(sql[i + 1]) || sql[i + 1] == '_'))
+            {
+                var start = i + 1;
+                var end = start;
+                while (end < sql.Length && (char.IsLetterOrDigit(sql[end]) || sql[end] == '_'))
+                {
+                    end++;
+                }
+
+                names.Add(sql[start..end]);
+                sb.Append('?');
+                i = end - 1;
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+
+        return (sb.ToString(), names);
+    }
+
+    private static string ResolveColumnName(TableDef table, string propName)
+    {
+        var normalizedProp = propName.Replace("_", "");
+        foreach (var col in table.Columns)
+        {
+            if (string.Equals(col.ClrName, propName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(col.SqlName, propName, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(col.SqlName.Replace("_", ""), normalizedProp, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(col.ClrName.Replace("_", ""), normalizedProp, StringComparison.OrdinalIgnoreCase))
+            {
+                return col.SqlName;
+            }
+        }
+
+        return ToSnakeCase(propName);
+    }
+
+    private static string ToSnakeCase(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        var sb = new StringBuilder();
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsUpper(c))
+            {
+                if (i > 0)
+                {
+                    sb.Append('_');
+                }
+                sb.Append(char.ToLowerInvariant(c));
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    private static object? JsonElementToValue(JsonElement elem) => elem.ValueKind switch
+    {
+        JsonValueKind.String => elem.GetString(),
+        JsonValueKind.Number => elem.TryGetInt64(out var l) ? l : elem.GetDouble(),
+        JsonValueKind.True => 1,
+        JsonValueKind.False => 0,
+        JsonValueKind.Null or JsonValueKind.Undefined => null,
+        _ => elem.GetRawText(),
+    };
+
+    private static string SerializeParams(IEnumerable<object?> values)
+    {
+        var parts = new List<string>();
+
+        foreach (var v in values)
+        {
+            if (v is null)
+            {
+                parts.Add("null");
+            }
+            else if (v is string s)
+            {
+                parts.Add(JsonSerializer.Serialize(s, ReptarJson.Options));
+            }
+            else if (v is bool b)
+            {
+                parts.Add(b ? "1" : "0");
+            }
+            else if (v is int or long or short or byte or float or double or decimal)
+            {
+                parts.Add(v.ToString() ?? "0");
+            }
+            else
+            {
+                parts.Add(JsonSerializer.Serialize(v.ToString() ?? "", ReptarJson.Options));
+            }
+        }
+
+        return $"[{string.Join(",", parts)}]";
+    }
+
+    private sealed record CountRow(int Count);
 }

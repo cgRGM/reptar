@@ -1,13 +1,7 @@
 ---
 import Layout from "../layouts/layout.astro";
-
-interface Post {
-  id: string;
-  title: string;
-  content: string;
-  imageKey: string | null;
-  createdAt: string;
-}
+import { createClient } from "@reptar/client";
+import type { AppType, Post } from "@reptar/client";
 
 const localApiUrl =
   import.meta.env.PUBLIC_API_URL ?? "http://localhost:8788";
@@ -41,10 +35,12 @@ const apiService = cloudflareEnv?.API as
   | { fetch: (request: Request) => Promise<Response> }
   | undefined;
 
-const fetchApi = (path: string, init?: RequestInit): Promise<Response> =>
-  apiService
-    ? apiService.fetch(new Request(`${apiUrl}${path}`, init))
-    : fetch(`${apiUrl}${path}`, init);
+const client = createClient<AppType>(apiUrl, {
+  fetch: (input, init) =>
+    apiService
+      ? apiService.fetch(new Request(input, init))
+      : fetch(input, init),
+});
 
 let posts: Post[] = [];
 let error: string | null = null;
@@ -57,10 +53,10 @@ const sleep = (milliseconds: number): Promise<void> =>
 
 const loadPosts = async (attempt: number): Promise<void> => {
   try {
-    const response = await fetchApi("/posts");
+    const response = await client.posts.$get();
 
     if (response.ok) {
-      posts = (await response.json()) as Post[];
+      posts = await response.json();
       error = null;
       return;
     }
@@ -118,6 +114,13 @@ await loadPosts(0);
         >
           Raw API JSON ↗
         </a>
+
+        <div id="auth-status-pill" class="flex items-center gap-2 rounded border border-[#232730] bg-[#111317] px-3 py-1.5 text-xs text-zinc-400">
+          <span id="auth-indicator" class="h-2 w-2 rounded-full bg-zinc-600"></span>
+          <span id="auth-user-text">Checking session…</span>
+          <a href="/login" id="auth-login-link" class="hidden text-emerald-400 hover:text-emerald-300 ml-1">Sign in &rarr;</a>
+          <button type="button" id="auth-signout-btn" class="hidden text-zinc-500 hover:text-red-400 ml-2">Sign out</button>
+        </div>
       </div>
     </div>
   </section>
@@ -272,5 +275,50 @@ await loadPosts(0);
           error instanceof Error ? error.message : "Something went wrong.";
       }
     });
+
+    // Check active user session
+    const indicator = document.querySelector("#auth-indicator");
+    const userText = document.querySelector("#auth-user-text");
+    const loginLink = document.querySelector("#auth-login-link");
+    const signoutBtn = document.querySelector("#auth-signout-btn");
+
+    const initSession = async () => {
+      try {
+        const response = await fetch(`${apiUrl}/auth/session`, { credentials: "include" });
+        const data = response.ok ? await response.json() : null;
+
+        if (data?.user) {
+          if (indicator) {
+            indicator.className = "h-2 w-2 rounded-full bg-emerald-500";
+          }
+          if (userText) {
+            userText.textContent = `Signed in as ${data.user.email || data.user.name || "User"}`;
+          }
+          if (signoutBtn) {
+            signoutBtn.classList.remove("hidden");
+            signoutBtn.addEventListener("click", async () => {
+              await fetch(`${apiUrl}/auth/signout`, { credentials: "include", method: "POST" });
+              location.reload();
+            });
+          }
+        } else {
+          if (indicator) {
+            indicator.className = "h-2 w-2 rounded-full bg-amber-500";
+          }
+          if (userText) {
+            userText.textContent = "Not signed in";
+          }
+          if (loginLink) {
+            loginLink.classList.remove("hidden");
+          }
+        }
+      } catch {
+        if (userText) {
+          userText.textContent = "Offline";
+        }
+      }
+    };
+
+    void initSession();
   </script>
 </Layout>

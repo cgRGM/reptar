@@ -75,6 +75,12 @@ public sealed class TableDef
         return new TableDef(name, definitions);
     }
 
+    public static TableDef Define(string name, params ColumnBuilder[] columns) =>
+        new(name, columns.Select(c => c.Build(c.GetType().Name)).ToArray());
+
+    public static TableDef Define(string name, params ColumnDef[] columns) =>
+        new(name, columns);
+
     public TableDef PrimaryKey(params string[] sqlNames)
     {
         PrimaryKeySql = sqlNames;

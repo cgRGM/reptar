@@ -9,6 +9,10 @@ public sealed class ReptarConfig
     public IR2Client? Storage { get; set; }
     public IAiClient? AI { get; set; }
     public IRateLimiter? RateLimit { get; set; }
+    public IKvClient? Cache { get; set; }
+    public IQueueClient? Queues { get; set; }
+    public IDurableBridge? Durable { get; set; }
+    public IHttpClient? Http { get; set; }
     public ICrypto? Crypto { get; set; }
     public IClock? Clock { get; set; }
     public IJsonCodec? Json { get; set; }
@@ -41,6 +45,12 @@ public static class ReptarApi
 
     public static TableDef DefineTable(string name, object columns) =>
         TableDef.Create(name, columns);
+
+    public static TableDef DefineTable(string name, params ColumnBuilder[] columns) =>
+        TableDef.Define(name, columns);
+
+    public static TableDef DefineTable(string name, params ColumnDef[] columns) =>
+        TableDef.Define(name, columns);
 
     public static AuthOptions BuiltIn(AuthOptions? options = null) =>
         options ?? new AuthOptions();

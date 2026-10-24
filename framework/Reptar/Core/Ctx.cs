@@ -20,6 +20,10 @@ public sealed class Ctx
     public IR2Client Storage => _services.Storage;
     public IAiClient AI => _services.AI;
     public IRateLimiter RateLimit => _services.RateLimit;
+    public IKvClient Cache => _services.Cache;
+    public IQueueClient Queues => _services.Queues;
+    public IDurableBridge Durable => _services.Durable;
+    public IHttpClient Http => _services.Http;
     public IClock Clock => _services.Clock;
     public ICrypto Crypto => _services.Crypto;
     public IJsonCodec JsonCodec => _services.Json;
@@ -88,6 +92,10 @@ internal sealed record ServiceSet(
     IR2Client Storage,
     IAiClient AI,
     IRateLimiter RateLimit,
+    IKvClient Cache,
+    IQueueClient Queues,
+    IDurableBridge Durable,
+    IHttpClient Http,
     IClock Clock,
     ICrypto Crypto,
     IJsonCodec Json);

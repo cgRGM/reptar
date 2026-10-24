@@ -15,6 +15,9 @@ public sealed class WasmCrypto : ICrypto
     [JSImport("sha256", "app.host")]
     private static extern Task<string> Sha256Js(string input);
 
+    [JSImport("hmacSha256", "app.host")]
+    private static extern Task<string> HmacSha256Js(string key, string message);
+
     [JSImport("randomToken", "app.host")]
     private static extern string RandomTokenJs(int bytes);
 
@@ -25,6 +28,9 @@ public sealed class WasmCrypto : ICrypto
         VerifyPasswordJs(password, hash);
 
     public Task<string> Sha256(string input) => Sha256Js(input);
+
+    public Task<string> HmacSha256(string key, string message) =>
+        HmacSha256Js(key, message);
 
     public string RandomToken(int bytes = 32) => RandomTokenJs(bytes);
 }
