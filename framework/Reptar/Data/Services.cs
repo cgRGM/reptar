@@ -20,6 +20,13 @@ public interface IDbClient
     Task<int> DeleteAsync<T>(TableDef table, object id);
     Task<int> DeleteWhereAsync(TableDef table, string where, object? param = null);
     Task<bool> ExistsAsync(TableDef table, string where, object? param = null);
+
+    Task<List<T>> QueryMappedAsync<T>(
+        string sql,
+        object? param,
+        Func<IReadOnlyDictionary<string, object?>, T> map) =>
+        QueryAsync<T>(sql, param);
+
     Task EnsureCreatedAsync(params TableDef[] tables);
 
     async Task<int> CountAsync(
@@ -53,6 +60,7 @@ public interface IDbClient
     }
 }
 
+[System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors | System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)]
 public sealed record DbCount(int Count);
 
 public sealed record DbStatement(string Sql, object? Param = null);

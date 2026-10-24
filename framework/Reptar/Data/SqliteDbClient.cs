@@ -176,7 +176,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         return QuerySingleOrDefaultAsync<T>(
             $"SELECT * FROM \"{table.Name}\" WHERE \"{primaryKey}\" = @id",
-            new { id });
+            new Dictionary<string, object?> { ["id"] = id });
     }
 
     public Task<List<T>> ListAsync<
@@ -373,7 +373,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         return ExecuteAsync(
             $"DELETE FROM \"{table.Name}\" WHERE \"{primaryKey}\" = @id",
-            new { id });
+            new Dictionary<string, object?> { ["id"] = id });
     }
 
     public Task<int> DeleteAsync<T>(TableDef table, object id) => DeleteAsync(table, id);
