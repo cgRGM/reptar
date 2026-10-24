@@ -70,7 +70,7 @@ A separate Cloudflare Workers + D1 deployment (`reptar-realworld-bench`) passes 
 | `GET /api/articles/feed`     |           72 |   635 ms |
 | `POST /api/articles`         |           13 |   559 ms |
 
-These include VPS-to-edge WAN latency and D1 round trips, and use a different dataset and connection count from the VPS table. They demonstrate correctness and the shape of the edge latency profile, not a like-for-like compute comparison.
+These use a different dataset and connection count from the VPS table. Cloudflare logs show 1–2 ms client RTT from the VPS to the Columbus (CMH) colo, so the edge gap is Worker CPU and D1 time rather than WAN latency. The logs show roughly 150–245 ms CPU time for a single-article request, making Worker CPU/interop the next optimization target.
 
 ## AOT lessons
 
