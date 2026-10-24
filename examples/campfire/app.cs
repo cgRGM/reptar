@@ -99,7 +99,9 @@ app.Post("/rooms/:id/messages", async ctx =>
     {
         try
         {
-            var jsonInput = await ctx.Req.JsonAsync<CreateMessageInput>();
+            var jsonInput = !string.IsNullOrWhiteSpace(ctx.Req.BodyText)
+                ? ctx.JsonCodec.Deserialize<CreateMessageInput>(ctx.Req.BodyText)
+                : null;
             body = jsonInput?.Body;
             userName = jsonInput?.UserName;
             userId = jsonInput?.UserId > 0 ? jsonInput.UserId : 1;

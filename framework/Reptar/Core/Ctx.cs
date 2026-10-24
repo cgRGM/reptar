@@ -47,12 +47,15 @@ public sealed class Ctx
     public ReptarResponse Json<T>(T value, int status = 200) =>
         ReptarResponse.Json(_services.Json.Serialize(value), status);
 
-    public ReptarResponse Text(string text, int status = 200) => new()
+    public ReptarResponse Text(string text, int status = 200, string contentType = "text/plain; charset=utf-8") => new()
     {
         Status = status,
-        ContentType = "text/plain; charset=utf-8",
+        ContentType = contentType,
         Body = Encoding.UTF8.GetBytes(text),
     };
+
+    public ReptarResponse Html(string html, int status = 200, string contentType = "text/html; charset=utf-8") =>
+        Text(html, status, contentType);
 
     public ReptarResponse Status(int status) => new() { Status = status };
 
