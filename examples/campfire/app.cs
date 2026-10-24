@@ -46,7 +46,7 @@ var campfire = app.UseCampfire("/cable", hub =>
 var existingRooms = await database.ListAsync<RoomRecord>(Rooms, limit: 1);
 if (existingRooms.Count == 0)
 {
-    await database.InsertAsync(Rooms, new { Name = "Watercooler", Topic = "General banter & watercooler chatter" });
+    await database.InsertAsync(Rooms, new Dictionary<string, object?> { ["name"] = "Watercooler", ["topic"] = "General banter & watercooler chatter" });
 }
 
 // REST Routes for Campfire Chat & Action Cable Broadcasts
@@ -65,7 +65,7 @@ app.Post<CreateRoomInput>("/rooms", async (ctx, input) =>
         return ctx.BadRequest("Room name is required.");
     }
 
-    await ctx.Db.InsertAsync(Rooms, new { Name = input.Name, Topic = input.Topic });
+    await ctx.Db.InsertAsync(Rooms, new Dictionary<string, object?> { ["name"] = input.Name, ["topic"] = input.Topic });
     return ctx.Json(new { name = input.Name, topic = input.Topic }, status: 201);
 });
 
@@ -75,7 +75,7 @@ app.Get("/rooms/:id/messages", async ctx =>
     var list = await ctx.Db.ListAsync<MessageRecord>(
         Messages,
         clause: "WHERE room_id = @room_id ORDER BY id ASC LIMIT 100",
-        param: new { room_id = roomId }
+        param: new Dictionary<string, object?> { ["room_id"] = roomId }
     );
     return ctx.Json(list);
 });
@@ -93,18 +93,18 @@ app.Post<CreateMessageInput>("/rooms/:id/messages", async (ctx, input) =>
     var userId = input.UserId > 0 ? input.UserId : 1;
     var now = DateTimeOffset.UtcNow.ToString("O");
 
-    await ctx.Db.InsertAsync(Messages, new
+    await ctx.Db.InsertAsync(Messages, new Dictionary<string, object?>
     {
-        RoomId = roomId,
-        UserId = userId,
-        UserName = userName,
-        Body = input.Body,
-        CreatedAt = now,
+        ["room_id"] = roomId,
+        ["user_id"] = userId,
+        ["user_name"] = userName,
+        ["body"] = input.Body,
+        ["created_at"] = now,
     });
 
     var inserted = await ctx.Db.QuerySingleOrDefaultAsync<MessageRecord>(
         "SELECT * FROM \"messages\" WHERE room_id = @room_id ORDER BY id DESC LIMIT 1",
-        new { room_id = roomId }
+        new Dictionary<string, object?> { ["room_id"] = roomId }
     );
 
     var messageObj = new CampfireMessage(
@@ -135,7 +135,7 @@ app.Put<UpdateMessageInput>("/rooms/:id/messages/:messageId", async (ctx, input)
         return ctx.BadRequest("Updated body cannot be empty.");
     }
 
-    await ctx.Db.UpdateAsync(Messages, new { Body = input.Body }, messageId);
+    await ctx.Db.UpdateAsync(Messages, new Dictionary<string, object?> { ["body"] = input.Body }, messageId);
 
     var existing = await ctx.Db.GetAsync<MessageRecord>(Messages, messageId);
     if (existing is null)

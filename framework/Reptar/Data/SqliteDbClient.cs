@@ -153,22 +153,72 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     public Task<int> InsertAsync(TableDef table, object values)
     {
+        if (values is IDictionary dictionary)
+        {
+            var cols = new List<string>();
+            var pnames = new List<string>();
+            var paramDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                var key = entry.Key?.ToString() ?? "";
+                var col = table.Columns.FirstOrDefault(c =>
+                    string.Equals(c.ClrName, key, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(c.SqlName, key, StringComparison.OrdinalIgnoreCase));
+
+                var sqlName = col?.SqlName ?? key;
+                cols.Add($"\"{sqlName}\"");
+                pnames.Add("@" + key);
+                paramDict[key] = entry.Value;
+            }
+
+            var sql = $"INSERT INTO \"{table.Name}\" ({string.Join(", ", cols)}) VALUES ({string.Join(", ", pnames)})";
+            return ExecuteAsync(sql, paramDict);
+        }
+
         var properties = values.GetType()
             .GetProperties()
             .ToDictionary(property => property.Name, StringComparer.OrdinalIgnoreCase);
+
+        if (properties.Count == 0 && values is not null)
+        {
+            try
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(values);
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    dict[prop.Name] = prop.Value.ValueKind switch
+                    {
+                        System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
+                        System.Text.Json.JsonValueKind.Number => prop.Value.TryGetInt64(out var l) ? l : prop.Value.GetDouble(),
+                        System.Text.Json.JsonValueKind.True => 1L,
+                        System.Text.Json.JsonValueKind.False => 0L,
+                        System.Text.Json.JsonValueKind.Null => null,
+                        _ => prop.Value.GetRawText()
+                    };
+                }
+                return InsertAsync(table, dict);
+            }
+            catch
+            {
+                // Fall through to standard property mapping
+            }
+        }
 
         var columns = table.Columns
             .Where(column => properties.ContainsKey(column.ClrName))
             .ToArray();
 
-        var sql = new StringBuilder();
-        sql.Append($"INSERT INTO \"{table.Name}\" (");
-        sql.Append(string.Join(", ", columns.Select(column => $"\"{column.SqlName}\"")));
-        sql.Append(") VALUES (");
-        sql.Append(string.Join(", ", columns.Select(column => "@" + column.ClrName)));
-        sql.Append(')');
+        var sqlBuilder = new StringBuilder();
+        sqlBuilder.Append($"INSERT INTO \"{table.Name}\" (");
+        sqlBuilder.Append(string.Join(", ", columns.Select(column => $"\"{column.SqlName}\"")));
+        sqlBuilder.Append(") VALUES (");
+        sqlBuilder.Append(string.Join(", ", columns.Select(column => "@" + column.ClrName)));
+        sqlBuilder.Append(')');
 
-        return ExecuteAsync(sql.ToString(), values);
+        return ExecuteAsync(sqlBuilder.ToString(), values);
     }
 
     public Task<int> InsertAsync<T>(TableDef table, T values) where T : class =>
@@ -180,9 +230,61 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             ?? throw new InvalidOperationException(
                 $"Table '{table.Name}' has no single primary key.");
 
+        if (values is IDictionary dictionary)
+        {
+            var sets = new List<string>();
+            var paramDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                var key = entry.Key?.ToString() ?? "";
+                var col = table.Columns.FirstOrDefault(c =>
+                    string.Equals(c.ClrName, key, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(c.SqlName, key, StringComparison.OrdinalIgnoreCase));
+
+                var sqlName = col?.SqlName ?? key;
+                if (string.Equals(sqlName, primaryKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                sets.Add($"\"{sqlName}\" = @{key}");
+                paramDict[key] = entry.Value;
+            }
+
+            paramDict["__id"] = id;
+            var updateSql = $"UPDATE \"{table.Name}\" SET {string.Join(", ", sets)} WHERE \"{primaryKey}\" = @__id";
+            return ExecuteAsync(updateSql, paramDict);
+        }
+
         var properties = values.GetType()
             .GetProperties()
             .ToDictionary(property => property.Name, StringComparer.OrdinalIgnoreCase);
+
+        if (properties.Count == 0 && values is not null)
+        {
+            try
+            {
+                var json = System.Text.Json.JsonSerializer.Serialize(values);
+                using var doc = System.Text.Json.JsonDocument.Parse(json);
+                var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    dict[prop.Name] = prop.Value.ValueKind switch
+                    {
+                        System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
+                        System.Text.Json.JsonValueKind.Number => prop.Value.TryGetInt64(out var l) ? l : prop.Value.GetDouble(),
+                        System.Text.Json.JsonValueKind.True => 1L,
+                        System.Text.Json.JsonValueKind.False => 0L,
+                        System.Text.Json.JsonValueKind.Null => null,
+                        _ => prop.Value.GetRawText()
+                    };
+                }
+                return UpdateAsync(table, dict, id);
+            }
+            catch
+            {
+                // Fall through to standard property mapping
+            }
+        }
 
         var columns = table.Columns
             .Where(column =>
