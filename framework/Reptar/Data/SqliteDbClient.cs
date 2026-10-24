@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
@@ -8,16 +9,34 @@ namespace Reptar;
 
 public sealed class SqliteDbClient : IDbClient, IDisposable
 {
-    private readonly SqliteConnection _connection;
-    private readonly SemaphoreSlim _gate = new(1, 1);
+    private readonly string _connectionString;
+    private readonly bool _isMemory;
+    private readonly SqliteConnection _writeConnection;
+    private readonly SemaphoreSlim _writeGate = new(1, 1);
+    private readonly SemaphoreSlim _readSemaphore;
+    private readonly ConcurrentQueue<SqliteConnection> _readConnections = new();
+    private readonly List<SqliteConnection> _allConnections = new();
+    private bool _disposed;
 
-    public SqliteDbClient(string path)
+    public SqliteDbClient(string path, int maxReadConnections = 0)
     {
-        _connection = new SqliteConnection($"Data Source={path}");
-        _connection.Open();
+        _isMemory = string.Equals(path, ":memory:", StringComparison.OrdinalIgnoreCase) ||
+                    path.Contains("Mode=Memory", StringComparison.OrdinalIgnoreCase);
 
-        ExecutePragma("PRAGMA foreign_keys = ON");
-        ExecutePragma("PRAGMA busy_timeout = 5000");
+        _connectionString = path.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase)
+            ? path
+            : $"Data Source={path}";
+
+        _writeConnection = new SqliteConnection(_connectionString);
+        _writeConnection.Open();
+
+        lock (_allConnections)
+        {
+            _allConnections.Add(_writeConnection);
+        }
+
+        ExecutePragma(_writeConnection, "PRAGMA foreign_keys = ON");
+        ExecutePragma(_writeConnection, "PRAGMA busy_timeout = 5000");
 
         var journalMode = AllowedPragma(
             Environment.GetEnvironmentVariable("REPTAR_SQLITE_JOURNAL_MODE"),
@@ -27,7 +46,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             "PERSIST",
             "MEMORY",
             "WAL");
-        ExecutePragma($"PRAGMA journal_mode = {journalMode}");
+        ExecutePragma(_writeConnection, $"PRAGMA journal_mode = {journalMode}");
 
         var synchronous = AllowedPragma(
             Environment.GetEnvironmentVariable("REPTAR_SQLITE_SYNCHRONOUS"),
@@ -36,7 +55,25 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             "NORMAL",
             "FULL",
             "EXTRA");
-        ExecutePragma($"PRAGMA synchronous = {synchronous}");
+        ExecutePragma(_writeConnection, $"PRAGMA synchronous = {synchronous}");
+
+        if (_isMemory)
+        {
+            _readSemaphore = new SemaphoreSlim(1, 1);
+        }
+        else
+        {
+            if (maxReadConnections <= 0)
+            {
+                var envPool = Environment.GetEnvironmentVariable("REPTAR_SQLITE_READ_POOL_SIZE");
+                if (int.TryParse(envPool, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
+                    maxReadConnections = parsed;
+                else
+                    maxReadConnections = Math.Clamp(Environment.ProcessorCount * 2, 4, 16);
+            }
+
+            _readSemaphore = new SemaphoreSlim(maxReadConnections, maxReadConnections);
+        }
     }
 
     private static string AllowedPragma(
@@ -50,11 +87,72 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             : fallback;
     }
 
-    private void ExecutePragma(string sql)
+    private static void ExecutePragma(SqliteConnection connection, string sql)
     {
-        using var command = _connection.CreateCommand();
+        using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    private async ValueTask<RentedConnection> RentReadConnectionAsync(string? sql = null)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (_isMemory || (sql != null && sql.Contains("last_insert_rowid", StringComparison.OrdinalIgnoreCase)))
+        {
+            await _writeGate.WaitAsync();
+            return new RentedConnection(_writeConnection, isWriter: true, this);
+        }
+
+        await _readSemaphore.WaitAsync();
+        if (!_readConnections.TryDequeue(out var connection))
+        {
+            connection = CreateReadConnection();
+            lock (_allConnections)
+            {
+                _allConnections.Add(connection);
+            }
+        }
+
+        return new RentedConnection(connection, isWriter: false, this);
+    }
+
+    private SqliteConnection CreateReadConnection()
+    {
+        var connection = new SqliteConnection(_connectionString);
+        connection.Open();
+        ExecutePragma(connection, "PRAGMA foreign_keys = ON");
+        ExecutePragma(connection, "PRAGMA busy_timeout = 5000");
+        return connection;
+    }
+
+    private readonly struct RentedConnection : IDisposable
+    {
+        private readonly SqliteConnection _connection;
+        private readonly bool _isWriter;
+        private readonly SqliteDbClient _client;
+
+        public RentedConnection(SqliteConnection connection, bool isWriter, SqliteDbClient client)
+        {
+            _connection = connection;
+            _isWriter = isWriter;
+            _client = client;
+        }
+
+        public SqliteConnection Connection => _connection;
+
+        public void Dispose()
+        {
+            if (_isWriter)
+            {
+                _client._writeGate.Release();
+            }
+            else
+            {
+                _client._readConnections.Enqueue(_connection);
+                _client._readSemaphore.Release();
+            }
+        }
     }
 
     public async Task<List<T>> QueryAsync<
@@ -64,24 +162,16 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         string sql,
         object? param = null)
     {
-        await _gate.WaitAsync();
+        using var rented = await RentReadConnectionAsync(sql);
+        await using var command = BuildCommand(rented.Connection, sql, param);
+        await using var reader = await command.ExecuteReaderAsync();
+        var map = RowMapper.Resolve<T>(reader);
 
-        try
-        {
-            await using var command = BuildCommand(sql, param);
-            await using var reader = await command.ExecuteReaderAsync();
-            var map = RowMapper.Resolve<T>(reader);
+        var results = new List<T>();
+        while (await reader.ReadAsync())
+            results.Add(map(reader));
 
-            var results = new List<T>();
-            while (await reader.ReadAsync())
-                results.Add(map(reader));
-
-            return results;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        return results;
     }
 
     public async Task<List<T>> QueryMappedAsync<T>(
@@ -89,35 +179,27 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         object? param,
         Func<IReadOnlyDictionary<string, object?>, T> map)
     {
-        await _gate.WaitAsync();
+        using var rented = await RentReadConnectionAsync(sql);
+        await using var command = BuildCommand(rented.Connection, sql, param);
+        await using var reader = await command.ExecuteReaderAsync();
+        var results = new List<T>();
 
-        try
+        while (await reader.ReadAsync())
         {
-            await using var command = BuildCommand(sql, param);
-            await using var reader = await command.ExecuteReaderAsync();
-            var results = new List<T>();
+            var values = new Dictionary<string, object?>(
+                StringComparer.OrdinalIgnoreCase);
 
-            while (await reader.ReadAsync())
+            for (var index = 0; index < reader.FieldCount; index++)
             {
-                var values = new Dictionary<string, object?>(
-                    StringComparer.OrdinalIgnoreCase);
-
-                for (var index = 0; index < reader.FieldCount; index++)
-                {
-                    values[reader.GetName(index)] = reader.IsDBNull(index)
-                        ? null
-                        : reader.GetValue(index);
-                }
-
-                results.Add(map(values));
+                values[reader.GetName(index)] = reader.IsDBNull(index)
+                    ? null
+                    : reader.GetValue(index);
             }
 
-            return results;
+            results.Add(map(values));
         }
-        finally
-        {
-            _gate.Release();
-        }
+
+        return results;
     }
 
     public async Task<T?> QuerySingleOrDefaultAsync<
@@ -133,16 +215,16 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     public async Task<int> ExecuteAsync(string sql, object? param = null)
     {
-        await _gate.WaitAsync();
+        await _writeGate.WaitAsync();
 
         try
         {
-            await using var command = BuildCommand(sql, param);
+            await using var command = BuildCommand(_writeConnection, sql, param);
             return await command.ExecuteNonQueryAsync();
         }
         finally
         {
-            _gate.Release();
+            _writeGate.Release();
         }
     }
 
@@ -166,11 +248,11 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     public async Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
     {
-        await _gate.WaitAsync();
+        await _writeGate.WaitAsync();
 
         try
         {
-            await using var transaction = await _connection.BeginTransactionAsync();
+            await using var transaction = await _writeConnection.BeginTransactionAsync();
             var changes = 0;
 
             try
@@ -178,6 +260,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
                 foreach (var statement in statements)
                 {
                     await using var command = BuildCommand(
+                        _writeConnection,
                         statement.Sql,
                         statement.Param);
                     command.Transaction = (SqliteTransaction)transaction;
@@ -195,7 +278,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
         finally
         {
-            _gate.Release();
+            _writeGate.Release();
         }
     }
 
@@ -419,43 +502,76 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     public async Task<bool> ExistsAsync(TableDef table, string where, object? param = null)
     {
-        await _gate.WaitAsync();
+        var sql = $"SELECT EXISTS(SELECT 1 FROM \"{table.Name}\" WHERE {where})";
+        using var rented = await RentReadConnectionAsync(sql);
 
-        try
-        {
-            await using var command = BuildCommand(
-                $"SELECT EXISTS(SELECT 1 FROM \"{table.Name}\" WHERE {where})",
-                param);
+        await using var command = BuildCommand(
+            rented.Connection,
+            sql,
+            param);
 
-            var result = await command.ExecuteScalarAsync();
-            return Convert.ToInt64(result, CultureInfo.InvariantCulture) == 1;
-        }
-        finally
-        {
-            _gate.Release();
-        }
+        var result = await command.ExecuteScalarAsync();
+        return Convert.ToInt64(result, CultureInfo.InvariantCulture) == 1;
     }
 
     public async Task EnsureCreatedAsync(params TableDef[] tables)
     {
-        foreach (var table in tables)
-        {
-            await ExecuteAsync(SchemaDdl.CreateTable(table) + ";");
+        await _writeGate.WaitAsync();
 
-            foreach (var index in SchemaDdl.CreateIndexes(table))
-                await ExecuteAsync(index + ";");
+        try
+        {
+            foreach (var table in tables)
+            {
+                await using (var command = _writeConnection.CreateCommand())
+                {
+                    command.CommandText = SchemaDdl.CreateTable(table) + ";";
+                    await command.ExecuteNonQueryAsync();
+                }
+
+                foreach (var index in SchemaDdl.CreateIndexes(table))
+                {
+                    await using var command = _writeConnection.CreateCommand();
+                    command.CommandText = index + ";";
+                    await command.ExecuteNonQueryAsync();
+                }
+            }
+        }
+        finally
+        {
+            _writeGate.Release();
         }
     }
 
     public void Dispose()
     {
-        _connection.Dispose();
-        _gate.Dispose();
+        if (_disposed)
+            return;
+
+        _disposed = true;
+
+        _writeGate.Wait();
+        try
+        {
+            lock (_allConnections)
+            {
+                foreach (var connection in _allConnections)
+                {
+                    try { connection.Dispose(); } catch { }
+                }
+                _allConnections.Clear();
+            }
+        }
+        finally
+        {
+            _writeGate.Release();
+            _writeGate.Dispose();
+            _readSemaphore.Dispose();
+        }
     }
 
-    private SqliteCommand BuildCommand(string sql, object? param)
+    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, object? param)
     {
-        var command = _connection.CreateCommand();
+        var command = connection.CreateCommand();
         command.CommandText = sql;
 
         if (param is null)

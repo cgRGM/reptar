@@ -1572,4 +1572,52 @@ public class AotSafeSqliteTests
 
         Assert.Equal(0, await db.CountAsync(TestSchema.Widgets));
     }
+
+    [Fact]
+    public async Task SqliteDbClient_supports_concurrent_readers_in_wal_mode()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), $"reptar_pool_test_{Guid.NewGuid():N}.db");
+
+        try
+        {
+            using (var db = new SqliteDbClient(tempFile, maxReadConnections: 4))
+            {
+                await db.EnsureCreatedAsync(TestSchema.Widgets);
+                await db.InsertAsync(TestSchema.Widgets, new Widget("w1", "ConcurrentWidget", 42));
+
+                // Launch 16 concurrent read tasks simultaneously
+                var tasks = Enumerable.Range(0, 16).Select(async _ =>
+                {
+                    var result = await db.QuerySingleOrDefaultAsync<Widget>(
+                        "SELECT id, name, count FROM widgets WHERE id = @id",
+                        new Dictionary<string, object?> { ["id"] = "w1" });
+
+                    Assert.NotNull(result);
+                    Assert.Equal("ConcurrentWidget", result.Name);
+                    Assert.Equal(42, result.Count);
+                });
+
+                await Task.WhenAll(tasks);
+            }
+        }
+        finally
+        {
+            try { File.Delete(tempFile); } catch { }
+            try { File.Delete(tempFile + "-wal"); } catch { }
+            try { File.Delete(tempFile + "-shm"); } catch { }
+        }
+    }
+
+    [Fact]
+    public void SqlDialects_formats_identifiers_and_parameters_for_all_supported_engines()
+    {
+        Assert.Equal("\"users\"", SqlDialects.Sqlite.QuoteIdentifier("users"));
+        Assert.Equal("@name", SqlDialects.Sqlite.FormatParameter("name", 1));
+
+        Assert.Equal("\"users\"", SqlDialects.Postgres.QuoteIdentifier("users"));
+        Assert.Equal("$1", SqlDialects.Postgres.FormatParameter("name", 1));
+
+        Assert.Equal("`users`", SqlDialects.MySql.QuoteIdentifier("users"));
+        Assert.Equal("@name", SqlDialects.MySql.FormatParameter("name", 1));
+    }
 }
