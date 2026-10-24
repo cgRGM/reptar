@@ -88,11 +88,12 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
             .OrderByDescending(c => c.Parameters.Length)
             .FirstOrDefault();
 
+        var hasConstructorParams = constructor != null && constructor.Parameters.Length > 0;
         var members = new List<(string Name, ITypeSymbol Type)>();
 
-        if (constructor != null && constructor.Parameters.Length > 0)
+        if (hasConstructorParams)
         {
-            foreach (var param in constructor.Parameters)
+            foreach (var param in constructor!.Parameters)
             {
                 members.Add((param.Name, param.Type));
             }
@@ -101,7 +102,12 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
         {
             var properties = typeSymbol.GetMembers()
                 .OfType<IPropertySymbol>()
-                .Where(p => p.DeclaredAccessibility == Accessibility.Public && !p.IsStatic && p.GetMethod != null);
+                .Where(p => p.DeclaredAccessibility == Accessibility.Public &&
+                            !p.IsStatic &&
+                            p.GetMethod != null &&
+                            p.SetMethod != null &&
+                            (p.SetMethod.DeclaredAccessibility == Accessibility.Public ||
+                             p.SetMethod.DeclaredAccessibility == Accessibility.Internal));
 
             foreach (var prop in properties)
             {
@@ -155,18 +161,39 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
 
         sb.AppendLine($"    public {typeName} Map(global::System.Data.IDataRecord record)");
         sb.AppendLine("    {");
-        sb.AppendLine($"        return new {typeName}(");
 
-        for (var i = 0; i < members.Count; i++)
+        if (hasConstructorParams)
         {
-            var (name, type) = members[i];
-            var fieldName = Capitalize(name);
-            var getter = EmitReaderCall(fieldName, type);
-            var comma = i < members.Count - 1 ? "," : "";
-            sb.AppendLine($"            {getter}{comma}");
+            sb.AppendLine($"        return new {typeName}(");
+
+            for (var i = 0; i < members.Count; i++)
+            {
+                var (name, type) = members[i];
+                var fieldName = Capitalize(name);
+                var getter = EmitReaderCall(fieldName, type);
+                var comma = i < members.Count - 1 ? "," : "";
+                sb.AppendLine($"            {getter}{comma}");
+            }
+
+            sb.AppendLine("        );");
+        }
+        else
+        {
+            sb.AppendLine($"        return new {typeName}");
+            sb.AppendLine("        {");
+
+            for (var i = 0; i < members.Count; i++)
+            {
+                var (name, type) = members[i];
+                var fieldName = Capitalize(name);
+                var getter = EmitReaderCall(fieldName, type);
+                var comma = i < members.Count - 1 ? "," : "";
+                sb.AppendLine($"            {name} = {getter}{comma}");
+            }
+
+            sb.AppendLine("        };");
         }
 
-        sb.AppendLine("        );");
         sb.AppendLine("    }");
         sb.AppendLine();
 
@@ -177,6 +204,15 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
         sb.AppendLine("            var name = record.GetName(i);");
         sb.AppendLine("            if (string.Equals(name, clrName, global::System.StringComparison.OrdinalIgnoreCase) ||");
         sb.AppendLine("                string.Equals(name, snakeName, global::System.StringComparison.OrdinalIgnoreCase))");
+        sb.AppendLine("            {");
+        sb.AppendLine("                return i;");
+        sb.AppendLine("            }");
+        sb.AppendLine("        }");
+        sb.AppendLine("        var flatClr = clrName.Replace(\"_\", \"\");");
+        sb.AppendLine("        for (var i = 0; i < record.FieldCount; i++)");
+        sb.AppendLine("        {");
+        sb.AppendLine("            var flatName = record.GetName(i).Replace(\"_\", \"\");");
+        sb.AppendLine("            if (string.Equals(flatName, flatClr, global::System.StringComparison.OrdinalIgnoreCase))");
         sb.AppendLine("            {");
         sb.AppendLine("                return i;");
         sb.AppendLine("            }");
@@ -212,30 +248,53 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
         if (type is INamedTypeSymbol named && named.IsGenericType && named.ConstructedFrom.SpecialType == SpecialType.System_Nullable_T)
         {
             unwrappedType = named.TypeArguments[0];
+            isNullable = true;
         }
 
         var specialType = unwrappedType.SpecialType;
         var display = unwrappedType.ToDisplayString();
 
-        string readExpr = specialType switch
+        string readExpr;
+        if (unwrappedType.TypeKind == TypeKind.Enum)
         {
-            SpecialType.System_Boolean => $"record.GetBoolean({fieldName})",
-            SpecialType.System_Byte => $"record.GetByte({fieldName})",
-            SpecialType.System_Int16 => $"record.GetInt16({fieldName})",
-            SpecialType.System_Int32 => $"record.GetInt32({fieldName})",
-            SpecialType.System_Int64 => $"record.GetInt64({fieldName})",
-            SpecialType.System_Single => $"record.GetFloat({fieldName})",
-            SpecialType.System_Double => $"record.GetDouble({fieldName})",
-            SpecialType.System_Decimal => $"record.GetDecimal({fieldName})",
-            SpecialType.System_String => $"record.GetString({fieldName})",
-            SpecialType.System_DateTime => $"record.GetDateTime({fieldName})",
-            _ => display switch
+            readExpr = $"record.GetValue({fieldName}) switch {{ {display} val => val, int i => ({display})i, long l => ({display})l, string s => ({display})global::System.Enum.Parse(typeof({display}), s, true), _ => default }}";
+        }
+        else
+        {
+            readExpr = specialType switch
             {
-                "System.Guid" or "Guid" => $"record.GetGuid({fieldName})",
-                "byte[]" => $"(byte[])record.GetValue({fieldName})",
-                _ => $"({type.ToDisplayString()})record.GetValue({fieldName})"
-            }
-        };
+                SpecialType.System_Boolean => $"record.GetBoolean({fieldName})",
+                SpecialType.System_Byte => $"record.GetByte({fieldName})",
+                SpecialType.System_SByte => $"(sbyte)record.GetInt16({fieldName})",
+                SpecialType.System_Int16 => $"record.GetInt16({fieldName})",
+                SpecialType.System_UInt16 => $"(ushort)record.GetInt32({fieldName})",
+                SpecialType.System_Int32 => $"record.GetInt32({fieldName})",
+                SpecialType.System_UInt32 => $"(uint)record.GetInt64({fieldName})",
+                SpecialType.System_Int64 => $"record.GetInt64({fieldName})",
+                SpecialType.System_UInt64 => $"(ulong)record.GetInt64({fieldName})",
+                SpecialType.System_Single => $"record.GetFloat({fieldName})",
+                SpecialType.System_Double => $"record.GetDouble({fieldName})",
+                SpecialType.System_Decimal => $"record.GetDecimal({fieldName})",
+                SpecialType.System_String => $"record.GetString({fieldName})",
+                SpecialType.System_DateTime => $"record.GetDateTime({fieldName})",
+                _ => display switch
+                {
+                    "System.Guid" or "Guid" =>
+                        $"record.GetValue({fieldName}) switch {{ global::System.Guid g => g, string s => global::System.Guid.Parse(s), byte[] b => new global::System.Guid(b), _ => default }}",
+                    "System.DateTimeOffset" or "DateTimeOffset" =>
+                        $"record.GetValue({fieldName}) switch {{ global::System.DateTimeOffset dto => dto, global::System.DateTime dt => new global::System.DateTimeOffset(dt), string s => global::System.DateTimeOffset.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "System.DateOnly" or "DateOnly" =>
+                        $"record.GetValue({fieldName}) switch {{ global::System.DateOnly d => d, global::System.DateTime dt => global::System.DateOnly.FromDateTime(dt), string s => global::System.DateOnly.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "System.TimeOnly" or "TimeOnly" =>
+                        $"record.GetValue({fieldName}) switch {{ global::System.TimeOnly t => t, global::System.TimeSpan ts => global::System.TimeOnly.FromTimeSpan(ts), string s => global::System.TimeOnly.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "System.TimeSpan" or "TimeSpan" =>
+                        $"record.GetValue({fieldName}) switch {{ global::System.TimeSpan ts => ts, long l => global::System.TimeSpan.FromTicks(l), string s => global::System.TimeSpan.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "byte[]" =>
+                        $"record.GetValue({fieldName}) switch {{ byte[] bytes => bytes, string s => global::System.Convert.FromBase64String(s), _ => default! }}",
+                    _ => $"({type.ToDisplayString()})record.GetValue({fieldName})"
+                }
+            };
+        }
 
         if (isNullable)
         {

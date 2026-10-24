@@ -526,16 +526,22 @@ public sealed class PostgresDbClient : IDbClient
             }
 
             await using var reader = await cmd.ExecuteReaderAsync();
-            var results = new List<T>();
-            Func<System.Data.Common.DbDataReader, T>? mapper = null;
 
-            while (await reader.ReadAsync())
+            if (EntityMapper<T>.Factory is { } factory)
             {
-                mapper ??= RowMapper.Resolve<T>(reader);
-                results.Add(mapper(reader));
+                var map = factory(reader);
+                var results = new List<T>();
+                while (await reader.ReadAsync())
+                    results.Add(map(reader));
+                return results;
             }
 
-            return results;
+            var fallbackMap = RowMapper.Resolve<T>(reader);
+            var fallbackResults = new List<T>();
+            while (await reader.ReadAsync())
+                fallbackResults.Add(fallbackMap(reader));
+
+            return fallbackResults;
         }
 #else
         if (!string.IsNullOrEmpty(_connectionString) &&
@@ -631,22 +637,21 @@ public sealed class PostgresTransactionContext
             cmd.Parameters.AddWithValue(paramValues[i] ?? DBNull.Value);
         }
         await using var reader = await cmd.ExecuteReaderAsync();
-        var results = new List<T>();
-        while (await reader.ReadAsync())
+
+        if (EntityMapper<T>.Factory is { } factory)
         {
-            var dict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            for (var i = 0; i < reader.FieldCount; i++)
-            {
-                dict[reader.GetName(i)] = await reader.IsDBNullAsync(i) ? null : reader.GetValue(i);
-            }
-            var json = _json.Serialize(dict);
-            var item = _json.Deserialize<T>(json);
-            if (item is not null)
-            {
-                results.Add(item);
-            }
+            var map = factory(reader);
+            var results = new List<T>();
+            while (await reader.ReadAsync())
+                results.Add(map(reader));
+            return results;
         }
-        return results;
+
+        var fallbackMap = RowMapper.Resolve<T>(reader);
+        var fallbackResults = new List<T>();
+        while (await reader.ReadAsync())
+            fallbackResults.Add(fallbackMap(reader));
+        return fallbackResults;
     }
 }
 #endif

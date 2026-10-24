@@ -79,4 +79,10 @@ public static class Middlewares
 
         return await next();
     };
+
+    public static ReptarMiddleware SWR(
+        int ttlSeconds = 15,
+        int swrSeconds = 30,
+        Action<SwrOptions>? configure = null) =>
+        CacheControl.SWR(ttlSeconds, swrSeconds, configure);
 }

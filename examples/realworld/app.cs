@@ -9,10 +9,18 @@ global using static Reptar.ReptarApi;
 
 var databasePath = Environment.GetEnvironmentVariable("REALWORLD_DB")
     ?? "realworld.db";
+var databaseUrl = Environment.GetEnvironmentVariable("REALWORLD_DATABASE_URL")
+    ?? Environment.GetEnvironmentVariable("DATABASE_URL");
+
+IDbClient database = !string.IsNullOrWhiteSpace(databaseUrl) &&
+    (databaseUrl.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+     databaseUrl.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase))
+    ? Db.Postgres(databaseUrl)
+    : Db.Sqlite(databasePath);
 
 var app = ReptarApp.Create(new ReptarConfig
 {
-    Database = Db.Sqlite(databasePath),
+    Database = database,
 });
 
 app.Use(RequestId());
