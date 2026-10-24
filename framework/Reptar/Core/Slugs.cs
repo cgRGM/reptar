@@ -26,9 +26,13 @@ public static class Slugs
             var where = excludeId is null
                 ? $"{slugColumn} = @slug"
                 : $"{slugColumn} = @slug and {primaryKey} <> @id";
-            var param = excludeId is null
-                ? new { slug = candidate }
-                : (object)new { slug = candidate, id = excludeId };
+            var param = new Dictionary<string, object?>
+            {
+                ["slug"] = candidate,
+            };
+
+            if (excludeId is not null)
+                param["id"] = excludeId;
 
             if (!await db.ExistsAsync(table, where, param))
                 return candidate;

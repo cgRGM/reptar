@@ -1532,3 +1532,38 @@ public class CampfireRealtimeTests
         Assert.NotNull(removeFrame);
     }
 }
+
+public class AotSafeSqliteTests
+{
+    [Fact]
+    public async Task QueryMappedAsync_maps_rows_without_constructor_reflection()
+    {
+        using var db = new SqliteDbClient(":memory:");
+        await db.EnsureCreatedAsync(TestSchema.Widgets);
+        await db.InsertAsync(TestSchema.Widgets, new Widget("w1", "Alpha", 3));
+
+        var rows = await db.QueryMappedAsync(
+            "select id, name, count from widgets",
+            null,
+            row => new Widget(
+                row["id"]?.ToString() ?? "",
+                row["name"]?.ToString() ?? "",
+                Convert.ToInt32(row["count"])));
+
+        Assert.Single(rows);
+        Assert.Equal("Alpha", rows[0].Name);
+        Assert.Equal(3, rows[0].Count);
+    }
+
+    [Fact]
+    public async Task DeleteAsync_binds_the_primary_key_without_anonymous_types()
+    {
+        using var db = new SqliteDbClient(":memory:");
+        await db.EnsureCreatedAsync(TestSchema.Widgets);
+        await db.InsertAsync(TestSchema.Widgets, new Widget("w1", "Alpha", 3));
+
+        await db.DeleteAsync(TestSchema.Widgets, "w1");
+
+        Assert.Equal(0, await db.CountAsync(TestSchema.Widgets));
+    }
+}

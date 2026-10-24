@@ -1,0 +1,17 @@
+{
+  "name": "@reptar/realworld-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun ../../scripts/reptar.ts build:realworld",
+    "dev": "wrangler d1 execute DB --local --file ../netwasm-worker/schema.sql && wrangler dev --port 8789 --local",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@reptar/host": "workspace:*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.152.0"
+  }
+}

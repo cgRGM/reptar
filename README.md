@@ -120,6 +120,30 @@ Inside the Cloudflare Worker isolate, C# interacts with Cloudflare platform prim
 
 ---
 
+## RealWorld API & Benchmark
+
+The repository includes a spec-compliant RealWorld (Conduit) backend at `examples/realworld`. The official Hurl suite passes 13/13 files (154 requests) on both the portable SQLite app and the Native AOT VPS container.
+
+```bash
+bun run realworld:dev          # SQLite/Kestrel on :8787
+bun run realworld:worker:build # C# Wasm RealWorld Worker artifacts
+bun run realworld:hurl         # requires REALWORLD_SPEC_DIR
+bun run realworld:bench        # requires a seed file
+```
+
+VPS Native AOT results with 300 seeded articles and autocannon:
+
+| Scenario                      | Req/sec |     p50 |
+| ----------------------------- | ------: | ------: |
+| `GET /api/tags`               |   3,810 |   25 ms |
+| `GET /api/articles/:slug`     |   2,261 |   44 ms |
+| `GET /api/articles?limit=20`  |     320 |  301 ms |
+| `GET /api/articles/feed`      |    ~300 | ~322 ms |
+| `GET /api/articles?tag=bench` |    ~240 | ~386 ms |
+| `POST /api/articles`          |     ~28 | ~304 ms |
+
+The Native AOT run surfaced and fixed AOT-unsafe anonymous parameter binding and reflection-only row mapping. `QueryMappedAsync` is now the AOT-safe row-mapping path, and `SqliteDbClient` binds deletes/gets with dictionaries.
+
 ## Production Deployment
 
 ### 1. Cloudflare Workers (Edge Serverless)

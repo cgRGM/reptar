@@ -111,6 +111,9 @@ public sealed class ReptarApp
     public Task EnsureCreatedAsync() =>
         Services.Db.EnsureCreatedAsync(Tables.ToArray());
 
+    public Task<int> ExecuteAsync(string sql, object? param = null) =>
+        Services.Db.ExecuteAsync(sql, param);
+
     public RouteBuilder Get(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("GET", path, null, handler);
 

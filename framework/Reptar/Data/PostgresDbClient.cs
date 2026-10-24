@@ -263,6 +263,26 @@ public sealed class PostgresDbClient : IDbClient
             return (rewrittenSql, arr);
         }
 
+        if (param is IDictionary dictionary)
+        {
+            var dictionaryValues = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                dictionaryValues[entry.Key?.ToString() ?? ""] = entry.Value;
+            }
+
+            var dictionaryParams = new List<object?>();
+
+            foreach (var name in paramNames)
+            {
+                dictionaryParams.Add(
+                    dictionaryValues.TryGetValue(name, out var value) ? value : null);
+            }
+
+            return (rewrittenSql, dictionaryParams.ToArray());
+        }
+
         if (param is IEnumerable enumerable && param is not string)
         {
             var list = new List<object?>();

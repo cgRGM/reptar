@@ -1,0 +1,16 @@
+{
+  "name": "reptar-realworld",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-22",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "reptar-realworld-local",
+      "database_id": "22222222-2222-2222-2222-222222222222",
+    },
+  ],
+  "vars": {
+    "CORS_ORIGINS": "http://localhost:4321",
+    "REALWORLD_JWT_SECRET": "reptar-realworld-local-secret",
+  },
+}

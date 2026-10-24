@@ -100,6 +100,16 @@
         "wrangler": "^4.152.0",
       },
     },
+    "spikes/realworld-worker": {
+      "name": "@reptar/realworld-worker",
+      "version": "0.1.0",
+      "dependencies": {
+        "@reptar/host": "workspace:*",
+      },
+      "devDependencies": {
+        "wrangler": "^4.152.0",
+      },
+    },
   },
   "catalog": {
     "@cloudflare/workers-types": "^5.20260906.1",
@@ -623,6 +633,8 @@
     "@reptar/host": ["@reptar/host@workspace:packages/host"],
 
     "@reptar/infra": ["@reptar/infra@workspace:packages/infra"],
+
+    "@reptar/realworld-worker": ["@reptar/realworld-worker@workspace:spikes/realworld-worker"],
 
     "@reptar/workers-blog-demo": ["@reptar/workers-blog-demo@workspace:spikes/netwasm-worker"],
 

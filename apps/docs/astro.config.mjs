@@ -17,6 +17,7 @@ export default defineConfig({
               label: "Deployment Targets",
               slug: "overview/deployment-targets",
             },
+            { label: "RealWorld API", slug: "overview/realworld" },
           ],
           label: "Overview",
         },

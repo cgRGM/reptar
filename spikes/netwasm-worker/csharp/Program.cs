@@ -45,6 +45,7 @@ public sealed record HostResponse(
 [JsonSerializable(typeof(List<SessionUser>))]
 [JsonSerializable(typeof(Auth.SignUpInput))]
 [JsonSerializable(typeof(Auth.SignInInput))]
+[JsonSerializable(typeof(DbCount))]
 internal partial class BlogJsonContext : JsonSerializerContext
 {
 }

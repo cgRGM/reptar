@@ -37,7 +37,10 @@ const findEntryModule = (browserDirectory: string): string | null => {
 
     const source = readFileSync(path.join(browserDirectory, entry), "utf-8");
 
-    if (source.includes('"./netwasm.page.bun.mjs"')) {
+    if (
+      source.includes('"./netwasm.page.bun.mjs"') ||
+      source.includes('"./netwasm.page.mjs"')
+    ) {
       return entry;
     }
   }

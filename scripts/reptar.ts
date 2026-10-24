@@ -180,6 +180,11 @@ switch (command) {
     break;
   }
 
+  case "realworld:dev": {
+    run(["run", "app.cs", ...rest], path.join(repoRoot, "examples/realworld"));
+    break;
+  }
+
   case "codegen": {
     run([
       "run",
@@ -202,6 +207,34 @@ switch (command) {
 
   case "build": {
     run(["build", "framework/Reptar/Reptar.csproj", ...rest]);
+    break;
+  }
+
+  case "build:realworld": {
+    const workerRoot = path.join(repoRoot, "spikes/realworld-worker");
+    const csharpRoot = path.join(workerRoot, "csharp");
+    const publishRoot = path.join(
+      csharpRoot,
+      "bin/Release/netwasm0.1/publish/browser"
+    );
+    const browserRoot = path.join(workerRoot, "public/browser");
+
+    run(["publish", "-c", "Release"], csharpRoot);
+
+    if (existsSync(publishRoot)) {
+      rmSync(browserRoot, { force: true, recursive: true });
+      cpSync(publishRoot, browserRoot, { recursive: true });
+    }
+
+    if (existsSync(browserRoot)) {
+      const patched = patchNetWasmHost(browserRoot);
+      console.log(`Patched ${patched} NetWasm host replacement(s).`);
+    } else {
+      console.error(
+        `Error: No RealWorld browser artifacts found at ${browserRoot} or ${publishRoot}`
+      );
+      process.exit(1);
+    }
     break;
   }
 

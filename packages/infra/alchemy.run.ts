@@ -36,9 +36,29 @@ export default Alchemy.Stack(
         DB: db,
         KV: cache,
         QUEUE: events,
+        REALWORLD_JWT_SECRET:
+          process.env.REALWORLD_JWT_SECRET ??
+          "reptar-realworld-production-secret",
       },
       main: "../../spikes/netwasm-worker/src/index.ts",
       name: "reptar-api",
+    });
+
+    const realworldWorker = yield* Cloudflare.Worker("realworld", {
+      assets: "../../spikes/realworld-worker/public",
+      compatibility: {
+        date: "2026-10-22",
+      },
+      env: {
+        CORS_ORIGINS:
+          "https://reptar-web.rocktown-labs.workers.dev,http://localhost:4321",
+        DB: db,
+        REALWORLD_JWT_SECRET:
+          process.env.REALWORLD_JWT_SECRET ??
+          "reptar-realworld-production-secret",
+      },
+      main: "../../spikes/realworld-worker/src/index.ts",
+      name: "reptar-realworld",
     });
 
     const docsWorker = yield* Cloudflare.Website.StaticSite("docs", {
@@ -71,6 +91,7 @@ export default Alchemy.Stack(
       api: api.url,
       db: db.databaseName,
       docs: docsWorker.url,
+      realworld: realworldWorker.url,
       web: webWorker.url,
     };
   })

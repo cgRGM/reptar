@@ -1,0 +1,18 @@
+<Project Sdk="NetWasm.Sdk">
+  <PropertyGroup>
+    <OutputType>JsModule</OutputType>
+    <NetWasmJavaScriptHosts>page</NetWasmJavaScriptHosts>
+    <TargetFramework>netwasm0.1</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../framework/Reptar.Wasm/Reptar.Wasm.csproj" />
+    <Compile Include="../../../examples/realworld/schema/realworld.cs" />
+    <Compile Include="../../../examples/realworld/features/realworld.cs" />
+    <Compile Include="../../../examples/realworld/features/realworld-codec.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <NetWasmJavaScriptModule Include="app.host.mjs" Module="app.host" />
+  </ItemGroup>
+</Project>
