@@ -145,8 +145,17 @@ Perform outbound HTTP requests to external APIs (e.g. Stripe, OpenAI, GitHub):
 using Reptar;
 
 var client = new WasmHttpClient();
-var response = await client.PostJsonAsync("https://api.external.com/v1/event", payload);
+var response = await client.FetchAsync(
+    "https://api.external.com/v1/event",
+    "POST",
+    new Dictionary<string, string>
+    {
+        ["content-type"] = "application/json",
+    },
+    payload);
 ```
+
+The host rejects non-HTTPS URLs and private/link-local hosts by default. Pass `httpAllowedHosts` to `createReptarHost` to restrict outbound calls to an explicit allowlist.
 
 ---
 
