@@ -58,6 +58,20 @@ List responses omit the article body and fetch tags, favorite counts, favorite s
 
 `synchronous=NORMAL` is a durability tradeoff; override it with `REPTAR_SQLITE_SYNCHRONOUS=FULL` if required.
 
+## Edge comparison
+
+A separate Cloudflare Workers + D1 deployment (`reptar-realworld-bench`) passes the same 154-request Hurl suite. From the Lightsail VPS, with 50 read clients and 100 seeded articles:
+
+| Scenario                     | Edge req/sec | Edge p50 |
+| ---------------------------- | -----------: | -------: |
+| `GET /api/tags`              |          518 |    68 ms |
+| `GET /api/articles?limit=20` |          122 |   365 ms |
+| `GET /api/articles/:slug`    |          242 |   145 ms |
+| `GET /api/articles/feed`     |           72 |   635 ms |
+| `POST /api/articles`         |           13 |   559 ms |
+
+These include VPS-to-edge WAN latency and D1 round trips, and use a different dataset and connection count from the VPS table. They demonstrate correctness and the shape of the edge latency profile, not a like-for-like compute comparison.
+
 ## AOT lessons
 
 The Native AOT build exposed three framework issues that are now fixed:

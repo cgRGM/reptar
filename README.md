@@ -144,6 +144,8 @@ VPS Native AOT results with 300 seeded articles and autocannon:
 
 List responses now omit the article body and fetch tags, favorite counts, favorite state, and follow state in page-level batches instead of per-row correlated subqueries. The SQLite WAL read pool added in `461be2e` lets those reads run concurrently, and article creation batches the article, tag, and junction writes into one transaction. The image remains **38.3 MB uncompressed / 11.6 MB compressed** after removing the 22 MB `.dbg` symbols.
 
+A separate Cloudflare Workers + D1 deployment was also verified with the same Hurl suite. Measured from the VPS with 50 read clients and 100 seeded articles, the edge run was `tags` 518 req/sec, `articles` 122, single article 242, feed 72, and writes 13. Those numbers include WAN latency and a much smaller dataset, so they are not directly comparable to the VPS table.
+
 The Native AOT run surfaced and fixed AOT-unsafe anonymous parameter binding and reflection-only row mapping. `QueryMappedAsync` is now the AOT-safe row-mapping path, and `SqliteDbClient` binds deletes/gets with dictionaries.
 
 ## Production Deployment
