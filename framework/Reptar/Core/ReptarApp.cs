@@ -69,7 +69,12 @@ public sealed class ReptarApp
 {
     private static readonly Dictionary<string, string> EmptyParams = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<RouteEntry> _routes = new();
-    private readonly Dictionary<string, RouteEntry> _staticRoutes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RouteEntry> _staticGet = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RouteEntry> _staticPost = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RouteEntry> _staticPut = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RouteEntry> _staticDelete = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RouteEntry> _staticPatch = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, RouteEntry> _staticOther = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Method, int SegmentCount), List<RouteEntry>> _paramRoutes = new();
     private readonly List<ReptarMiddleware> _middlewares = new();
     private readonly Dictionary<string, Func<Ctx, QueueMessage, Task>> _queueHandlers =
@@ -638,18 +643,64 @@ public sealed class ReptarApp
         };
     }
 
+    private Dictionary<string, RouteEntry> GetStaticDict(string method)
+    {
+        if (method.Length == 3)
+        {
+            if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)) return _staticGet;
+            if (string.Equals(method, "PUT", StringComparison.OrdinalIgnoreCase)) return _staticPut;
+        }
+        else if (method.Length == 4)
+        {
+            if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase)) return _staticPost;
+        }
+        else if (method.Length == 6)
+        {
+            if (string.Equals(method, "DELETE", StringComparison.OrdinalIgnoreCase)) return _staticDelete;
+        }
+        else if (method.Length == 5)
+        {
+            if (string.Equals(method, "PATCH", StringComparison.OrdinalIgnoreCase)) return _staticPatch;
+        }
+
+        return _staticOther;
+    }
+
+    private static string NormalizeMethod(string method)
+    {
+        if (method.Length == 3)
+        {
+            if (string.Equals(method, "GET", StringComparison.OrdinalIgnoreCase)) return "GET";
+            if (string.Equals(method, "PUT", StringComparison.OrdinalIgnoreCase)) return "PUT";
+        }
+        else if (method.Length == 4)
+        {
+            if (string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase)) return "POST";
+        }
+        else if (method.Length == 6)
+        {
+            if (string.Equals(method, "DELETE", StringComparison.OrdinalIgnoreCase)) return "DELETE";
+        }
+        else if (method.Length == 5)
+        {
+            if (string.Equals(method, "PATCH", StringComparison.OrdinalIgnoreCase)) return "PATCH";
+        }
+
+        return method.ToUpperInvariant();
+    }
+
     private void RegisterRouteEntry(RouteEntry entry)
     {
         _routes.Add(entry);
 
-        var upperMethod = entry.Method.ToUpperInvariant();
-
         if (!entry.HasParams)
         {
-            _staticRoutes[$"{upperMethod}:{entry.Path}"] = entry;
+            var dict = GetStaticDict(entry.Method);
+            dict[entry.Path] = entry;
         }
         else
         {
+            var upperMethod = NormalizeMethod(entry.Method);
             var key = (upperMethod, entry.Segments.Length);
             if (!_paramRoutes.TryGetValue(key, out var list))
             {
@@ -662,17 +713,26 @@ public sealed class ReptarApp
 
     private (RouteEntry Entry, Dictionary<string, string> Params)? Match(string method, string path)
     {
-        var normalizedPath = Normalize(path);
-        var upperMethod = method.ToUpperInvariant();
+        var staticDict = GetStaticDict(method);
 
-        // 1. O(1) Fast-Path: Static Routes (Zero-Allocation, No Loops)
-        var staticKey = $"{upperMethod}:{normalizedPath}";
-        if (_staticRoutes.TryGetValue(staticKey, out var staticEntry))
+        // 1. O(1) Fast-Path: Static Routes (Zero-Allocation, No Loops, No String Formatting)
+        // If path already starts with '/' and has no trailing slash (standard HTTP path), query directly
+        if (path.Length > 0 && path[0] == '/' && (path.Length == 1 || path[^1] != '/'))
+        {
+            if (staticDict.TryGetValue(path, out var directEntry))
+            {
+                return (directEntry, EmptyParams);
+            }
+        }
+
+        var normalizedPath = Normalize(path);
+        if (staticDict.TryGetValue(normalizedPath, out var staticEntry))
         {
             return (staticEntry, EmptyParams);
         }
 
         // 2. Parameterized Routes (Pre-Filtered by Method and Segment Count)
+        var upperMethod = NormalizeMethod(method);
         var segments = Split(normalizedPath);
         var paramKey = (upperMethod, segments.Length);
 

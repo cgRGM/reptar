@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging;
 
 namespace Reptar.Hosting;
 
@@ -9,6 +10,11 @@ public static class KestrelHost
     public static async Task RunAsync(this ReptarApp app, string[]? args = null)
     {
         var builder = WebApplication.CreateSlimBuilder(args ?? []);
+        if (Environment.GetEnvironmentVariable("BENCH_MIDDLEWARE") != "1")
+        {
+            builder.Logging.ClearProviders();
+        }
+
         var port = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var configuredPort)
             ? configuredPort
             : 8787;
@@ -248,11 +254,6 @@ public static class KestrelHost
             }
         }
 
-        var headers = new Dictionary<string, string>(http.Request.Headers.Count, StringComparer.OrdinalIgnoreCase);
-
-        foreach (var (key, value) in http.Request.Headers)
-            headers[key] = value.ToString();
-
         return new ReptarRequest
         {
             Method = http.Request.Method,
@@ -260,7 +261,14 @@ public static class KestrelHost
             Query = http.Request.QueryString.HasValue
                 ? http.Request.QueryString.Value!.TrimStart('?')
                 : "",
-            Headers = headers,
+            HeaderLookup = name => http.Request.Headers.TryGetValue(name, out var v) ? v.ToString() : null,
+            HeadersFactory = () =>
+            {
+                var dict = new Dictionary<string, string>(http.Request.Headers.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var (key, value) in http.Request.Headers)
+                    dict[key] = value.ToString();
+                return dict;
+            },
             Cookies = cookies,
             Body = body,
         };
@@ -270,21 +278,27 @@ public static class KestrelHost
     {
         http.Response.StatusCode = response.Status;
 
-        foreach (var (key, value) in response.Headers)
-            http.Response.Headers[key] = value;
+        if (response.Headers.Count > 0)
+        {
+            foreach (var (key, value) in response.Headers)
+                http.Response.Headers[key] = value;
+        }
 
         if (response.ContentType is not null)
             http.Response.ContentType = response.ContentType;
 
-        foreach (var cookie in response.SetCookies)
-            http.Response.Headers.Append("Set-Cookie", cookie);
+        if (response.SetCookies.Count > 0)
+        {
+            foreach (var cookie in response.SetCookies)
+                http.Response.Headers.Append("Set-Cookie", cookie);
+        }
 
         if (response.BodyStream is not null)
         {
             await foreach (var chunk in response.BodyStream(http.RequestAborted))
             {
-                await http.Response.Body.WriteAsync(chunk, http.RequestAborted);
-                await http.Response.Body.FlushAsync(http.RequestAborted);
+                await http.Response.BodyWriter.WriteAsync(chunk, http.RequestAborted);
+                await http.Response.BodyWriter.FlushAsync(http.RequestAborted);
             }
 
             return;
@@ -293,7 +307,7 @@ public static class KestrelHost
         if (response.Body is { Length: > 0 } body)
         {
             http.Response.ContentLength = body.Length;
-            await http.Response.Body.WriteAsync(body, http.RequestAborted);
+            await http.Response.BodyWriter.WriteAsync(body, http.RequestAborted);
         }
         else
         {
