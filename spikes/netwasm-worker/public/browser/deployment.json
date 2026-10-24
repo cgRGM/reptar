@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "0a446c430c3a5787bad579353d7fb1e24bc7cc5531dde31ef59cceb9abad280c",
+  "semanticBuildId": "dbc4ccce8ed00bd16fbbc1c96b27b7fe48feab247910e54ffa9a381daefbbc77",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "ae26d5f5c8c2fe720d9ae2cd07bf117a5224b3a5efd838fcaf72f06db5ee18e4",
+  "buildFingerprint": "f964eb01de4351b210df2a50efba2c14cb2bc1eaac2b9c52c598804aff3b348d",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,7 +23,7 @@
       "relativePath": "HelloReptar.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "d78f78053f69477f9c28700b8ac3705be33f7807bbc38347da87456f1ab21d91",
+      "sha256": "c39cc3fa4a65887090286f955130e4accef1573e59a60e19225cb5bf48ca5ae7",
       "schemaVersion": 2
     },
     {
