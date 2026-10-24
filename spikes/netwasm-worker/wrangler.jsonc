@@ -25,4 +25,39 @@
       "bucket_name": "reptar-blog-images",
     },
   ],
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "reptar-local-kv",
+    },
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "QUEUE",
+        "queue": "reptar-events",
+      },
+    ],
+  },
+  "ai": {
+    "binding": "AI",
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "COUNTER",
+        "class_name": "Counter",
+      },
+    ],
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["Counter"],
+    },
+  ],
+  "vars": {
+    "APP_NAME": "reptar-local",
+    "CORS_ORIGINS": "http://localhost:4321",
+  },
 }

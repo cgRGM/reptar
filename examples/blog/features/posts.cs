@@ -1,11 +1,19 @@
+using Reptar;
+using static Reptar.ReptarApi;
+
 public static class Posts
 {
-    public sealed record CreatePost(string Title, string Content, string? Excerpt = null);
+    public sealed record CreatePost(
+        string Title,
+        string Content,
+        string? Excerpt = null,
+        string? ImageKey = null);
 
     public sealed record UpdatePost(
         string? Title = null,
         string? Content = null,
-        string? Excerpt = null);
+        string? Excerpt = null,
+        string? ImageKey = null);
 
     public sealed record Post(
         string Id,
@@ -16,17 +24,20 @@ public static class Posts
         string? Excerpt,
         int Published,
         string CreatedAt,
-        string UpdatedAt);
+        string UpdatedAt,
+        string? ImageKey);
 
     public static readonly Validator<CreatePost> CreateSchema = Rule<CreatePost>()
         .Prop(x => x.Title, rules => rules.Min(3).Max(120))
         .Prop(x => x.Content, rules => rules.Min(1))
-        .Prop(x => x.Excerpt, rules => rules.Max(300).Optional());
+        .Prop(x => x.Excerpt, rules => rules.Max(300).Optional())
+        .Prop(x => x.ImageKey, rules => rules.Max(300).Optional());
 
     public static readonly Validator<UpdatePost> UpdateSchema = Rule<UpdatePost>()
         .Prop(x => x.Title, rules => rules.Min(3).Max(120).Optional())
         .Prop(x => x.Content, rules => rules.Min(1).Optional())
-        .Prop(x => x.Excerpt, rules => rules.Max(300).Optional());
+        .Prop(x => x.Excerpt, rules => rules.Max(300).Optional())
+        .Prop(x => x.ImageKey, rules => rules.Max(300).Optional());
 
     public static ReptarApp Routes() => ReptarApp.Create()
         .Get("/", async ctx => ctx.Json(
@@ -49,7 +60,9 @@ public static class Posts
 
         .Get("/:id", async ctx =>
         {
-            var post = await ctx.Db.GetAsync<Post>(Schema.Posts, ctx.Req.Param("id")!);
+            var post = await ctx.Db.GetAsync<Post>(
+                Schema.Posts,
+                ctx.Req.Param("id")!);
 
             return post is null
                 ? ctx.NotFound("Post not found.")
@@ -58,20 +71,22 @@ public static class Posts
             .Produces<Post>(200)
             .Produces<ErrorBody>(404)
 
-        .Post("/", Auth.RequireUser, CreateSchema, async (ctx, input) =>
+        .Post("/", CreateSchema, async (ctx, input) =>
         {
             var now = ctx.Clock.IsoNow();
+            var title = input.Title.Trim();
 
             var post = new Post(
                 Id: Ids.New("post"),
-                AuthorId: ctx.User!.Id,
-                Slug: Text.Slugify(input.Title),
-                Title: input.Title.Trim(),
+                AuthorId: ctx.User?.Id ?? "anonymous",
+                Slug: Text.Slugify(title),
+                Title: title,
                 Content: input.Content,
                 Excerpt: input.Excerpt?.Trim(),
-                Published: 0,
+                Published: 1,
                 CreatedAt: now,
-                UpdatedAt: now);
+                UpdatedAt: now,
+                ImageKey: input.ImageKey);
 
             await ctx.Db.InsertAsync(Schema.Posts, post);
 
@@ -79,23 +94,25 @@ public static class Posts
         })
             .Produces<Post>(201)
             .Produces<ValidationError>(400)
-            .Produces<ErrorBody>(401)
 
-        .Put("/:id", Auth.RequireUser, UpdateSchema, async (ctx, input) =>
+        .Put("/:id", UpdateSchema, async (ctx, input) =>
         {
-            var post = await ctx.Db.GetAsync<Post>(Schema.Posts, ctx.Req.Param("id")!);
+            var post = await ctx.Db.GetAsync<Post>(
+                Schema.Posts,
+                ctx.Req.Param("id")!);
 
             if (post is null)
                 return ctx.NotFound("Post not found.");
 
-            if (post.AuthorId != ctx.User!.Id)
-                return ctx.Forbidden();
+            var title = input.Title?.Trim() ?? post.Title;
 
             var updated = post with
             {
-                Title = input.Title?.Trim() ?? post.Title,
+                Title = title,
+                Slug = input.Title is null ? post.Slug : Text.Slugify(title),
                 Content = input.Content ?? post.Content,
                 Excerpt = input.Excerpt?.Trim() ?? post.Excerpt,
+                ImageKey = input.ImageKey ?? post.ImageKey,
                 UpdatedAt = ctx.Clock.IsoNow(),
             };
 
@@ -105,27 +122,22 @@ public static class Posts
         })
             .Produces<Post>(200)
             .Produces<ValidationError>(400)
-            .Produces<ErrorBody>(401)
-            .Produces<ErrorBody>(403)
             .Produces<ErrorBody>(404)
 
-        .Delete("/:id", Auth.RequireUser, async ctx =>
+        .Delete("/:id", async ctx =>
         {
-            var post = await ctx.Db.GetAsync<Post>(Schema.Posts, ctx.Req.Param("id")!);
+            var post = await ctx.Db.GetAsync<Post>(
+                Schema.Posts,
+                ctx.Req.Param("id")!);
 
             if (post is null)
                 return ctx.NotFound("Post not found.");
-
-            if (post.AuthorId != ctx.User!.Id)
-                return ctx.Forbidden();
 
             await ctx.Db.DeleteAsync(Schema.Posts, post.Id);
 
             return ctx.Status(204);
         })
             .Produces(204)
-            .Produces<ErrorBody>(401)
-            .Produces<ErrorBody>(403)
             .Produces<ErrorBody>(404)
             .Build();
 }

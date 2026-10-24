@@ -112,6 +112,17 @@ public sealed class ReptarApp
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("POST", path, middleware, validator, handler);
 
+    public RouteBuilder Put(
+        string path,
+        Func<Ctx, Task<ReptarResponse>> handler) =>
+        AddRoute("PUT", path, null, handler);
+
+    public RouteBuilder Put(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, Task<ReptarResponse>> handler) =>
+        AddRoute("PUT", path, middleware, handler);
+
     public RouteBuilder Put<TInput>(
         string path,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
@@ -360,6 +371,7 @@ public sealed class ReptarApp
         _config.Http ?? DefaultHttp(),
         _config.Clock ?? new SystemClock(),
         _config.Crypto ?? DefaultCrypto(),
+        _config.Environment ?? DefaultEnvironment(),
         _config.Json ?? new DefaultJsonCodec());
 
     private static IDbClient DefaultDatabase()
@@ -433,6 +445,19 @@ public sealed class ReptarApp
         return new DevCrypto();
 #endif
     }
+
+    private static IEnvironment DefaultEnvironment()
+    {
+#if NETWASM
+        return new WasmEnvironment();
+#else
+        return new SystemEnvironment();
+#endif
+    }
+
+
+
+
 
     internal static string Normalize(string path)
     {
@@ -516,6 +541,17 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Post(path, middleware, validator, handler);
+
+    public RouteBuilder Put(
+        string path,
+        Func<Ctx, Task<ReptarResponse>> handler) =>
+        app.Put(path, handler);
+
+    public RouteBuilder Put(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, Task<ReptarResponse>> handler) =>
+        app.Put(path, middleware, handler);
 
     public RouteBuilder Put<TInput>(
         string path,

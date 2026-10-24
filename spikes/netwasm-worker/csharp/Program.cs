@@ -171,14 +171,108 @@ public static partial class PageExports
 
         var app = ReptarApp.Create(new ReptarConfig
         {
+            AI = new AiClient(),
             Auth = BuiltIn(),
+            Cache = new KvClient(),
             Database = new D1DbClient(json),
-            Storage = new R2Client(),
+            Durable = new DurableBridge(),
+            Http = new WasmHttpClient(),
             Json = json,
+            Queues = new QueueClient(),
+            Storage = new R2Client(),
         });
 
         app.Use(ReptarApi.RequestId());
         Blog.Configure(app);
+
+        app.Get("/platform/env", ctx => Task.FromResult(ctx.Json(
+            new Dictionary<string, string>
+            {
+                ["appName"] = ctx.Environment.Get("APP_NAME") ?? "",
+            })));
+
+        app.Get("/platform/kv", async ctx =>
+        {
+            var value = await ctx.Cache.GetAsync("demo");
+            var jsonValue = value is null
+                ? "null"
+                : JsonSerializer.Serialize(value, ReptarJson.Options);
+
+            return ReptarResponse.Json($"{{\"value\":{jsonValue}}}");
+        });
+
+        app.Put("/platform/kv", async ctx =>
+        {
+            using var document = JsonDocument.Parse(ctx.Req.BodyText ?? "{}");
+
+            if (!document.RootElement.TryGetProperty("value", out var value))
+                return ctx.BadRequest("Value is required.");
+
+            int? ttl = document.RootElement.TryGetProperty(
+                "ttlSeconds",
+                out var ttlElement) &&
+                ttlElement.TryGetInt32(out var ttlValue)
+                ? ttlValue
+                : null;
+
+            await ctx.Cache.PutAsync(
+                "demo",
+                value.GetString() ?? "",
+                ttl);
+
+            return ctx.Status(204);
+        });
+
+        app.Post("/platform/queue", async ctx =>
+        {
+            var body = ctx.Req.BodyText ?? "{}";
+            using var document = JsonDocument.Parse(body);
+
+            if (!document.RootElement.TryGetProperty("message", out var message) ||
+                string.IsNullOrWhiteSpace(message.GetString()))
+            {
+                return ctx.BadRequest("Message is required.");
+            }
+
+            await ctx.Queues.SendAsync("events", body);
+            return ReptarResponse.Json("{\"sent\":true}", 202);
+        });
+
+        app.Get("/platform/durable", async ctx =>
+        {
+            var body = await ctx.Durable.FetchAsync(
+                "counter",
+                "demo",
+                "/",
+                "GET");
+
+            return ReptarResponse.Json(body);
+        });
+
+        app.Post("/platform/ai", async ctx =>
+        {
+            using var document = JsonDocument.Parse(ctx.Req.BodyText ?? "{}");
+            var prompt = document.RootElement.TryGetProperty(
+                "prompt",
+                out var promptElement)
+                ? promptElement.GetString() ?? ""
+                : "";
+
+            if (string.IsNullOrWhiteSpace(prompt))
+                return ctx.BadRequest("Prompt is required.");
+
+            var model = document.RootElement.TryGetProperty(
+                "model",
+                out var modelElement)
+                ? modelElement.GetString() ?? "@cf/meta/llama-3.2-1b-instruct"
+                : "@cf/meta/llama-3.2-1b-instruct";
+
+            var result = await ctx.AI.GenerateAsync(
+                new AiRequest(model, prompt));
+
+            return ReptarResponse.Json(
+                $"{{\"model\":{JsonSerializer.Serialize(result.Model, ReptarJson.Options)},\"text\":{JsonSerializer.Serialize(result.Text, ReptarJson.Options)},\"tokensIn\":{result.TokensIn},\"tokensOut\":{result.TokensOut}}}");
+        });
 
         return app;
     }

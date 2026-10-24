@@ -1,8 +1,8 @@
 import { openPage } from "./netwasm.page.mjs";
 
 const startup = Object.freeze({
-  buildFingerprint: "55facdcb0ddb609c3119d71149f9a389622c50629288d905b3f88ad8a1a22c2b",
-  manifestSha256: "0e17b65691da993d8afae18d3470174680f686c2c3e66560a5c9dd6e1cd49cd1",
+  buildFingerprint: "76d47faaf10138b9bf5350819621a78c129bf0ba547e67be59b0789067c50b70",
+  manifestSha256: "527887bda5430572b4ebf26101d182e01bc84f580d4089005896aa5f94db3b58",
 });
 const exports = Object.freeze(["handle"]);
 export function open(options) {

@@ -17,17 +17,21 @@ description: Zero-bloat Stripe Checkout sessions and HMAC-SHA256 webhook verific
 ## Configuration
 
 ```csharp
-var stripeConfig = new StripeConfig
+app.Route("/stripe", Stripe.Routes(ctx => new StripeConfig
 {
-    ApiKey = "sk_live_...",
-    WebhookSecret = "whsec_...",
+    ApiKey = ctx.Environment.Get("STRIPE_KEY") ?? "",
+    WebhookSecret = ctx.Environment.Get("STRIPE_WEBHOOK_SECRET") ?? "",
     ToleranceSeconds = 300,
-};
+}, async (ctx, stripeEvent) =>
+{
+    // Handle verified events.
+    return ctx.Status(200);
+}));
 ```
 
 `StripeConfig` also exposes `ApiUrl` for testing or a proxy.
 
-The current Wasm host does not inject Cloudflare environment variables into C# automatically. Pass `StripeConfig` from your application's configuration layer (or add an explicit host env binding) and mount the routes only when the values are present.
+`c.Environment.Get(...)` reads string env vars/secrets from the Worker host. Mount Stripe routes only in an app that provisions `STRIPE_KEY` and `STRIPE_WEBHOOK_SECRET` in its Alchemy/Cloudflare environment. The reference blog does not mount them.
 
 ---
 
@@ -43,6 +47,12 @@ app.Post("/orders/checkout", Auth.RequireUser, async ctx =>
     {
         return ctx.BadRequest("Invalid payload.");
     }
+
+    var stripeConfig = new StripeConfig
+    {
+        ApiKey = ctx.Environment.Get("STRIPE_KEY") ?? "",
+        WebhookSecret = ctx.Environment.Get("STRIPE_WEBHOOK_SECRET") ?? "",
+    };
 
     var session = await Stripe.CreateCheckoutSessionAsync(
         ctx,
@@ -74,7 +84,11 @@ The returned `CheckoutSession` contains `Id`, `Url`, and `Status`.
 ## 2. Mounting the Stripe Routes
 
 ```csharp
-app.Route("/stripe", Stripe.Routes(stripeConfig, async (ctx, stripeEvent) =>
+app.Route("/stripe", Stripe.Routes(ctx => new StripeConfig
+{
+    ApiKey = ctx.Environment.Get("STRIPE_KEY") ?? "",
+    WebhookSecret = ctx.Environment.Get("STRIPE_WEBHOOK_SECRET") ?? "",
+}, async (ctx, stripeEvent) =>
 {
     switch (stripeEvent.Type)
     {

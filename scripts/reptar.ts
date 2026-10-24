@@ -1,7 +1,14 @@
 #!/usr/bin/env bun
 
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, rmSync } from "node:fs";
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
 import { patchNetWasmHost } from "../packages/host/src/patch";
@@ -110,7 +117,7 @@ const run = (args: string[], cwd = repoRoot): void => {
 const formatGenerated = (): void => {
   const result = spawnSync(
     process.execPath,
-    ["x", "oxfmt", "--write", "examples/blog/rpc"],
+    ["x", "oxfmt", "--write", "examples/blog/rpc", "packages/rpc/src"],
     {
       cwd: repoRoot,
       env: dotnetEnv(),
@@ -121,6 +128,26 @@ const formatGenerated = (): void => {
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
+};
+
+const syncRpcContracts = (): void => {
+  const generated = path.join(repoRoot, "examples/blog/rpc");
+  const rpcSource = path.join(repoRoot, "packages/rpc/src");
+
+  const appType = readFileSync(
+    path.join(generated, "app-type.d.ts"),
+    "utf-8"
+  ).replaceAll('from "@reptar/client"', 'from "./client"');
+
+  writeFileSync(path.join(rpcSource, "app-type.ts"), appType);
+  copyFileSync(
+    path.join(generated, "types.ts"),
+    path.join(rpcSource, "types.ts")
+  );
+  copyFileSync(
+    path.join(generated, "openapi.json"),
+    path.join(repoRoot, "packages/rpc/openapi.json")
+  );
 };
 
 const [command, ...rest] = process.argv.slice(2);
@@ -158,6 +185,7 @@ switch (command) {
       "examples/blog/rpc",
       ...rest,
     ]);
+    syncRpcContracts();
     formatGenerated();
     break;
   }

@@ -7,7 +7,7 @@ description: Direct C# APIs for Cloudflare D1, R2, KV, Queues, Workers AI, Durab
 
 Reptar exposes Cloudflare platform capabilities as idiomatic C# interfaces on `c`. Rather than making external REST API roundtrips over the public internet, each call bridges in-memory via `[JSImport]` to native Cloudflare Worker `env` bindings inside the `workerd` isolate.
 
-> [!NOTE] The reference blog Worker currently binds **D1 and R2 only**. KV, Queues, Workers AI, and Durable Objects are implemented host surfaces; wire each one in your Worker's `bindings` function and provision it in the Alchemy stack before using it in an app.
+> [!NOTE] The reference Worker binds **D1, R2, KV, Queues, Workers AI, and a `Counter` Durable Object**. Alchemy provisions each resource and the Worker passes them through `createReptarHost`. `CORS_ORIGINS` is an explicit allowlist, and `c.Environment.Get("APP_NAME")` reads plain env values.
 
 ---
 
@@ -165,9 +165,9 @@ The host rejects non-HTTPS URLs and private/link-local hosts by default. Pass `h
 | :-- | :-- | :-- | :-- |
 | **D1 (SQL Database)** | `c.Db` | `D1DbClient` via `[JSImport]` | ✅ Production Ready |
 | **R2 (Object Storage)** | `c.Storage` | `R2Client` + Binary Stream | ✅ Production Ready |
-| **KV Storage** | `c.Cache` | `KvClient` via `[JSImport]` | ✅ Surface ready; wire binding |
-| **Cloudflare Queues** | `c.Queues` | `QueueClient` via `[JSImport]` | ✅ Surface ready; wire binding |
-| **Workers AI** | `c.AI` | `AiClient` via `[JSImport]` | ✅ Surface ready; wire binding |
-| **Durable Objects** | `c.Durable` | `DurableBridge` via `[JSImport]` | ✅ Surface ready; wire binding |
+| **KV Storage** | `c.Cache` | `KvClient` via `[JSImport]` | ✅ Wired in reference |
+| **Cloudflare Queues** | `c.Queues` | `QueueClient` via `[JSImport]` | ✅ Wired in reference |
+| **Workers AI** | `c.AI` | `AiClient` via `[JSImport]` | ✅ Wired in reference |
+| **Durable Objects** | `c.Durable` | `DurableBridge` via `[JSImport]` | ✅ Wired in reference |
 | **WebCrypto** | `c.Crypto` | PBKDF2 / SHA-256 / HMAC | ✅ Production Ready |
 | **Outbound HTTP** | `WasmHttpClient` | Edge `fetch` Bridge | ✅ Production Ready |

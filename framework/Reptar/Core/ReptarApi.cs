@@ -15,6 +15,7 @@ public sealed class ReptarConfig
     public IHttpClient? Http { get; set; }
     public ICrypto? Crypto { get; set; }
     public IClock? Clock { get; set; }
+    public IEnvironment? Environment { get; set; }
     public IJsonCodec? Json { get; set; }
     public AuthOptions? Auth { get; set; }
     public TelemetryOptions? Telemetry { get; set; }

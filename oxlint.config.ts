@@ -11,5 +11,9 @@ export default defineConfig({
     "examples/blog/rpc/openapi.json",
     "spikes/**/public/**",
     "spikes/**/.wrangler/**",
+    "packages/rpc/openapi.json",
+    "packages/rpc/src/types.ts",
+    "packages/rpc/src/app-type.ts",
+    ".agents/**",
   ],
 });

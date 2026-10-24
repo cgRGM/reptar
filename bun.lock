@@ -30,6 +30,9 @@
         "astro": "^7.2.10",
         "sharp": "^0.35.3",
       },
+      "devDependencies": {
+        "@bruits/satteri-darwin-arm64": "^0.10.5",
+      },
     },
     "apps/web": {
       "name": "web",

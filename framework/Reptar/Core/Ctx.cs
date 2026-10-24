@@ -26,6 +26,7 @@ public sealed class Ctx
     public IHttpClient Http => _services.Http;
     public IClock Clock => _services.Clock;
     public ICrypto Crypto => _services.Crypto;
+    public IEnvironment Environment => _services.Environment;
     public IJsonCodec JsonCodec => _services.Json;
     public CookieJar Cookies { get; }
     public SessionUser? User { get; set; }
@@ -98,4 +99,5 @@ internal sealed record ServiceSet(
     IHttpClient Http,
     IClock Clock,
     ICrypto Crypto,
+    IEnvironment Environment,
     IJsonCodec Json);

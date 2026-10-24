@@ -4,6 +4,7 @@ export interface CreatePost {
   title: string;
   content: string;
   excerpt?: string | null;
+  imageKey?: string | null;
 }
 
 export interface ErrorBody {
@@ -22,6 +23,7 @@ export interface Post {
   published: number;
   createdAt: string;
   updatedAt: string;
+  imageKey: string | null;
 }
 
 export interface SessionResponse {
@@ -49,6 +51,12 @@ export interface UpdatePost {
   title?: string | null;
   content?: string | null;
   excerpt?: string | null;
+  imageKey?: string | null;
+}
+
+export interface UploadResult {
+  key: string;
+  url: string;
 }
 
 export interface ValidationError {

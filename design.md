@@ -397,9 +397,12 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
   - **Durable Objects:** `c.Durable` (`DurableBridge.cs`) for in-process stub fetching.
   - **Native WebCrypto:** PBKDF2 password hashing (100k cap), SHA-256 session tokens, and HMAC-SHA256 signature verification.
   - **Outbound HTTP:** `WasmHttpClient.cs` bridging edge `fetch` into C# Wasm, guarded by a host allowlist/private-address check.
-  - The reference Worker binds D1 and R2; KV, Queues, AI, and Durable Objects are host surfaces that an app must wire in its own `bindings` function and Alchemy stack.
+  - The reference Worker binds all of them: D1, R2, KV, a queue producer, Workers AI, and a `Counter` Durable Object. Alchemy provisions each resource and `c.Environment.Get(...)` exposes string env/secrets.
+  - CORS uses an explicit `CORS_ORIGINS` allowlist; unlisted origins receive no CORS headers and preflights are rejected.
 - **Built-in Stripe module (`Reptar.Stripe`):** Optional zero-bloat checkout session creation and HMAC-SHA256 webhook verification. Webhooks and checkout fail closed (`503`) when the secret/API key is missing; timestamps are required and bounded by `ToleranceSeconds`. The reference blog does not mount Stripe.
-- **Typed client & contracts:** `@reptar/client` exports `createClient<AppType>` with inference for route segments, URL params, query strings, and request/response payloads. The current `AppType` is hand-maintained and has been aligned with the deployed blog routes; generating it directly from the Wasm app remains the next contract milestone.
+- **Typed client & contracts:** `@reptar/client` exports `createClient<AppType>` with inference for route segments, URL params, query strings, and request/response payloads. `bun rpc:gen` now generates `AppType`, DTOs, and OpenAPI from the shared C# schema/feature files and syncs them into `packages/rpc/src`; the same files compile to `net10.0` and `netwasm0.1`.
+- **One app source:** `examples/blog/schema/posts.cs`, `features/posts.cs`, and `features/blog.cs` are compiled by both the portable Kestrel app and the Wasm Worker. The portable app serves images through a local filesystem R2 implementation for parity.
+- **E2E and benchmark:** `bun run e2e` starts a fresh workerd/D1/R2/KV/Queue/DO stack and verifies health, CRUD, uploads, auth, platform bindings, CORS, and warm `/posts` latency. `bun run api:bench` measures `/health` and `/posts` against a target Worker.
 - **Auth on Wasm:** The D1 auth slice implements signup/signin/signout/session, `/auth/anonymous` guest sessions, and `RequireUser`. Passwords use PBKDF2 (100,000 iterations, the workerd maximum) through the host WebCrypto shim; sessions are SHA-256 token hashes in D1; cookies use `Max-Age`, `HttpOnly`, and `SameSite=Lax`.
 - **Host contract:** `@reptar/host` owns the runtime shim (`createReptarHost`, bindings, crypto) and the NetWasm host rewrite (`patchNetWasmHost`). The C# app exposes one `[JSExport] handle(string)` and responds through `[JSImport] respond(requestId, string)`; the host keeps a per-request resolver map, so concurrent requests no longer serialize per isolate. `bun reptar build:worker` publishes the C# app, copies the browser artifacts, and applies the host rewrite.
 - **Blog demo & login UI:** Astro `/blog` renders posts from the C# Worker, uploads images to R2, and interacts via `@reptar/client`. Astro `/login` provides a dark-first authentication and guest session onboarding interface.
@@ -409,7 +412,7 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
   - Web: `https://reptar-web.rocktown-labs.workers.dev`
   - Blog: `https://reptar-web.rocktown-labs.workers.dev/blog`
   - Login: `https://reptar-web.rocktown-labs.workers.dev/login`
-- **Next:** automated Wasm e2e test suite, source-generated contract generation pipeline directly from the Wasm app, and Wasm bundle trimming.
+- **Next:** Standard Schema generation from `Rule<T>`, deeper auth hardening (rate limits/CSRF/email verification), Wasm bundle trimming, and broader e2e coverage against deployed stages.
 
 ### Phase 0 update: D1 bridge proven
 

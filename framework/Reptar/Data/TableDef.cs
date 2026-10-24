@@ -30,10 +30,26 @@ public sealed class ColumnBuilder
         return this;
     }
 
-    internal ColumnDef Build(string clrName)
+    internal ColumnDef Build(string? clrName = null)
     {
-        _definition.ClrName = clrName;
+        _definition.ClrName = clrName ?? ToPascalCase(_definition.SqlName);
         return _definition;
+    }
+
+    private static string ToPascalCase(string value)
+    {
+        var parts = value.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        var result = new System.Text.StringBuilder();
+
+        foreach (var part in parts)
+        {
+            result.Append(char.ToUpperInvariant(part[0]));
+
+            if (part.Length > 1)
+                result.Append(part[1..]);
+        }
+
+        return result.ToString();
     }
 }
 
@@ -76,7 +92,7 @@ public sealed class TableDef
     }
 
     public static TableDef Define(string name, params ColumnBuilder[] columns) =>
-        new(name, columns.Select(c => c.Build(c.GetType().Name)).ToArray());
+        new(name, columns.Select(c => c.Build()).ToArray());
 
     public static TableDef Define(string name, params ColumnDef[] columns) =>
         new(name, columns);

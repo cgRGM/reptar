@@ -71,3 +71,9 @@ spikes/**/.wrangler/
 
 # Alchemy transpiled stack mirror
 packages/infra/alchemy.run.js
+
+# Local example uploads
+examples/blog/uploads/
+
+# Harness-managed skills
+.agents/

@@ -16,6 +16,8 @@ export default Alchemy.Stack(
     });
 
     const bucket = yield* Cloudflare.R2.Bucket("bucket");
+    const cache = yield* Cloudflare.KV.Namespace("cache");
+    const events = yield* Cloudflare.Queues.Queue("events");
 
     const api = yield* Cloudflare.Worker("api", {
       assets: "../../spikes/netwasm-worker/public",
@@ -23,8 +25,17 @@ export default Alchemy.Stack(
         date: "2026-10-22",
       },
       env: {
+        AI: Cloudflare.Workers.AI(),
+        APP_NAME: "reptar",
         BUCKET: bucket,
+        CORS_ORIGINS:
+          "https://reptar-web.rocktown-labs.workers.dev,http://localhost:4321",
+        COUNTER: Cloudflare.DurableObject("Counter", {
+          className: "Counter",
+        }),
         DB: db,
+        KV: cache,
+        QUEUE: events,
       },
       main: "../../spikes/netwasm-worker/src/index.ts",
       name: "reptar-api",

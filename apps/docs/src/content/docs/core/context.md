@@ -32,6 +32,7 @@ app.Get("/example", async c =>
 | `c.Cookies` | Host Cookie Jar | Get, set, and delete cookies with `HttpOnly`, `SameSite`, and `Max-Age` |
 | `c.Clock` | Host Clock | Deterministic time: `IsoNow()`, `IsoIn(duration)` |
 | `c.Crypto` | Host WebCrypto | PBKDF2 password hashing, SHA-256 tokens, and HMAC-SHA256 signatures |
+| `c.Environment` | Worker env | Reads string env vars/secrets: `Get("STRIPE_KEY")` |
 | `c.User` | Auth Slice | Authenticated user record populated by `Auth.RequireUser` |
 | `c.Json()` | Core Framework | Serializes typed JSON responses with HTTP status codes |
 | `c.Status()` | Core Framework | Returns empty or status responses (e.g. `c.Status(204)`) |

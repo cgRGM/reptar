@@ -10,6 +10,7 @@ import type {
   SignInInput,
   SignUpInput,
   UpdatePost,
+  UploadResult,
   ValidationError,
   ValidationIssue,
 } from "./types";
@@ -17,10 +18,10 @@ import type {
 export type AppType = {
   auth: {
     anonymous: {
-      $post: Endpoint<{}, SessionUser | ErrorBody, 201 | 404>;
+      $post: Endpoint<undefined, SessionUser | ErrorBody, 201 | 404>;
     };
     session: {
-      $get: Endpoint<{}, SessionResponse, 200>;
+      $get: Endpoint<undefined, SessionResponse, 200>;
     };
     signin: {
       $post: Endpoint<
@@ -30,7 +31,7 @@ export type AppType = {
       >;
     };
     signout: {
-      $post: Endpoint<{}, void, 204>;
+      $post: Endpoint<undefined, void, 204>;
     };
     signup: {
       $post: Endpoint<
@@ -40,28 +41,34 @@ export type AppType = {
       >;
     };
   };
+  health: {
+    $get: Endpoint<undefined, unknown, 200>;
+  };
+  images: {
+    ":key": {
+      $get: Endpoint<{ param: { key: string } }, ErrorBody, 200 | 404>;
+    };
+  };
+  me: {
+    $get: Endpoint<undefined, SessionResponse | ErrorBody, 200 | 401>;
+  };
   posts: {
-    $get: Endpoint<{}, Post[], 200>;
-    $post: Endpoint<
-      { json: CreatePost },
-      Post | ValidationError | ErrorBody,
-      201 | 400 | 401
-    >;
+    $get: Endpoint<undefined, Post[], 200>;
+    $post: Endpoint<{ json: CreatePost }, Post | ValidationError, 201 | 400>;
     ":id": {
-      $delete: Endpoint<
-        { param: { id: string } },
-        ErrorBody,
-        204 | 401 | 403 | 404
-      >;
+      $delete: Endpoint<{ param: { id: string } }, ErrorBody, 204 | 404>;
       $get: Endpoint<{ param: { id: string } }, Post | ErrorBody, 200 | 404>;
       $put: Endpoint<
         { json: UpdatePost; param: { id: string } },
         Post | ValidationError | ErrorBody,
-        200 | 400 | 401 | 403 | 404
+        200 | 400 | 404
       >;
     };
     mine: {
-      $get: Endpoint<{}, Post[] | ErrorBody, 200 | 401>;
+      $get: Endpoint<undefined, Post[] | ErrorBody, 200 | 401>;
     };
+  };
+  upload: {
+    $post: Endpoint<undefined, UploadResult, 201>;
   };
 };

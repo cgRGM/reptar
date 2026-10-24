@@ -261,7 +261,7 @@ internal static class TsEmitter
         }
 
         var input = inputParts.Count == 0
-            ? "{}"
+            ? "undefined"
             : "{ " + string.Join("; ", inputParts) + " }";
 
         var outputs = route.Produces

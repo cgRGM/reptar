@@ -1,10 +1,17 @@
 create table if not exists posts (
   id text primary key,
+  author_id text not null default 'anonymous',
+  slug text not null default '',
   title text not null,
   content text not null,
-  image_key text,
-  created_at text not null
+  excerpt text,
+  published integer not null default 1,
+  created_at text not null,
+  updated_at text not null default '',
+  image_key text
 );
+
+create index if not exists posts_slug_idx on posts(slug);
 
 create table if not exists users (
   id text primary key,

@@ -35,6 +35,19 @@ public sealed class SystemClock : IClock
     public string IsoIn(TimeSpan duration) => DateTimeOffset.UtcNow.Add(duration).ToString("O");
 }
 
+public interface IEnvironment
+{
+    string? Get(string name);
+}
+
+#if !NETWASM
+public sealed class SystemEnvironment : IEnvironment
+{
+    public string? Get(string name) =>
+        Environment.GetEnvironmentVariable(name);
+}
+#endif
+
 public interface ICrypto
 {
     Task<string> HashPassword(string password);

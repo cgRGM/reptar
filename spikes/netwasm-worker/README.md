@@ -1,6 +1,6 @@
 # Reptar on Cloudflare Workers
 
-The reference Worker: C# compiled by NetWasm, running inside workerd, with D1 for posts and R2 for images. The API is built with `ReptarApp`, not hand-written exports.
+The reference Worker: C# compiled by NetWasm, running inside workerd, with D1 for posts, R2 for images, and KV/Queues/AI/Durable Object platform bindings. The API is built with `ReptarApp` from the same `examples/blog` schema/feature files used by the portable app.
 
 ## Result
 
@@ -8,8 +8,10 @@ The reference Worker: C# compiled by NetWasm, running inside workerd, with D1 fo
 - `POST /posts` → `ReptarApp` → `D1DbClient` → D1 insert → JSON.
 - `POST /upload?key=…` → `ReptarApp` → `R2Client` → R2 put → `{ key, url }`.
 - `GET /images/:key` → Worker → R2 → image bytes.
+- `GET /platform/env` → `c.Environment.Get("APP_NAME")`.
+- `PUT/GET /platform/kv` → KV; `POST /platform/queue` → Queues; `GET /platform/durable` → `Counter` Durable Object; `POST /platform/ai` → Workers AI.
 - `POST /auth/signup`, `POST /auth/signin`, `POST /auth/signout`, `GET /auth/session`, and `GET /me` → D1 users/sessions, PBKDF2 via host WebCrypto, HttpOnly cookie sessions.
-- The Worker shim is `createReptarHost` from `@reptar/host`; the C# app exposes one generic `handle(string)` export and responds through `respond(string)`.
+- The Worker shim is `createReptarHost` from `@reptar/host`; the C# app exposes one generic `handle(string)` export and responds through `respond(requestId, string)`.
 - Local response time: ~3–10 ms after warm-up.
 - Verified with `wrangler dev` (workerd), not just a browser.
 
@@ -63,7 +65,7 @@ D1 tables:
 bunx wrangler@latest d1 execute DB --local --file schema.sql
 ```
 
-`schema.sql` creates `posts`, `users`, and `sessions`. `wrangler.jsonc` binds `DB` to a local D1 database and `BUCKET` to a local R2 bucket. The host sets `globalThis.__REPTAR_DB_QUERY`, `globalThis.__REPTAR_DB_EXECUTE`, `globalThis.__REPTAR_R2_PUT`, `globalThis.__REPTAR_RESPOND`, and the `__REPTAR_CRYPTO_*` globals; `app.host.mjs` forwards them to the C# `query`, `execute`, `r2put`, `respond`, `hashPassword`, `verifyPassword`, `sha256`, and `randomToken` imports.
+`schema.sql` creates `posts`, `users`, and `sessions`. `wrangler.jsonc` binds D1, R2, KV, a queue producer, Workers AI, and the `Counter` Durable Object. The host sets the `__REPTAR_*` bridge globals; `app.host.mjs` forwards DB/R2/KV/queue/AI/DO/HTTP/crypto/env calls into C#.
 
 ## Build the C# module
 
@@ -74,7 +76,14 @@ cd spikes/netwasm-worker
 bun run build
 ```
 
-The generated `public/browser` artifacts are committed, so `bun run dev` works without rebuilding the C# module. The optimized module is currently ~10 MB because it carries the framework, auth, source-generated JSON, and LINQ surface; the original minimal spike was 348 KB. Trimming that surface is on the roadmap.
+The generated `public/browser` artifacts are committed, so `bun run dev` works without rebuilding the C# module. The optimized module is currently ~12 MB because it carries the framework, auth, source-generated JSON, and LINQ surface; trimming that surface is on the roadmap.
+
+Run the local integration suite and benchmark:
+
+```bash
+bun run e2e
+bun run api:bench
+```
 
 ## Deploy
 

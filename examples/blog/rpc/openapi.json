@@ -5,6 +5,16 @@
     "version": "1.0.0"
   },
   "paths": {
+    "/health": {
+      "get": {
+        "operationId": "get_health",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/auth/signup": {
       "post": {
         "operationId": "post_auth_signup",
@@ -192,16 +202,6 @@
                 }
               }
             }
-          },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
           }
         },
         "requestBody": {
@@ -292,26 +292,6 @@
               }
             }
           },
-          "401": {
-            "description": "Unauthorized",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
-                }
-              }
-            }
-          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -341,8 +321,8 @@
             "description": "No Content",
             "content": null
           },
-          "401": {
-            "description": "Unauthorized",
+          "404": {
+            "description": "Not Found",
             "content": {
               "application/json": {
                 "schema": {
@@ -350,19 +330,64 @@
                 }
               }
             }
-          },
-          "403": {
-            "description": "Forbidden",
+          }
+        }
+      }
+    },
+    "/upload": {
+      "post": {
+        "operationId": "post_upload",
+        "responses": {
+          "201": {
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorBody"
+                  "$ref": "#/components/schemas/UploadResult"
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/images/{key}": {
+      "get": {
+        "operationId": "get_images_key",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": null
           },
           "404": {
             "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
             "content": {
               "application/json": {
                 "schema": {
@@ -418,7 +443,7 @@
             "type": "string"
           },
           "issues": {
-            "type": "object"
+            "type": "array"
           }
         }
       },
@@ -495,6 +520,9 @@
           },
           "updatedAt": {
             "type": "string"
+          },
+          "imageKey": {
+            "type": "string"
           }
         }
       },
@@ -509,6 +537,9 @@
           },
           "excerpt": {
             "type": "string"
+          },
+          "imageKey": {
+            "type": "string"
           }
         }
       },
@@ -522,6 +553,20 @@
             "type": "string"
           },
           "excerpt": {
+            "type": "string"
+          },
+          "imageKey": {
+            "type": "string"
+          }
+        }
+      },
+      "UploadResult": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "url": {
             "type": "string"
           }
         }

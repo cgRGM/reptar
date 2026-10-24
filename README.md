@@ -49,15 +49,17 @@ reptar/
 The backend is a file-based C# app at `examples/blog/app.cs` with **no app `.csproj`**. The Bun CLI hides the build toolchain; on first run it installs the pinned .NET SDK into `.reptar/` (build tool only — never shipped).
 
 ```bash
-bun api:dev       # run the blog API on http://localhost:8787
-bun rpc:gen       # regenerate examples/blog/rpc contracts from the C# route tree
+bun api:dev       # run the portable blog API on http://localhost:8787
+bun rpc:gen       # generate contracts from the shared C# route tree and sync @reptar/client
 bun rpc:check     # typecheck the generated client
 bun api:test      # run the C# framework tests
+bun e2e           # start a fresh workerd stack and run integration tests
+bun api:bench     # benchmark the deployed API (or pass --target)
 ```
 
 Framework code lives in `framework/Reptar` (core, data, auth, codegen) and `framework/Reptar.Kestrel` (optional dev host). Generated contracts are committed under `examples/blog/rpc`.
 
-**Wasm status:** the shared `ReptarApp` core now compiles to `netwasm0.1` and runs inside `wrangler dev` (workerd). The Worker app uses framework routes, `c.Db` against D1, `c.Storage` against R2, and `Validator<T>` validation. Built-in auth runs too: D1 users/sessions, PBKDF2 through host WebCrypto, HttpOnly cookies, and `Auth.RequireUser`. `@reptar/host` owns the NetWasm Worker rewrite and the generic `handle`/`respond` bridge. Rebuild the C# module with:
+**Wasm status:** the shared `ReptarApp` core compiles to `netwasm0.1` and runs inside `wrangler dev` (workerd). The same `examples/blog` schema/features files power both the portable Kestrel app and the Wasm Worker. The Worker uses `c.Db` (D1), `c.Storage` (R2), `c.Cache` (KV), `c.Queues`, `c.AI`, `c.Durable`, `c.Environment`, and `Validator<T>` validation. Built-in auth runs too: D1 users/sessions, PBKDF2 through host WebCrypto, HttpOnly cookies, and `Auth.RequireUser`. `@reptar/host` owns the NetWasm Worker rewrite and the generic per-request `handle`/`respond` bridge. Rebuild the C# module with:
 
 ```bash
 bun worker:build
@@ -131,7 +133,7 @@ bun run deploy -- --yes --no-input
 cd packages/infra && bunx alchemy deploy --stage production --yes
 ```
 
-The stack provisions a D1 database (`db`), an R2 bucket (`bucket`), the C# Worker (`api`), and the Astro site (`web`). D1 migrations come from `spikes/netwasm-worker/migrations/`. The Astro Worker gets `PUBLIC_API_URL` as a runtime binding for browser requests and an `API` service binding for server-side fetches, avoiding same-zone Worker fetch issues.
+The stack provisions a D1 database (`db`), an R2 bucket (`bucket`), a KV namespace (`cache`), a queue (`events`), Workers AI, a `Counter` Durable Object, the C# Worker (`api`), the docs Worker (`docs`), and the Astro site (`web`). D1 migrations come from `spikes/netwasm-worker/migrations/`. The Astro Worker gets `PUBLIC_API_URL` as a runtime binding for browser requests and an `API` service binding for server-side fetches, avoiding same-zone Worker fetch issues. `CORS_ORIGINS` is an explicit allowlist; set it per stage.
 
 ---
 

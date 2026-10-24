@@ -202,12 +202,19 @@ public static class Stripe
 
     public static ReptarApp Routes(
         StripeConfig config,
+        Func<Ctx, StripeEvent, Task<ReptarResponse>>? onEvent = null) =>
+        Routes(_ => config, onEvent);
+
+    public static ReptarApp Routes(
+        Func<Ctx, StripeConfig> configFactory,
         Func<Ctx, StripeEvent, Task<ReptarResponse>>? onEvent = null)
     {
         var app = ReptarApp.Create();
 
         app.Post("/checkout", async ctx =>
         {
+            var config = configFactory(ctx);
+
             if (string.IsNullOrWhiteSpace(config.ApiKey))
             {
                 return ctx.Error(
@@ -234,6 +241,8 @@ public static class Stripe
 
         app.Post("/webhook", async ctx =>
         {
+            var config = configFactory(ctx);
+
             if (string.IsNullOrWhiteSpace(config.WebhookSecret))
             {
                 return ctx.Error(

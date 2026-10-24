@@ -26,32 +26,27 @@ The Reptar CLI runs automatic contract generation during development and builds:
   </TabItem>
 </Tabs>
 
-To verify that generated contracts are up to date in CI/CD without modifying files:
-
-<Tabs syncKey="pkg">
-  <TabItem label="npm">```bash npx reptar codegen --check ```</TabItem>
-  <TabItem label="pnpm">```bash pnpm dlx reptar codegen --check ```</TabItem>
-  <TabItem label="yarn">```bash yarn dlx reptar codegen --check ```</TabItem>
-  <TabItem label="bun">```bash bun reptar codegen --check ```</TabItem>
-</Tabs>
-
 ---
 
 ## Generated Artifacts
 
-`bun reptar codegen` inspects your C# feature slices and outputs:
+`bun reptar codegen` inspects the shared C# feature slices and outputs:
 
 ```text
-packages/rpc/src/
+examples/blog/rpc/
   app-type.d.ts           # Complete route tree type: AppType
-  types.ts                # TypeScript DTO interfaces corresponding to C# records
-  schemas.generated.ts    # Zero-dependency Standard Schema validators (~standard)
-  client.ts               # Stable, ~100-line createClient runtime
+  types.ts                # TypeScript DTO interfaces from C# records
+  openapi.json            # OpenAPI 3.1 specification
 
-packages/contract/
-  reptar.spec.json        # Language-neutral schema for multi-platform client generators
-  openapi.json            # Standard OpenAPI 3.1 specification
+packages/rpc/src/
+  app-type.ts             # Synced copy used by @reptar/client
+  types.ts                # Synced copy of generated DTOs
+
+packages/rpc/
+  openapi.json            # Synced OpenAPI document
 ```
+
+The same `examples/blog` route/schema files compile into both the `net10.0` portable app and the `netwasm0.1` Worker, so the generated contract is based on the same routes that run on the edge.
 
 ---
 
@@ -101,27 +96,6 @@ Here is the real TypeScript consumer (`examples/blog/rpc/smoke.ts`) verifying th
 
 ---
 
-## Zero-Dependency Standard Schema
+## Standard Schema (planned)
 
-Every `Rule<T>` in your C# backend generates a validator implementing `~standard` (version 1, vendor `"reptar"`).
-
-```ts
-import { createPostSchema } from "@reptar/rpc";
-import { useForm } from "@tanstack/react-form";
-
-// Plug directly into TanStack Form with zero additional validation packages
-const form = useForm({
-  validatorAdapter: createPostSchema,
-  defaultValues: {
-    title: "",
-    content: "",
-  },
-});
-```
-
-One `Rule<T>` in C# provides:
-
-1. Server-side validation
-2. Client-side form validation
-3. TypeScript static types
-4. OpenAPI schema constraints
+The current codegen emits `AppType`, DTO interfaces, and OpenAPI. Emitting `~standard` validators directly from `Rule<T>` is the next codegen milestone; until then, use the C# validators on the server and share the generated TypeScript types with your form library.

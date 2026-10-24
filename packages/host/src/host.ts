@@ -54,6 +54,7 @@ interface ReptarScope {
     method: string,
     body: string
   ) => Promise<string>;
+  __REPTAR_ENV_GET?: (name: string) => string | null;
   __REPTAR_FETCH?: (
     input: RequestInfo | URL,
     init?: RequestInit
@@ -199,8 +200,7 @@ const registerDurableBinding = (
     if (!ns) {
       throw new Error(`Durable Object namespace '${namespace}' not found`);
     }
-    const stubId = ns.idFromString ? ns.idFromString(id) : ns.idFromName(id);
-    const stub = ns.get(stubId);
+    const stub = ns.get(ns.idFromName(id));
     const res = await stub.fetch(
       new Request(`https://do${path}`, {
         body: body || undefined,
@@ -355,6 +355,10 @@ export const createReptarHost = <TEnv>(
       origin
     );
     scope.__REPTAR_WASM_MODULE ??= options.wasm;
+    scope.__REPTAR_ENV_GET ??= (name) => {
+      const value = (env as Record<string, unknown>)[name];
+      return typeof value === "string" ? value : null;
+    };
     registerCryptoBindings(scope);
 
     const bindings = options.bindings(env);

@@ -3,6 +3,8 @@
 #:include schema/posts.cs
 #:include schema/index.cs
 #:include features/posts.cs
+#:include features/blog.cs
+#:include local-r2.cs
 
 global using Reptar;
 global using Reptar.Hosting;
@@ -10,16 +12,17 @@ global using static Reptar.ReptarApi;
 
 var app = ReptarApp.Create(new ReptarConfig
 {
+    Auth = BuiltIn(),
     Database = Db.Sqlite("blog.db"),
+    Storage = new LocalR2Client(
+        Path.Combine(Directory.GetCurrentDirectory(), "uploads")),
 });
 
 app.Use(RequestId());
 app.Use(Telemetry());
 app.Use(Cors());
 
-app.Route("/auth", Auth.Routes());
-app.RegisterSchema(Schema.All);
-app.Route("/posts", Posts.Routes());
+Blog.Configure(app);
 
 if (args.Contains("--codegen"))
 {

@@ -20,6 +20,7 @@
     <Compile Include="Data/D1DbClient.cs" />
     <Compile Include="Data/R2Client.cs" />
     <Compile Include="Data/WasmCrypto.cs" />
+    <Compile Include="Data/WasmEnvironment.cs" />
     <Compile Include="Data/WasmHttpClient.cs" />
     <Compile Include="Data/KvClient.cs" />
     <Compile Include="Data/AiClient.cs" />
