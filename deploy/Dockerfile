@@ -28,8 +28,8 @@ RUN dotnet publish app.cs \
     -p:PublishAot=true \
     -o /app/publish
 
-# Runtime stage: Google Distroless static Debian 12 (minimal attack surface, no shell, no package manager)
-FROM gcr.io/distroless/cc-debian12:nonroot
+# Runtime stage: Ubuntu 24.04 Chiseled distroless (matches SDK glibc, minimal attack surface, no shell, no package manager)
+FROM mcr.microsoft.com/dotnet/nightly/runtime-deps:10.0-noble-chiseled
 WORKDIR /app
 
 # Copy the standalone compiled binary
@@ -39,5 +39,5 @@ COPY --from=build /app/publish/app /app/reptar
 ENV PORT=8787
 EXPOSE 8787
 
-USER nonroot:nonroot
+USER 1654:1654
 ENTRYPOINT ["/app/reptar"]
