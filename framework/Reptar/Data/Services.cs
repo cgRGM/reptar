@@ -60,7 +60,8 @@ public interface ICrypto
 #if !NETWASM
 public sealed class DevCrypto : ICrypto
 {
-    private const int Iterations = 210_000;
+    // Match the workerd WebCrypto cap so local and deployed hashes verify.
+    private const int Iterations = 100_000;
 
     public Task<string> HashPassword(string password)
     {
