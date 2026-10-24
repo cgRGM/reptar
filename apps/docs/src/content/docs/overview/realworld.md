@@ -62,15 +62,17 @@ List responses omit the article body and fetch tags, favorite counts, favorite s
 
 A separate Cloudflare Workers + D1 deployment (`reptar-realworld-bench`) passes the same 154-request Hurl suite. From the Lightsail VPS, with 50 read clients and 100 seeded articles:
 
-| Scenario                     | Edge req/sec | Edge p50 |
-| ---------------------------- | -----------: | -------: |
-| `GET /api/tags`              |          518 |    68 ms |
-| `GET /api/articles?limit=20` |          122 |   365 ms |
-| `GET /api/articles/:slug`    |          242 |   145 ms |
-| `GET /api/articles/feed`     |           72 |   635 ms |
-| `POST /api/articles`         |           13 |   559 ms |
+| Scenario                     | Cold p50 | Cache-warm req/sec | Cache-warm p50 |
+| ---------------------------- | -------: | -----------------: | -------------: |
+| `GET /api/tags`              |    68 ms |              3,568 |          10 ms |
+| `GET /api/articles?limit=20` |   365 ms |              3,765 |          10 ms |
+| `GET /api/articles/:slug`    |   145 ms |              2,957 |          10 ms |
+| `GET /api/articles/feed`     |   635 ms |                 68 |         639 ms |
+| `POST /api/articles`         |   559 ms |                 11 |         803 ms |
 
-These use a different dataset and connection count from the VPS table. Cloudflare logs show 1–2 ms client RTT from the VPS to the Columbus (CMH) colo, so the edge gap is Worker CPU and D1 time rather than WAN latency. The logs show roughly 150–245 ms CPU time for a single-article request, making Worker CPU/interop the next optimization target.
+The Worker caches anonymous `GET /api/tags`, `GET /api/articles` (base and `?limit=20`), and `GET /api/articles/:slug` for 15 seconds. Authenticated requests bypass the cache, and writes purge the relevant keys. This takes cached list p50 from 365 ms to 10 ms, below the 150 ms edge target. Feed and writes are intentionally uncached.
+
+Cloudflare logs show 1–2 ms client RTT from the VPS to the Columbus (CMH) colo, so the uncached edge gap is Worker CPU and D1 time rather than WAN latency. The logs show roughly 150–245 ms CPU time for a cold single-article request.
 
 ## AOT lessons
 
