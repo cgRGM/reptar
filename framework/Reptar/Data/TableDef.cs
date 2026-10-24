@@ -30,6 +30,9 @@ public sealed class ColumnBuilder
         return this;
     }
 
+    public ColumnBuilder References(TableDef table, string column = "id", string? onDelete = null) =>
+        References(table.Name, column, onDelete);
+
     internal ColumnDef Build(string? clrName = null)
     {
         _definition.ClrName = clrName ?? ToPascalCase(_definition.SqlName);

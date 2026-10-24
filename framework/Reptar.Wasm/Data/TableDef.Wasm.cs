@@ -30,6 +30,9 @@ public sealed class ColumnBuilder
         return this;
     }
 
+    public ColumnBuilder References(TableDef table, string column = "id", string? onDelete = null) =>
+        References(table.Name, column, onDelete);
+
     public ColumnDef Build(string? clrName = null)
     {
         if (clrName is not null)

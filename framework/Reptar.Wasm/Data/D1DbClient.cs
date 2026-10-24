@@ -189,7 +189,7 @@ public sealed class D1DbClient : IDbClient
         object? param = null)
     {
         var sql = $"select 1 as count from \"{table.Name}\" where {where} limit 1";
-        var rows = await QueryAsync<CountRow>(sql, param);
+        var rows = await QueryAsync<DbCount>(sql, param);
         return rows.Count > 0;
     }
 
@@ -379,5 +379,4 @@ public sealed class D1DbClient : IDbClient
         return $"[{string.Join(",", parts)}]";
     }
 
-    private sealed record CountRow(int Count);
 }

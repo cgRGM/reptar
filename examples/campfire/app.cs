@@ -1,10 +1,15 @@
+#:project ../../framework/Reptar/Reptar.csproj
+#:project ../../framework/Reptar.Kestrel/Reptar.Kestrel.csproj
+
 using Reptar;
 using Reptar.Hosting;
 using Reptar.Realtime;
 
+var database = Db.Sqlite("campfire.db");
+
 var app = ReptarApp.Create(new ReptarConfig
 {
-    Database = Db.Sqlite("campfire.db"),
+    Database = database,
 });
 
 // Schema Definitions
@@ -40,29 +45,30 @@ var campfire = app.UseCampfire("/cable", hub =>
 });
 
 // Seed default room if empty
-var existingRooms = await app.Services.Db.ListAsync<RoomRecord>(Rooms, limit: 1);
+var existingRooms = await database.ListAsync<RoomRecord>(Rooms, limit: 1);
 if (existingRooms.Count == 0)
 {
-    await app.Services.Db.InsertAsync(Rooms, new { Name = "Watercooler", Topic = "General banter & watercooler chatter" });
+    await database.InsertAsync(Rooms, new { Name = "Watercooler", Topic = "General banter & watercooler chatter" });
 }
 
 // REST Routes for Campfire Chat & Action Cable Broadcasts
+app.Get("/health", ctx => Task.FromResult(ctx.Json(new { status = "ok" })));
+
 app.Get("/rooms", async ctx =>
 {
     var list = await ctx.Db.ListAsync<RoomRecord>(Rooms);
     return ctx.Json(list);
 });
 
-app.Post("/rooms", async ctx =>
+app.Post<CreateRoomInput>("/rooms", async (ctx, input) =>
 {
-    var input = await ctx.Req.JsonAsync<CreateRoomInput>();
     if (string.IsNullOrWhiteSpace(input?.Name))
     {
         return ctx.BadRequest("Room name is required.");
     }
 
     await ctx.Db.InsertAsync(Rooms, new { Name = input.Name, Topic = input.Topic });
-    return ctx.Created(new { name = input.Name, topic = input.Topic });
+    return ctx.Json(new { name = input.Name, topic = input.Topic }, status: 201);
 });
 
 app.Get("/rooms/:id/messages", async ctx =>
@@ -76,10 +82,9 @@ app.Get("/rooms/:id/messages", async ctx =>
     return ctx.Json(list);
 });
 
-app.Post("/rooms/:id/messages", async ctx =>
+app.Post<CreateMessageInput>("/rooms/:id/messages", async (ctx, input) =>
 {
     var roomId = long.Parse(ctx.Req.Param("id")!);
-    var input = await ctx.Req.JsonAsync<CreateMessageInput>();
 
     if (string.IsNullOrWhiteSpace(input?.Body))
     {
@@ -99,7 +104,6 @@ app.Post("/rooms/:id/messages", async ctx =>
         CreatedAt = now,
     });
 
-    // Query back the newly inserted message
     var inserted = await ctx.Db.QuerySingleOrDefaultAsync<MessageRecord>(
         "SELECT * FROM \"messages\" WHERE room_id = @room_id ORDER BY id DESC LIMIT 1",
         new { room_id = roomId }
@@ -114,23 +118,19 @@ app.Post("/rooms/:id/messages", async ctx =>
         CreatedAt: now
     );
 
-    // Broadcast in real-time over Action Cable WebSockets:
-    // 1. Sends Turbo Stream DOM update to connected browsers
-    // 2. Sends JSON payload to verification / benchmark clients
     var subscriberCount = await campfire.BroadcastMessageCreatedAsync(messageObj);
 
-    return ctx.Created(new
+    return ctx.Json(new
     {
         message = messageObj,
         subscribersMessaged = subscriberCount
-    });
+    }, status: 201);
 });
 
-app.Put("/rooms/:id/messages/:messageId", async ctx =>
+app.Put<UpdateMessageInput>("/rooms/:id/messages/:messageId", async (ctx, input) =>
 {
     var roomId = long.Parse(ctx.Req.Param("id")!);
     var messageId = long.Parse(ctx.Req.Param("messageId")!);
-    var input = await ctx.Req.JsonAsync<UpdateMessageInput>();
 
     if (string.IsNullOrWhiteSpace(input?.Body))
     {
@@ -166,13 +166,12 @@ app.Delete("/rooms/:id/messages/:messageId", async ctx =>
     await ctx.Db.DeleteAsync(Messages, messageId);
     await campfire.BroadcastMessageDeletedAsync(roomId, messageId);
 
-    return ctx.NoContent();
+    return ctx.Status(204);
 });
 
-app.Post("/rooms/:id/typing", async ctx =>
+app.Post<TypingInput>("/rooms/:id/typing", async (ctx, input) =>
 {
     var roomId = long.Parse(ctx.Req.Param("id")!);
-    var input = await ctx.Req.JsonAsync<TypingInput>();
 
     var status = new CampfireTypingStatus(
         RoomId: roomId,
@@ -182,7 +181,7 @@ app.Post("/rooms/:id/typing", async ctx =>
     );
 
     await campfire.BroadcastTypingAsync(status);
-    return ctx.Ok(new { status = "broadcasted" });
+    return ctx.Json(new { status = "broadcasted" });
 });
 
 await app.RunAsync(args);
