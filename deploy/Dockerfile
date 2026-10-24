@@ -21,6 +21,7 @@ RUN dotnet publish app.cs \
     -r linux-x64 \
     -c Release \
     --self-contained \
+    -p:PublishAot=true \
     -o /app/publish
 
 # Runtime stage: Google Distroless static Debian 12 (minimal attack surface, no shell, no package manager)

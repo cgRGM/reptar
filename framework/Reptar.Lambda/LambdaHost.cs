@@ -22,40 +22,56 @@ public static class LambdaHost
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            using var nextResponse = await HttpClient.GetAsync(nextInvocationUrl, cancellationToken);
-            nextResponse.EnsureSuccessStatusCode();
-
-            if (!nextResponse.Headers.TryGetValues("Lambda-Runtime-Aws-Request-Id", out var idValues))
-            {
-                continue;
-            }
-
-            var requestId = idValues.First();
-            var responseUrl = $"http://{runtimeApi}/2018-06-01/runtime/invocation/{requestId}/response";
-            var errorUrl = $"http://{runtimeApi}/2018-06-01/runtime/invocation/{requestId}/error";
-
+            HttpResponseMessage nextResponse;
             try
             {
-                var eventJson = await nextResponse.Content.ReadAsStringAsync(cancellationToken);
-                var reptarRequest = ParseApiGatewayV2Event(eventJson);
-
-                var reptarResponse = await app.HandleAsync(reptarRequest);
-                var responsePayload = FormatApiGatewayV2Response(reptarResponse);
-
-                using var responseContent = new StringContent(responsePayload, Encoding.UTF8, "application/json");
-                await HttpClient.PostAsync(responseUrl, responseContent, cancellationToken);
+                nextResponse = await HttpClient.GetAsync(nextInvocationUrl, cancellationToken);
             }
-            catch (Exception ex)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
-                var errorPayload = JsonSerializer.Serialize(new
-                {
-                    errorMessage = ex.Message,
-                    errorType = ex.GetType().FullName,
-                    stackTrace = ex.StackTrace,
-                });
+                break;
+            }
 
-                using var errorContent = new StringContent(errorPayload, Encoding.UTF8, "application/json");
-                await HttpClient.PostAsync(errorUrl, errorContent, cancellationToken);
+            using (nextResponse)
+            {
+                nextResponse.EnsureSuccessStatusCode();
+
+                if (!nextResponse.Headers.TryGetValues("Lambda-Runtime-Aws-Request-Id", out var idValues))
+                {
+                    continue;
+                }
+
+                var requestId = idValues.First();
+                var responseUrl = $"http://{runtimeApi}/2018-06-01/runtime/invocation/{requestId}/response";
+                var errorUrl = $"http://{runtimeApi}/2018-06-01/runtime/invocation/{requestId}/error";
+
+                try
+                {
+                    var eventJson = await nextResponse.Content.ReadAsStringAsync(cancellationToken);
+                    var reptarRequest = ParseApiGatewayV2Event(eventJson);
+
+                    var reptarResponse = await app.HandleAsync(reptarRequest);
+                    var responsePayload = FormatApiGatewayV2Response(reptarResponse);
+
+                    using var responseContent = new StringContent(responsePayload, Encoding.UTF8, "application/json");
+                    await HttpClient.PostAsync(responseUrl, responseContent, cancellationToken);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    var errorPayload = JsonSerializer.Serialize(new
+                    {
+                        errorMessage = ex.Message,
+                        errorType = ex.GetType().FullName,
+                        stackTrace = ex.StackTrace,
+                    });
+
+                    using var errorContent = new StringContent(errorPayload, Encoding.UTF8, "application/json");
+                    await HttpClient.PostAsync(errorUrl, errorContent, cancellationToken);
+                }
             }
         }
     }

@@ -476,6 +476,11 @@ public class StripeTests
         Assert.Contains("line_items[0][price_data][product_data][name]=Premium%20Plan", body);
         Assert.Contains("line_items[0][quantity]=2", body);
     }
+}
+
+public class PostgresTests
+{
+    private sealed record ScalarVal(int Val);
 
     [Fact]
     public void SqlParamParser_rewrites_positional_and_named_params_for_postgres()
@@ -541,6 +546,105 @@ public class StripeTests
         Assert.Contains("Username=myuser", connStr);
         Assert.Contains("Password=mypassword", connStr);
         Assert.Contains("SSL Mode=Require", connStr);
+    }
+
+    [Fact]
+    public async Task PostgresDbClient_live_integration_test_when_postgres_is_available()
+    {
+        var requirePostgres = Environment.GetEnvironmentVariable("POSTGRES_TEST") == "1";
+        var connStr = Environment.GetEnvironmentVariable("POSTGRES_URL")
+            ?? $"Host=localhost;Database=reptar_test;Username={Environment.UserName};";
+
+        var ranLive = false;
+        PostgresDbClient client;
+        try
+        {
+            client = new PostgresDbClient(connStr);
+            var testConn = await client.QuerySingleOrDefaultAsync<ScalarVal>("SELECT 1 as val;");
+            if (testConn != null) ranLive = true;
+            else if (requirePostgres) Assert.Fail("Postgres connection succeeded but returned null test result.");
+            else return;
+        }
+        catch
+        {
+            if (requirePostgres) throw;
+            // PostgreSQL not available in this test environment; skip gracefully
+            return;
+        }
+
+        Assert.True(ranLive);
+
+        // Clean up any existing test table
+        await client.ExecuteAsync("DROP TABLE IF EXISTS \"widgets\";");
+
+        // 1. EnsureCreatedAsync (DDL)
+        await client.EnsureCreatedAsync(TestSchema.Widgets);
+
+        // 2. InsertAsync
+        var w1 = new Widget("w_1", "Gear", 10);
+        var w2 = new Widget("w_2", "Sprocket", 25);
+        await client.InsertAsync(TestSchema.Widgets, w1);
+        await client.InsertAsync(TestSchema.Widgets, w2);
+
+        // 3. GetAsync
+        var fetched = await client.GetAsync<Widget>(TestSchema.Widgets, "w_1");
+        Assert.NotNull(fetched);
+        Assert.Equal("w_1", fetched.Id);
+        Assert.Equal("Gear", fetched.Name);
+        Assert.Equal(10, fetched.Count);
+
+        // 4. ListAsync with WHERE clause and pagination
+        var list = await client.ListAsync<Widget>(TestSchema.Widgets, "count > 15", limit: 10);
+        Assert.Single(list);
+        Assert.Equal("w_2", list[0].Id);
+
+        // 5. UpdateAsync
+        var updatedCount = await client.UpdateAsync(TestSchema.Widgets, new { Name = "Super Gear", Count = 99 }, "w_1");
+        Assert.Equal(1, updatedCount);
+        var afterUpdate = await client.GetAsync<Widget>(TestSchema.Widgets, "w_1");
+        Assert.NotNull(afterUpdate);
+        Assert.Equal("Super Gear", afterUpdate.Name);
+        Assert.Equal(99, afterUpdate.Count);
+
+        // 6. ExistsAsync
+        var exists = await client.ExistsAsync(TestSchema.Widgets, "\"id\" = 'w_1'");
+        Assert.True(exists);
+        var notExists = await client.ExistsAsync(TestSchema.Widgets, "\"id\" = 'w_999'");
+        Assert.False(notExists);
+
+        // 7. TransactionAsync - Commit
+        await client.TransactionAsync(async tx =>
+        {
+            await tx.ExecuteAsync("INSERT INTO \"widgets\" (\"id\", \"name\", \"count\") VALUES ('w_3', 'Bolt', 5);");
+        });
+        var w3 = await client.GetAsync<Widget>(TestSchema.Widgets, "w_3");
+        Assert.NotNull(w3);
+        Assert.Equal("Bolt", w3.Name);
+
+        // 8. TransactionAsync - Rollback on exception
+        try
+        {
+            await client.TransactionAsync(async tx =>
+            {
+                await tx.ExecuteAsync("INSERT INTO \"widgets\" (\"id\", \"name\", \"count\") VALUES ('w_4', 'Nut', 7);");
+                throw new InvalidOperationException("Force rollback");
+            });
+        }
+        catch (InvalidOperationException)
+        {
+            // Expected
+        }
+        var w4 = await client.GetAsync<Widget>(TestSchema.Widgets, "w_4");
+        Assert.Null(w4); // Should be rolled back
+
+        // 9. DeleteAsync
+        var delCount = await client.DeleteAsync(TestSchema.Widgets, "w_1");
+        Assert.Equal(1, delCount);
+        var afterDelete = await client.GetAsync<Widget>(TestSchema.Widgets, "w_1");
+        Assert.Null(afterDelete);
+
+        // Cleanup
+        await client.ExecuteAsync("DROP TABLE IF EXISTS \"widgets\";");
     }
 }
 
@@ -1061,6 +1165,115 @@ public class LambdaTests
         var bodyBase64 = doc["body"]!.GetValue<string>();
         var bodyBytes = Convert.FromBase64String(bodyBase64);
         Assert.Equal("{\"id\":\"p1\"}", Encoding.UTF8.GetString(bodyBytes));
+    }
+
+    [Fact]
+    public async Task Runs_lambda_runtime_loop_against_mock_runtime_api()
+    {
+        var listener = new System.Net.HttpListener();
+        var random = new Random();
+        var port = random.Next(20000, 40000);
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        try
+        {
+            listener.Start();
+        }
+        catch
+        {
+            port = random.Next(40001, 55000);
+            listener = new System.Net.HttpListener();
+            listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+            listener.Start();
+        }
+
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var invocationProcessed = false;
+
+        var serverTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.IsCancellationRequested)
+                {
+                    var getContextTask = listener.GetContextAsync();
+                    var completedTask = await Task.WhenAny(getContextTask, Task.Delay(5000, cts.Token));
+                    if (completedTask != getContextTask) break;
+
+                    var context = await getContextTask;
+                    var req = context.Request;
+                    var res = context.Response;
+
+                    if (req.Url?.AbsolutePath == "/2018-06-01/runtime/invocation/next")
+                    {
+                        res.StatusCode = 200;
+                        res.Headers["Lambda-Runtime-Aws-Request-Id"] = "test-req-456";
+                        var payload = Encoding.UTF8.GetBytes("""
+                        {
+                            "rawPath": "/greet",
+                            "requestContext": { "http": { "method": "GET" } }
+                        }
+                        """);
+                        res.ContentType = "application/json";
+                        res.ContentLength64 = payload.Length;
+                        await res.OutputStream.WriteAsync(payload, cts.Token);
+                        res.OutputStream.Close();
+                    }
+                    else if (req.Url?.AbsolutePath == "/2018-06-01/runtime/invocation/test-req-456/response")
+                    {
+                        using var reader = new StreamReader(req.InputStream, Encoding.UTF8);
+                        var body = await reader.ReadToEndAsync(cts.Token);
+                        if (body.Contains("statusCode") && body.Contains("SGVsbG8gZnJvbSBMYW1iZGE="))
+                        {
+                            invocationProcessed = true;
+                        }
+                        res.StatusCode = 202;
+                        res.OutputStream.Close();
+
+                        cts.Cancel();
+                        break;
+                    }
+                    else
+                    {
+                        res.StatusCode = 404;
+                        res.OutputStream.Close();
+                    }
+                }
+            }
+            catch
+            {
+                // listener stopped or cancelled
+            }
+        });
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+        });
+        app.Get("/greet", ctx => Task.FromResult(ctx.Text("Hello from Lambda")));
+
+        var originalEnv = Environment.GetEnvironmentVariable("AWS_LAMBDA_RUNTIME_API");
+        try
+        {
+            Environment.SetEnvironmentVariable("AWS_LAMBDA_RUNTIME_API", $"127.0.0.1:{port}");
+            await Reptar.Hosting.Lambda.LambdaHost.RunLambdaAsync(app, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected upon completion
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("AWS_LAMBDA_RUNTIME_API", originalEnv);
+            try
+            {
+                listener.Stop();
+                listener.Close();
+            }
+            catch { }
+            await serverTask;
+        }
+
+        Assert.True(invocationProcessed);
     }
 }
 

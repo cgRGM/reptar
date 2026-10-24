@@ -61,10 +61,10 @@ var posts = await ctx.Db.ListAsync<Post>(PostsTable);
 var url = await ctx.Storage.PutAsync("avatars/user_1.png", bytes, "image/png");
 
 // Cloudflare Workers AI (GPU LLMs)
-var summary = await ctx.AI.Run("@cf/meta/llama-3-8b-instruct", prompt);
+var summary = await ctx.AI.RunAsync("@cf/meta/llama-3-8b-instruct", prompt);
 
 // Cloudflare KV Namespace
-await ctx.Cache.PutAsync("cache:key", "value", TimeSpan.FromMinutes(5));
+await ctx.Cache.PutAsync("cache:key", "value", ttlSeconds: 300);
 
 // Cloudflare Queues
 await ctx.Queues.SendAsync("notifications", new { userId = "u1" });
@@ -78,8 +78,8 @@ For teams running on dedicated VPS instances (Hetzner, DigitalOcean) or containe
 
 ### Key Metrics
 
-- **Binary Size:** 17.1 MB standalone executable (no .NET runtime or SDK required on the host).
-- **Image Size:** 18 MB total distroless Debian 12 container footprint.
+- **Binary Size:** 16 MB standalone executable (no .NET runtime or SDK required on the host).
+- **Image Size:** < 25 MB total distroless Debian 12 container footprint.
 - **Boot Time:** Under 5 milliseconds from cold process start.
 - **Database Support:** Native connection pooling via Npgsql for PostgreSQL, plus local SQLite.
 
@@ -95,7 +95,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends clang zlib1g-de
 COPY framework/ framework/
 COPY examples/blog/ examples/blog/
 WORKDIR /src/examples/blog
-RUN dotnet publish app.cs -r linux-x64 -c Release --self-contained -o /app/publish
+RUN dotnet publish app.cs -r linux-x64 -c Release --self-contained -p:PublishAot=true -o /app/publish
 
 # Stage 2: Distroless static runtime (<25MB)
 FROM gcr.io/distroless/static-debian12:nonroot

@@ -158,7 +158,10 @@ public sealed class PostgresDbClient : IDbClient
             return Task.FromResult(0);
         }
 
-        sets.Add($"\"updated_at\" = CURRENT_TIMESTAMP");
+        if (table.Columns.Any(c => string.Equals(c.SqlName, "updated_at", StringComparison.OrdinalIgnoreCase)))
+        {
+            sets.Add("\"updated_at\" = CURRENT_TIMESTAMP");
+        }
 
         var sql = $"UPDATE \"{table.Name}\" SET {string.Join(", ", sets)} WHERE \"{pk}\" = ${index}";
         paramValues.Add(id);
@@ -183,7 +186,7 @@ public sealed class PostgresDbClient : IDbClient
 
     public async Task<bool> ExistsAsync(TableDef table, string where, object? param = null)
     {
-        var sql = $"SELECT 1 FROM \"{table.Name}\" WHERE {where} LIMIT 1";
+        var sql = $"SELECT 1 as count FROM \"{table.Name}\" WHERE {where} LIMIT 1";
         var rows = await QueryAsync<CountRow>(sql, param);
         return rows.Count > 0;
     }
