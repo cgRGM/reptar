@@ -15,10 +15,41 @@ public static class ActionCableProtocol
     public const string CommandUnsubscribe = "unsubscribe";
     public const string CommandMessage = "message";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+#if !NETWASM
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver()
+#endif
     };
+
+    public static string EscapeString(string value)
+    {
+        if (value is null) return "\"\"";
+        var sb = new System.Text.StringBuilder(value.Length + 4);
+        sb.Append('"');
+        foreach (var c in value)
+        {
+            switch (c)
+            {
+                case '"': sb.Append("\\\""); break;
+                case '\\': sb.Append("\\\\"); break;
+                case '\b': sb.Append("\\b"); break;
+                case '\f': sb.Append("\\f"); break;
+                case '\n': sb.Append("\\n"); break;
+                case '\r': sb.Append("\\r"); break;
+                case '\t': sb.Append("\\t"); break;
+                default:
+                    if (c < ' ')
+                        sb.Append($"\\u{(int)c:x4}");
+                    else
+                        sb.Append(c);
+                    break;
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
 
     public static string Welcome(string? sessionId = null) =>
         sessionId is null
@@ -29,24 +60,24 @@ public static class ActionCableProtocol
         $"{{\"type\":\"ping\",\"message\":{timestamp ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds()}}}";
 
     public static string ConfirmSubscription(string identifier) =>
-        $"{{\"type\":\"confirm_subscription\",\"identifier\":{JsonSerializer.Serialize(identifier, JsonOptions)}}}";
+        $"{{\"type\":\"confirm_subscription\",\"identifier\":{EscapeString(identifier)}}}";
 
     public static string RejectSubscription(string identifier) =>
-        $"{{\"type\":\"reject_subscription\",\"identifier\":{JsonSerializer.Serialize(identifier, JsonOptions)}}}";
+        $"{{\"type\":\"reject_subscription\",\"identifier\":{EscapeString(identifier)}}}";
 
     public static string Disconnect(string reason = "unauthorized", bool reconnect = false) =>
-        $"{{\"type\":\"disconnect\",\"reason\":{JsonSerializer.Serialize(reason, JsonOptions)},\"reconnect\":{(reconnect ? "true" : "false")}}}";
+        $"{{\"type\":\"disconnect\",\"reason\":{EscapeString(reason)},\"reconnect\":{(reconnect ? "true" : "false")}}}";
 
     public static string BroadcastRaw(string identifier, string rawMessage) =>
-        $"{{\"identifier\":{JsonSerializer.Serialize(identifier, JsonOptions)},\"message\":{rawMessage}}}";
+        $"{{\"identifier\":{EscapeString(identifier)},\"message\":{rawMessage}}}";
 
     public static string Broadcast(string identifier, object message, IJsonCodec? json = null)
     {
         var serializedMessage = message is string s && (s.StartsWith("{") || s.StartsWith("<"))
-            ? JsonSerializer.Serialize(s, JsonOptions)
-            : (json?.Serialize(message) ?? JsonSerializer.Serialize(message, JsonOptions));
+            ? EscapeString(s)
+            : (json?.Serialize(message) ?? (message is string str ? EscapeString(str) : EscapeString(message.ToString() ?? "")));
 
-        return $"{{\"identifier\":{JsonSerializer.Serialize(identifier, JsonOptions)},\"message\":{serializedMessage}}}";
+        return $"{{\"identifier\":{EscapeString(identifier)},\"message\":{serializedMessage}}}";
     }
 
     public static ActionCableCommand? ParseClientMessage(string json)

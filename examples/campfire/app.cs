@@ -80,17 +80,42 @@ app.Get("/rooms/:id/messages", async ctx =>
     return ctx.Json(list);
 });
 
-app.Post<CreateMessageInput>("/rooms/:id/messages", async (ctx, input) =>
+app.Post("/rooms/:id/messages", async ctx =>
 {
     var roomId = long.Parse(ctx.Req.Param("id")!);
+    string? body = null;
+    string? userName = null;
+    long userId = 1;
 
-    if (string.IsNullOrWhiteSpace(input?.Body))
+    var contentType = ctx.Req.Headers.TryGetValue("content-type", out var ct) ? ct : "";
+    if (contentType.Contains("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase))
+    {
+        var form = ParseFormUrlEncoded(ctx.Req.BodyText);
+        body = form.TryGetValue("message[body]", out var b1) ? b1
+             : form.TryGetValue("body", out var b2) ? b2 : null;
+        userName = form.TryGetValue("user_name", out var u) ? u : "Anonymous";
+    }
+    else
+    {
+        try
+        {
+            var jsonInput = await ctx.Req.JsonAsync<CreateMessageInput>();
+            body = jsonInput?.Body;
+            userName = jsonInput?.UserName;
+            userId = jsonInput?.UserId > 0 ? jsonInput.UserId : 1;
+        }
+        catch
+        {
+            body = ctx.Req.BodyText;
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(body))
     {
         return ctx.BadRequest("Message body cannot be empty.");
     }
 
-    var userName = input.UserName ?? "Anonymous";
-    var userId = input.UserId > 0 ? input.UserId : 1;
+    userName ??= "Anonymous";
     var now = DateTimeOffset.UtcNow.ToString("O");
 
     await ctx.Db.InsertAsync(Messages, new Dictionary<string, object?>
@@ -98,7 +123,7 @@ app.Post<CreateMessageInput>("/rooms/:id/messages", async (ctx, input) =>
         ["room_id"] = roomId,
         ["user_id"] = userId,
         ["user_name"] = userName,
-        ["body"] = input.Body,
+        ["body"] = body,
         ["created_at"] = now,
     });
 
@@ -107,21 +132,30 @@ app.Post<CreateMessageInput>("/rooms/:id/messages", async (ctx, input) =>
         new Dictionary<string, object?> { ["room_id"] = roomId }
     );
 
+    var messageId = inserted?.Id ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
     var messageObj = new CampfireMessage(
-        Id: inserted?.Id ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        Id: messageId,
         RoomId: roomId,
         UserId: userId,
         UserName: userName,
-        Body: input.Body,
+        Body: body,
         CreatedAt: now
     );
 
     var subscriberCount = await campfire.BroadcastMessageCreatedAsync(messageObj);
 
-    return ctx.Json(new
+    var accept = ctx.Req.Headers.TryGetValue("accept", out var acc) ? acc : "";
+    if (accept.Contains("turbo-stream", StringComparison.OrdinalIgnoreCase))
     {
-        message = messageObj,
-        subscribersMessaged = subscriberCount
+        var turboHtml = $"<turbo-stream action=\"append\" target=\"messages\"><template><div id=\"message_{messageId}\" data-message-id=\"{messageId}\" class=\"message\"><div class=\"message__content\">{body}</div></div></template></turbo-stream>";
+        return ctx.Text(turboHtml, status: 200, contentType: "text/vnd.turbo-stream.html; charset=utf-8");
+    }
+
+    return ctx.Json(new Dictionary<string, object?>
+    {
+        ["message"] = messageObj,
+        ["subscribersMessaged"] = subscriberCount
     }, status: 201);
 });
 
@@ -179,8 +213,25 @@ app.Post<TypingInput>("/rooms/:id/typing", async (ctx, input) =>
     );
 
     await campfire.BroadcastTypingAsync(status);
-    return ctx.Json(new { status = "broadcasted" });
+    return ctx.Json(new Dictionary<string, string> { ["status"] = "broadcasted" });
 });
+
+static Dictionary<string, string> ParseFormUrlEncoded(string? body)
+{
+    var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    if (string.IsNullOrWhiteSpace(body)) return dict;
+    foreach (var pair in body.Split('&'))
+    {
+        var idx = pair.IndexOf('=');
+        if (idx > 0)
+        {
+            var key = System.Net.WebUtility.UrlDecode(pair[..idx]);
+            var val = System.Net.WebUtility.UrlDecode(pair[(idx + 1)..]);
+            dict[key] = val;
+        }
+    }
+    return dict;
+}
 
 await app.RunAsync(args);
 
