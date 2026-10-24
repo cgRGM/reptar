@@ -5,6 +5,7 @@
     <TargetFramework>netwasm0.1</TargetFramework>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <NetWasmOptimization>O0</NetWasmOptimization>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../framework/Reptar.Wasm/Reptar.Wasm.csproj" />

@@ -47,6 +47,11 @@ const dotnetEnv = (): NodeJS.ProcessEnv => ({
   ...process.env,
   DOTNET_CLI_HOME: cliHome,
   DOTNET_NOLOGO: "1",
+  NUGET_HTTP_CACHE_PATH: path.join(
+    process.env.HOME ?? "",
+    ".nuget",
+    "http-cache"
+  ),
 });
 
 const readSdkVersion = (): string | null => {

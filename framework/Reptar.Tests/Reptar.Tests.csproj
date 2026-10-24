@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Reptar\Reptar.csproj" />
     <ProjectReference Include="..\Reptar.Lambda\Reptar.Lambda.csproj" />
+    <ProjectReference Include="..\Reptar.SourceGenerators\Reptar.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

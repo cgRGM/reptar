@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "a0c29770e9fec1a09b84b3534e597c4e26e7c378991665350ffc26193a735766",
+  "semanticBuildId": "cc6e2c415e0ee5cd0e5a574b8597cfc7656b7aee6d3373284cf931e870134b08",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "1f92c406261804c8e4206b8741c75dab8a8964376bb7ed5fdae906fe6cb37d30",
+  "buildFingerprint": "766546d209ff3f9ebfbf96e5e9d5767a78c619214c61274aeee0e86c838e9b86",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,28 +23,28 @@
       "relativePath": "HelloReptar.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "c17b8aa6527d822a1af5b58f1906a5d00498ce5eda0a99931458c9acc68063f9",
+      "sha256": "7f3378064670f1cda0c47fe7034da2ebbeb67da22fba9408fe71d8df0ede23f1",
       "schemaVersion": 2
     },
     {
       "relativePath": "HelloReptar.raw-adapter.mjs",
       "role": "raw-adapter",
       "mediaType": "text/javascript",
-      "sha256": "126606ecc954c5d2a20a5bfd1b7c2dba183b853b9eda11242a61dd21349d61fc",
+      "sha256": "fcafea757ebc50903c574886fc7c27b138a43e90fd704e16298a94339338328a",
       "schemaVersion": null
     },
     {
       "relativePath": "HelloReptar.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "73e067d849402b537d4c327f2e8cdefe52d033b1c71910c236810972c47ee881",
+      "sha256": "629c23db7fb3698a7e41274640351ce6c58d49d902850ea789703c5b50e65a17",
       "schemaVersion": null
     },
     {
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "13871c9b4da9c38f33b129687654287988b9a9df9a98589efc955ede8dbcec17",
+      "sha256": "c31c0d75f2f5c100463ffac073e8fea5cbdd8574f37b53c7ce987006c9b2553a",
       "schemaVersion": 1
     },
     {
@@ -58,7 +58,7 @@
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "82a828b144f9c0b268b5cd3f49f9fc56d6db9f76bcb4c0317f3777ba50eed3e2",
+      "sha256": "fe91dc5a682cfa9fa7f95778a44971e6bfcad02cece29026639fcfe945c99217",
       "schemaVersion": 1
     }
   ],
@@ -66,6 +66,7 @@
     "netwasm:runtime/reactor-host@1.0.0",
     "wasi:cli/environment@0.2.11",
     "wasi:cli/stderr@0.2.11",
+    "wasi:cli/stdout@0.2.11",
     "wasi:clocks/monotonic-clock@0.2.11",
     "wasi:clocks/wall-clock@0.2.11",
     "wasi:filesystem/preopens@0.2.11",
@@ -102,6 +103,14 @@
     {
       "interface": "wasi:cli/stderr@0.2.11",
       "name": "get-stderr",
+      "parameters": [],
+      "results": [
+        "own\u003Cwasi:io/streams@0.2.11#output-stream\u003E"
+      ]
+    },
+    {
+      "interface": "wasi:cli/stdout@0.2.11",
+      "name": "get-stdout",
       "parameters": [],
       "results": [
         "own\u003Cwasi:io/streams@0.2.11#output-stream\u003E"

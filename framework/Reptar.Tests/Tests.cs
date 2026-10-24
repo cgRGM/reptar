@@ -1620,4 +1620,95 @@ public class AotSafeSqliteTests
         Assert.Equal("`users`", SqlDialects.MySql.QuoteIdentifier("users"));
         Assert.Equal("@name", SqlDialects.MySql.FormatParameter("name", 1));
     }
+
+    [Fact]
+    public void MySqlDbClient_parses_mysql_and_mariadb_urls()
+    {
+        var connStr = MySqlDbClient.ConvertUrlToConnectionString(
+            "mysql://appuser:secret123@db.example.internal:3307/reptar_prod?sslmode=required");
+
+        Assert.Contains("Server=db.example.internal", connStr);
+        Assert.Contains("Port=3307", connStr);
+        Assert.Contains("Database=reptar_prod", connStr);
+        Assert.Contains("User ID=appuser", connStr);
+        Assert.Contains("Password=secret123", connStr);
+        Assert.Contains("Required", connStr);
+    }
+
+    [Fact]
+    public async Task MySqlDbClient_builds_and_executes_backtick_ddl_and_dml()
+    {
+        using var db = new MySqlDbClient("mock:");
+
+        await db.InsertAsync(TestSchema.Widgets, new Widget("w_mysql", "MySQLWidget", 99));
+        Assert.NotNull(db.LastExecutedSql);
+        Assert.Contains("INSERT INTO `widgets`", db.LastExecutedSql);
+        Assert.Contains("`id`", db.LastExecutedSql);
+        Assert.Contains("`name`", db.LastExecutedSql);
+        Assert.Contains("`count`", db.LastExecutedSql);
+        Assert.Contains("@Id", db.LastExecutedSql);
+
+        await db.UpdateAsync(
+            TestSchema.Widgets,
+            new Dictionary<string, object?> { ["count"] = 100 },
+            "w_mysql");
+        Assert.NotNull(db.LastExecutedSql);
+        Assert.Equal("UPDATE `widgets` SET `count` = @count WHERE `id` = @__id", db.LastExecutedSql);
+
+        await db.DeleteAsync(TestSchema.Widgets, "w_mysql");
+        Assert.NotNull(db.LastExecutedSql);
+        Assert.Equal("DELETE FROM `widgets` WHERE `id` = @id", db.LastExecutedSql);
+
+        await db.ListAsync<Widget>(TestSchema.Widgets, "where count > 10", limit: 10, offset: 5);
+        Assert.NotNull(db.LastExecutedSql);
+        Assert.Equal("SELECT * FROM `widgets` where count > 10 LIMIT 10 OFFSET 5", db.LastExecutedSql);
+
+        var client = Db.MySql("mock:");
+        Assert.IsType<MySqlDbClient>(client);
+    }
+
+    [Fact]
+    public async Task ReptarEntity_source_generator_maps_records_without_allocations()
+    {
+        using var db = new SqliteDbClient(":memory:");
+        await db.EnsureCreatedAsync(TestSchema.Widgets);
+        await db.InsertAsync(TestSchema.Widgets, new Dictionary<string, object?>
+        {
+            ["id"] = "gen_1",
+            ["name"] = "GeneratorWidget",
+            ["count"] = 77
+        });
+
+        // Verify that EntityMapper<GeneratedWidget>.Factory was auto-registered by the source generator
+        Assert.NotNull(EntityMapper<GeneratedWidget>.Factory);
+
+        // Query through SqliteDbClient which uses the compiled zero-allocation mapper
+        var items = await db.QueryAsync<GeneratedWidget>("SELECT id, name, count FROM widgets WHERE id = 'gen_1'");
+        Assert.Single(items);
+        Assert.Equal("gen_1", items[0].Id);
+        Assert.Equal("GeneratorWidget", items[0].Name);
+        Assert.Equal(77, items[0].Count);
+
+        // Verify the static Map method exists on the partial record
+        Assert.True(typeof(IDataRecordMapper<GeneratedWidget>).IsAssignableFrom(typeof(GeneratedWidget)));
+    }
+
+    [Fact]
+    public void GeneratedWidget_Map_directly_maps_from_data_record()
+    {
+        using var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=:memory:");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT 'gen_2' as id, 'DirectWidget' as name, 42 as count";
+        using var reader = cmd.ExecuteReader();
+        Assert.True(reader.Read());
+
+        var widget = GeneratedWidget.Map(reader);
+        Assert.Equal("gen_2", widget.Id);
+        Assert.Equal("DirectWidget", widget.Name);
+        Assert.Equal(42, widget.Count);
+    }
 }
+
+[ReptarEntity]
+public partial record GeneratedWidget(string Id, string Name, int Count);

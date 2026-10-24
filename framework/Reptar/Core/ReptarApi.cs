@@ -88,6 +88,7 @@ public static class Db
 {
 #if !NETWASM
     public static IDbClient Sqlite(string path = "local.db") => new SqliteDbClient(path);
+    public static IDbClient MySql(string connectionString) => new MySqlDbClient(connectionString);
 #endif
 
     public static IDbClient Postgres(string connectionString) => new PostgresDbClient(connectionString);
