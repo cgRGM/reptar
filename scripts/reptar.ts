@@ -166,6 +166,7 @@ if (command === "--help" || command === "-h" || command === "help") {
   console.log(`reptar <command>
 
 Commands:
+  new          Scaffold a new fullstack Reptar + React + Better Auth project
   dev          Run the example blog API on http://localhost:8787
   codegen      Generate packages/rpc contracts from the C# route tree
   test         Run the C# framework tests
@@ -175,6 +176,19 @@ Commands:
 The .NET SDK is only a build tool. It is installed under .reptar/ when missing.
 `);
   process.exit(0);
+}
+
+if (command === "new" || command === "create") {
+  const createReptarEntry = path.join(
+    repoRoot,
+    "packages/create-reptar/src/index.ts"
+  );
+  const result = spawnSync(process.execPath, [createReptarEntry, ...rest], {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio: "inherit",
+  });
+  process.exit(result.status ?? 0);
 }
 
 ensureSdk();

@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
 namespace Reptar;
@@ -132,24 +133,36 @@ public sealed class ReptarApp
         Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("POST", path, middleware, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("POST", path, null, null, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("POST", path, middleware, null, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("POST", path, null, validator, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Validator<TInput> validator,
@@ -167,24 +180,36 @@ public sealed class ReptarApp
         Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("PUT", path, middleware, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("PUT", path, null, null, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("PUT", path, middleware, null, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("PUT", path, null, validator, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Validator<TInput> validator,
@@ -497,7 +522,10 @@ public sealed class ReptarApp
         return response;
     }
 
-    private RouteBuilder AddTypedRoute<TInput>(
+    private RouteBuilder AddTypedRoute<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string method,
         string path,
         ReptarMiddleware? middleware,
@@ -775,24 +803,36 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         Func<Ctx, Task<ReptarResponse>> handler) =>
         app.Post(path, middleware, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Post(path, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Post(path, middleware, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Post(path, validator, handler);
 
-    public RouteBuilder Post<TInput>(
+    public RouteBuilder Post<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Validator<TInput> validator,
@@ -810,24 +850,36 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         Func<Ctx, Task<ReptarResponse>> handler) =>
         app.Put(path, middleware, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Put(path, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Put(path, middleware, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Put(path, validator, handler);
 
-    public RouteBuilder Put<TInput>(
+    public RouteBuilder Put<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
         string path,
         ReptarMiddleware middleware,
         Validator<TInput> validator,

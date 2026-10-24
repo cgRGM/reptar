@@ -1,0 +1,10 @@
+{
+  "$schema": "https://reptar.dev/schema.json",
+  "name": "{{PROJECT_NAME}}",
+  "version": "0.1.0",
+  "database": "{{DATABASE_DIALECT}}",
+  "auth": {
+    "provider": "better-auth",
+    "oauth": ["google", "github"],
+  },
+}

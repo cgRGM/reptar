@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Text;
 using System.Text.Json;
 
@@ -34,6 +35,13 @@ public sealed class Ctx
     public SessionUser? User { get; set; }
     public JwtPayload? Claims { get; set; }
 
+    public async Task<SessionUser?> UserAsync()
+    {
+        if (User is not null) return User;
+        User = await Auth.CurrentUser(this);
+        return User;
+    }
+
     internal Dictionary<string, string> PendingHeaders { get; } = new();
 
     public string RequestId
@@ -44,7 +52,10 @@ public sealed class Ctx
 
     public void SetHeader(string name, string value) => PendingHeaders[name] = value;
 
-    public ReptarResponse Json<T>(T value, int status = 200) =>
+    public ReptarResponse Json<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value, int status = 200) =>
         ReptarResponse.Json(_services.Json.Serialize(value), status);
 
     public ReptarResponse Text(string text, int status = 200, string contentType = "text/plain; charset=utf-8") => new()
@@ -58,6 +69,13 @@ public sealed class Ctx
         Text(html, status, contentType);
 
     public ReptarResponse Status(int status) => new() { Status = status };
+
+    public ReptarResponse Redirect(string url, int status = 302)
+    {
+        var res = new ReptarResponse { Status = status };
+        res.Headers["Location"] = url;
+        return res;
+    }
 
     public ReptarResponse Stream(byte[] body, string contentType, int status = 200) => new()
     {

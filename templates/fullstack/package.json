@@ -1,0 +1,22 @@
+{
+  "name": "{{PROJECT_NAME}}",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "check-types": "turbo run check-types",
+    "api:dev": "bun scripts/reptar.ts dev",
+    "api:codegen": "bun scripts/reptar.ts codegen",
+    "api:build": "bun scripts/reptar.ts build"
+  },
+  "devDependencies": {
+    "turbo": "^2.11.10",
+    "typescript": "^5.7.3"
+  },
+  "packageManager": "bun@1.3.10"
+}

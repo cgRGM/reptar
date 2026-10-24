@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using static Reptar.ReptarApi;
 
 namespace Reptar;
@@ -12,7 +13,9 @@ public static class Auth
         Col.Text("id").PrimaryKey(),
         Col.Text("email").NotNull().Unique(),
         Col.Text("name").NotNull(),
-        Col.Text("password_hash").NotNull(),
+        Col.Text("password_hash"),
+        Col.Text("image"),
+        Col.Int("email_verified").NotNull().Default(0),
         Col.Int("is_anonymous").NotNull().Default(0),
         Col.Text("role").NotNull().Default("user"),
         Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
@@ -26,15 +29,35 @@ public static class Auth
         Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
     );
 
+    public static readonly TableDef OAuthAccounts = DefineTable("oauth_accounts",
+        Col.Text("id").PrimaryKey(),
+        Col.Text("user_id").NotNull().References("users", "id", onDelete: "cascade"),
+        Col.Text("provider").NotNull(),
+        Col.Text("provider_user_id").NotNull(),
+        Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+    );
+
+    public static readonly TableDef ApiKeys = DefineTable("api_keys",
+        Col.Text("id").PrimaryKey(),
+        Col.Text("user_id").NotNull().References("users", "id", onDelete: "cascade"),
+        Col.Text("name").NotNull(),
+        Col.Text("key_hash").NotNull().Unique(),
+        Col.Text("prefix").NotNull(),
+        Col.Text("expires_at"),
+        Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+    );
+
     [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
     public sealed record UserRow(
         string Id,
         string Email,
         string Name,
-        string PasswordHash,
+        string? PasswordHash,
         int IsAnonymous,
         string Role,
-        string CreatedAt);
+        string CreatedAt,
+        string? Image = null,
+        int EmailVerified = 0);
 
     [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
     public sealed record SessionRow(
@@ -44,9 +67,33 @@ public static class Auth
         string ExpiresAt,
         string CreatedAt);
 
-    public sealed record SignUpInput(string Email, string Password, string Name);
+    [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
+    public sealed record OAuthAccountRow(
+        string Id,
+        string UserId,
+        string Provider,
+        string ProviderUserId,
+        string CreatedAt);
 
+    [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
+    public sealed record ApiKeyRow(
+        string Id,
+        string UserId,
+        string Name,
+        string KeyHash,
+        string Prefix,
+        string? ExpiresAt,
+        string CreatedAt);
+
+    public sealed record SignUpInput(string Email, string Password, string Name);
     public sealed record SignInInput(string Email, string Password);
+    public sealed record BuiltInSocialInput(string Provider, string CallbackUrl);
+    public sealed record SessionInfo(string Id, string CreatedAt, string ExpiresAt, bool IsCurrent);
+    public sealed record RevokeSessionInput(string SessionId);
+    public sealed record ChangePasswordInput(string CurrentPassword, string NewPassword);
+    public sealed record CreateApiKeyInput(string Name, int? ExpiresInDays = null);
+    public sealed record ApiKeyResponse(string Id, string Name, string Key, string Prefix, string? ExpiresAt, string CreatedAt);
+    public sealed record ApiKeyInfo(string Id, string Name, string Prefix, string? ExpiresAt, string CreatedAt);
 
     public static readonly Validator<SignUpInput> SignUpSchema = Rule<SignUpInput>()
         .Prop(x => x.Email, rules => rules.Email())
@@ -57,10 +104,61 @@ public static class Auth
         .Prop(x => x.Email, rules => rules.Email())
         .Prop(x => x.Password, rules => rules.Min(1).Max(128));
 
+    public static readonly Validator<ChangePasswordInput> ChangePasswordSchema = Rule<ChangePasswordInput>()
+        .Prop(x => x.CurrentPassword, rules => rules.Min(1))
+        .Prop(x => x.NewPassword, rules => rules.Min(8).Max(128));
+
+    public static readonly Validator<CreateApiKeyInput> CreateApiKeySchema = Rule<CreateApiKeyInput>()
+        .Prop(x => x.Name, rules => rules.Min(1).Max(64));
+
+    private static readonly ConcurrentDictionary<string, (int Failures, DateTimeOffset WindowStart)> _loginAttempts = new();
+
+    private static bool IsRateLimited(string clientIp)
+    {
+        if (!_options.EnableRateLimiting) return false;
+        if (_loginAttempts.TryGetValue(clientIp, out var attempt))
+        {
+            var window = TimeSpan.FromMinutes(_options.RateLimitWindowMinutes);
+            if (DateTimeOffset.UtcNow - attempt.WindowStart < window)
+            {
+                return attempt.Failures >= _options.RateLimitMaxAttempts;
+            }
+            _loginAttempts.TryRemove(clientIp, out _);
+        }
+        return false;
+    }
+
+    private static void RecordFailedLogin(string clientIp)
+    {
+        if (!_options.EnableRateLimiting) return;
+        var now = DateTimeOffset.UtcNow;
+        var window = TimeSpan.FromMinutes(_options.RateLimitWindowMinutes);
+        _loginAttempts.AddOrUpdate(
+            clientIp,
+            _ => (1, now),
+            (_, existing) =>
+            {
+                if (now - existing.WindowStart > window)
+                    return (1, now);
+                return (existing.Failures + 1, existing.WindowStart);
+            });
+    }
+
+    private static void ResetFailedLogins(string clientIp)
+    {
+        if (!_options.EnableRateLimiting) return;
+        _loginAttempts.TryRemove(clientIp, out _);
+    }
+
+    private static string GetClientIp(Ctx ctx) =>
+        ctx.Req.Header("CF-Connecting-IP")
+        ?? ctx.Req.Header("X-Forwarded-For")?.Split(',')[0].Trim()
+        ?? "127.0.0.1";
+
     public static ReptarApp Routes()
     {
         var app = ReptarApp.Create();
-        app.RegisterSchema(Users, Sessions);
+        app.RegisterSchema(Users, Sessions, OAuthAccounts, ApiKeys);
 
         app.Post("/signup", SignUpSchema, async (ctx, input) =>
         {
@@ -81,7 +179,7 @@ public static class Auth
             await ctx.Db.InsertAsync(Users, user);
             await StartSession(ctx, user.Id);
 
-            return ctx.Json(new SessionUser(user.Id, user.Email, user.Name), 201);
+            return ctx.Json(new SessionUser(user.Id, user.Email, user.Name, user.Role, user.Image, user.EmailVerified), 201);
         })
             .Produces<SessionUser>(201)
             .Produces<ValidationError>(400)
@@ -89,18 +187,28 @@ public static class Auth
 
         app.Post("/signin", SignInSchema, async (ctx, input) =>
         {
+            var clientIp = GetClientIp(ctx);
+            if (IsRateLimited(clientIp))
+            {
+                return ctx.Json(new { error = "Too many failed login attempts. Please try again later." }, 429);
+            }
+
             var email = input.Email.Trim().ToLowerInvariant();
 
             var user = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
                 "SELECT * FROM users WHERE email = @email",
                 new { email });
 
-            if (user is null || !await ctx.Crypto.VerifyPassword(input.Password, user.PasswordHash))
+            if (user is null || user.PasswordHash is null || !await ctx.Crypto.VerifyPassword(input.Password, user.PasswordHash))
+            {
+                RecordFailedLogin(clientIp);
                 return ctx.Unauthorized("Invalid email or password.");
+            }
 
+            ResetFailedLogins(clientIp);
             await StartSession(ctx, user.Id);
 
-            return ctx.Json(new SessionUser(user.Id, user.Email, user.Name));
+            return ctx.Json(new SessionUser(user.Id, user.Email, user.Name, user.Role, user.Image, user.EmailVerified));
         })
             .Produces<SessionUser>(200)
             .Produces<ValidationError>(400)
@@ -149,13 +257,255 @@ public static class Auth
             await ctx.Db.InsertAsync(Users, user);
             await StartSession(ctx, user.Id);
 
-            return ctx.Json(new SessionUser(user.Id, user.Email, user.Name), 201);
+            return ctx.Json(new SessionUser(user.Id, user.Email, user.Name, user.Role, user.Image, user.EmailVerified), 201);
         })
             .Produces<SessionUser>(201)
             .Produces<ErrorBody>(404);
 
+        // Social OAuth 2.0 PKCE Login
+        app.Post<BuiltInSocialInput>("/social", async (ctx, input) =>
+        {
+            var provider = _options.OAuthProviders.Find(p =>
+                p.ProviderName.Equals(input.Provider, StringComparison.OrdinalIgnoreCase));
+
+            if (provider is null)
+            {
+                return ctx.BadRequest($"OAuth provider '{input.Provider}' is not configured.");
+            }
+
+            var verifier = Pkce.GenerateCodeVerifier();
+            var challenge = Pkce.GenerateCodeChallenge(verifier);
+            var state = ctx.Crypto.RandomToken(16);
+
+            var origin = ctx.Req.Header("Origin") ?? ctx.Req.Header("Host") ?? "http://localhost:8787";
+            if (!origin.StartsWith("http", StringComparison.OrdinalIgnoreCase)) origin = "http://" + origin;
+            var redirectUri = $"{origin}/auth/callback/{provider.ProviderName}";
+
+            var expires = ctx.Clock.IsoIn(TimeSpan.FromMinutes(10));
+            ctx.Cookies.Set($"reptar_oauth_pkce_{provider.ProviderName}", $"{verifier}|{input.CallbackUrl}", expires);
+
+            var authUrl = provider.BuildAuthorizationUrl(state, challenge, redirectUri);
+            return ctx.Json(new { url = authUrl });
+        });
+
+        app.Get("/callback/:provider", async ctx =>
+        {
+            var providerName = ctx.Req.Param("provider");
+            var provider = _options.OAuthProviders.Find(p =>
+                p.ProviderName.Equals(providerName, StringComparison.OrdinalIgnoreCase));
+
+            if (provider is null)
+                return ctx.BadRequest($"Provider '{providerName}' is not configured.");
+
+            var code = ctx.Req.QueryValue("code");
+            if (string.IsNullOrEmpty(code))
+                return ctx.BadRequest("Authorization code missing.");
+
+            var pkceCookie = ctx.Cookies.Get($"reptar_oauth_pkce_{provider.ProviderName}");
+            if (string.IsNullOrEmpty(pkceCookie))
+                return ctx.BadRequest("Missing or expired OAuth state.");
+
+            var parts = pkceCookie.Split('|', 2);
+            var verifier = parts[0];
+            var callbackUrl = parts.Length > 1 && !string.IsNullOrEmpty(parts[1]) ? parts[1] : "/";
+
+            var origin = ctx.Req.Header("Origin") ?? ctx.Req.Header("Host") ?? "http://localhost:8787";
+            if (!origin.StartsWith("http", StringComparison.OrdinalIgnoreCase)) origin = "http://" + origin;
+            var redirectUri = $"{origin}/auth/callback/{provider.ProviderName}";
+
+            OAuthUserInfo userInfo;
+            try
+            {
+                userInfo = await provider.ExchangeCodeAsync(code, verifier, redirectUri);
+            }
+            catch (Exception ex)
+            {
+                return ctx.BadRequest($"OAuth token exchange failed: {ex.Message}");
+            }
+
+            var email = userInfo.Email.Trim().ToLowerInvariant();
+            var user = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
+                "SELECT * FROM users WHERE email = @email",
+                new { email });
+
+            if (user is null)
+            {
+                var id = Ids.New("usr");
+                user = new UserRow(
+                    Id: id,
+                    Email: email,
+                    Name: string.IsNullOrEmpty(userInfo.Name) ? userInfo.Email : userInfo.Name,
+                    PasswordHash: null,
+                    IsAnonymous: 0,
+                    Role: _options.BootstrapAdmins.Contains(email) ? "admin" : "user",
+                    CreatedAt: ctx.Clock.IsoNow(),
+                    Image: userInfo.Image,
+                    EmailVerified: 1);
+
+                await ctx.Db.InsertAsync(Users, user);
+            }
+
+            var accountExists = await ctx.Db.ExistsAsync(OAuthAccounts,
+                "provider = @provider AND provider_user_id = @puid",
+                new { provider = provider.ProviderName, puid = userInfo.ProviderUserId });
+
+            if (!accountExists)
+            {
+                await ctx.Db.InsertAsync(OAuthAccounts, new OAuthAccountRow(
+                    Id: Ids.New("acc"),
+                    UserId: user.Id,
+                    Provider: provider.ProviderName,
+                    ProviderUserId: userInfo.ProviderUserId,
+                    CreatedAt: ctx.Clock.IsoNow()));
+            }
+
+            ctx.Cookies.Delete($"reptar_oauth_pkce_{provider.ProviderName}");
+            await StartSession(ctx, user.Id);
+
+            return ctx.Redirect(callbackUrl);
+        });
+
+        // Multi-Session Management
+        app.Get("/sessions", async ctx =>
+        {
+            var user = await CurrentUser(ctx);
+            if (user is null) return ctx.Unauthorized();
+
+            var currentToken = ctx.Cookies.Get(_options.CookieName) ?? ctx.Cookies.Get("better-auth.session_token");
+            var currentHash = currentToken is not null ? await ctx.Crypto.Sha256(currentToken) : null;
+
+            var rows = await ctx.Db.QueryMappedAsync(
+                "SELECT id, created_at, expires_at, token_hash FROM sessions WHERE user_id = @userId AND expires_at > @now ORDER BY created_at DESC",
+                new Dictionary<string, object?> { ["userId"] = user.Id, ["now"] = ctx.Clock.IsoNow() },
+                r => new SessionInfo(
+                    (string)r["id"]!,
+                    (string)r["created_at"]!,
+                    (string)r["expires_at"]!,
+                    currentHash is not null && (string)r["token_hash"]! == currentHash
+                ));
+
+            return ctx.Json(rows);
+        });
+
+        app.Post<RevokeSessionInput>("/sessions/revoke", async (ctx, input) =>
+        {
+            var user = await CurrentUser(ctx);
+            if (user is null) return ctx.Unauthorized();
+
+            await ctx.Db.DeleteWhereAsync(Sessions,
+                "id = @id AND user_id = @userId",
+                new { id = input.SessionId, userId = user.Id });
+
+            return ctx.Json(new { success = true });
+        });
+
+        app.Post("/sessions/revoke-others", async ctx =>
+        {
+            var user = await CurrentUser(ctx);
+            if (user is null) return ctx.Unauthorized();
+
+            var currentToken = ctx.Cookies.Get(_options.CookieName) ?? ctx.Cookies.Get("better-auth.session_token");
+            if (currentToken is not null)
+            {
+                var currentHash = await ctx.Crypto.Sha256(currentToken);
+                await ctx.Db.DeleteWhereAsync(Sessions,
+                    "user_id = @userId AND token_hash != @currentHash",
+                    new { userId = user.Id, currentHash });
+            }
+
+            return ctx.Json(new { success = true });
+        });
+
+        // Change Password
+        app.Post<ChangePasswordInput>("/change-password", ChangePasswordSchema, async (ctx, input) =>
+        {
+            var user = await CurrentUser(ctx);
+            if (user is null) return ctx.Unauthorized();
+
+            var userRow = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
+                "SELECT * FROM users WHERE id = @id",
+                new { id = user.Id });
+
+            if (userRow is null || userRow.PasswordHash is null ||
+                !await ctx.Crypto.VerifyPassword(input.CurrentPassword, userRow.PasswordHash))
+            {
+                return ctx.Json(new { error = "Current password is incorrect." }, 400);
+            }
+
+            var newHash = await ctx.Crypto.HashPassword(input.NewPassword);
+            await ctx.Db.ExecuteAsync(
+                "UPDATE users SET password_hash = @newHash WHERE id = @id",
+                new Dictionary<string, object?> { ["newHash"] = newHash, ["id"] = user.Id });
+
+            return ctx.Json(new { success = true });
+        });
+
+        // Personal Access Tokens / API Keys
+        app.Post<CreateApiKeyInput>("/api-keys", CreateApiKeySchema, async (ctx, input) =>
+        {
+            var user = await CurrentUser(ctx);
+            if (user is null) return ctx.Unauthorized();
+
+            var rawToken = "rep_live_" + ctx.Crypto.RandomToken(24);
+            var prefix = rawToken[..13];
+            var keyHash = await ctx.Crypto.Sha256(rawToken);
+            var id = Ids.New("key");
+            var now = ctx.Clock.IsoNow();
+            string? expiresAt = input.ExpiresInDays.HasValue
+                ? ctx.Clock.IsoIn(TimeSpan.FromDays(input.ExpiresInDays.Value))
+                : null;
+
+            await ctx.Db.InsertAsync(ApiKeys, new ApiKeyRow(
+                Id: id,
+                UserId: user.Id,
+                Name: input.Name.Trim(),
+                KeyHash: keyHash,
+                Prefix: prefix,
+                ExpiresAt: expiresAt,
+                CreatedAt: now));
+
+            return ctx.Json(new ApiKeyResponse(id, input.Name.Trim(), rawToken, prefix, expiresAt, now), 201);
+        });
+
+        app.Get("/api-keys", async ctx =>
+        {
+            var user = await CurrentUser(ctx);
+            if (user is null) return ctx.Unauthorized();
+
+            var rows = await ctx.Db.QueryMappedAsync(
+                "SELECT id, name, prefix, expires_at, created_at FROM api_keys WHERE user_id = @userId ORDER BY created_at DESC",
+                new Dictionary<string, object?> { ["userId"] = user.Id },
+                r => new ApiKeyInfo(
+                    (string)r["id"]!,
+                    (string)r["name"]!,
+                    (string)r["prefix"]!,
+                    r["expires_at"] as string,
+                    (string)r["created_at"]!
+                ));
+
+            return ctx.Json(rows);
+        });
+
+        app.Delete("/api-keys/:id", async ctx =>
+        {
+            var user = await CurrentUser(ctx);
+            if (user is null) return ctx.Unauthorized();
+
+            var id = ctx.Req.Param("id");
+            if (string.IsNullOrEmpty(id)) return ctx.BadRequest("API Key ID required.");
+
+            await ctx.Db.DeleteWhereAsync(ApiKeys,
+                "id = @id AND user_id = @userId",
+                new { id, userId = user.Id });
+
+            return ctx.Json(new { success = true });
+        });
+
         return app;
     }
+
+    public static ReptarApp BetterAuthRoutes(AuthOptions? options = null) =>
+        BetterAuthProtocol.Routes(options ?? _options);
 
     public static readonly ReptarMiddleware RequireUser = async (ctx, next) =>
     {
@@ -171,6 +521,20 @@ public static class Auth
     public static readonly ReptarMiddleware OptionalUser = async (ctx, next) =>
     {
         ctx.User = await CurrentUser(ctx);
+        return await next();
+    };
+
+    public static ReptarMiddleware RequireRole(params string[] roles) => async (ctx, next) =>
+    {
+        var user = await CurrentUser(ctx);
+        if (user is null)
+            return ctx.Unauthorized();
+
+        ctx.User = user;
+
+        if (!roles.Contains(user.Role, StringComparer.OrdinalIgnoreCase))
+            return ctx.Forbidden($"Forbidden: Requires role '{string.Join("' or '", roles)}'.");
+
         return await next();
     };
 
@@ -203,7 +567,17 @@ public static class Auth
 
     public static async Task<SessionUser?> CurrentUser(Ctx ctx)
     {
-        var token = ctx.Cookies.Get(_options.CookieName);
+        var token = ctx.Cookies.Get(_options.CookieName)
+            ?? ctx.Cookies.Get("better-auth.session_token");
+
+        if (token is null)
+        {
+            var authHeader = ctx.Req.Header("Authorization");
+            if (authHeader != null && authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            {
+                token = authHeader[7..].Trim();
+            }
+        }
 
         if (token is not null)
         {
@@ -211,7 +585,7 @@ public static class Auth
 
             var sessionUser = await ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
                 """
-                SELECT u.id, u.email, u.name
+                SELECT u.id, u.email, u.name, u.role, u.image, u.email_verified
                 FROM sessions s
                 JOIN users u ON u.id = s.user_id
                 WHERE s.token_hash = @hash AND s.expires_at > @now
@@ -220,6 +594,19 @@ public static class Auth
 
             if (sessionUser is not null)
                 return sessionUser;
+
+            // Also check api_keys table for personal access tokens
+            var apiKeyUser = await ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
+                """
+                SELECT u.id, u.email, u.name, u.role, u.image, u.email_verified
+                FROM api_keys k
+                JOIN users u ON u.id = k.user_id
+                WHERE k.key_hash = @hash AND (k.expires_at IS NULL OR k.expires_at > @now)
+                """,
+                new { hash, now = ctx.Clock.IsoNow() });
+
+            if (apiKeyUser is not null)
+                return apiKeyUser;
         }
 
         var jwt = _options.Jwt;
@@ -256,7 +643,7 @@ public static class Auth
 
     public static Task<SessionUser?> FindUserById(Ctx ctx, string id) =>
         ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
-            "SELECT id, email, name FROM users WHERE id = @id",
+            "SELECT id, email, name, role, image, email_verified FROM users WHERE id = @id",
             new { id });
 
     private static async Task StartSession(Ctx ctx, string userId)

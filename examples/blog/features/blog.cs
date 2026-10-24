@@ -19,7 +19,7 @@ public static class Blog
 
         app.Post("/upload", async ctx =>
         {
-            var key = ctx.Req.QueryValue("key") ?? Guid.NewGuid().ToString("N");
+            var key = ctx.Req.QueryValue("key") ?? Ids.New("img");
             var contentType =
                 ctx.Req.Header("content-type") ?? "application/octet-stream";
             var body = ctx.Req.Body ?? [];

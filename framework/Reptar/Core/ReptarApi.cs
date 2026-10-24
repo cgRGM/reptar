@@ -32,6 +32,22 @@ public sealed class AuthOptions
     public bool AllowAnonymous { get; set; } = true;
     public string[] BootstrapAdmins { get; set; } = [];
     public JwtOptions? Jwt { get; set; }
+    public List<IOAuthProvider> OAuthProviders { get; set; } = [];
+    public int RateLimitMaxAttempts { get; set; } = 5;
+    public int RateLimitWindowMinutes { get; set; } = 15;
+    public bool EnableRateLimiting { get; set; } = true;
+
+    public AuthOptions WithGoogle(string clientId, string clientSecret)
+    {
+        OAuthProviders.Add(new GoogleOAuthProvider(clientId, clientSecret));
+        return this;
+    }
+
+    public AuthOptions WithGitHub(string clientId, string clientSecret)
+    {
+        OAuthProviders.Add(new GitHubOAuthProvider(clientId, clientSecret));
+        return this;
+    }
 }
 
 public sealed class TelemetryOptions
@@ -58,6 +74,9 @@ public static class ReptarApi
         TableDef.Define(name, columns);
 
     public static AuthOptions BuiltIn(AuthOptions? options = null) =>
+        options ?? new AuthOptions();
+
+    public static AuthOptions BetterAuth(AuthOptions? options = null) =>
         options ?? new AuthOptions();
 
     public static TelemetryOptions Axiom() => new();

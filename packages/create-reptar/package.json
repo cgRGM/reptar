@@ -1,0 +1,21 @@
+{
+  "name": "create-reptar",
+  "version": "0.1.0",
+  "description": "Scaffold a high-performance fullstack C# + React application powered by Reptar and Better Auth",
+  "bin": {
+    "create-reptar": "./cli.mjs"
+  },
+  "files": [
+    "cli.mjs",
+    "src"
+  ],
+  "type": "module",
+  "main": "./src/index.ts",
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.1",
+    "typescript": "^5.7.3"
+  }
+}

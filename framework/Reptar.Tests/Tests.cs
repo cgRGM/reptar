@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Reptar;
 using Xunit;
 
@@ -1707,6 +1708,531 @@ public class AotSafeSqliteTests
         Assert.Equal("gen_2", widget.Id);
         Assert.Equal("DirectWidget", widget.Name);
         Assert.Equal(42, widget.Count);
+    }
+}
+
+public class BetterAuthTests
+{
+    private static ReptarRequest Json(string method, string path, string json) => new()
+    {
+        Method = method,
+        Path = path,
+        Headers = new Dictionary<string, string> { ["content-type"] = "application/json" },
+        Body = Encoding.UTF8.GetBytes(json),
+    };
+
+    private static string? BetterAuthCookie(ReptarResponse response) =>
+        response.SetCookies
+            .FirstOrDefault(c => c.StartsWith("better-auth.session_token=", StringComparison.Ordinal))
+            ?.Split(';')[0]
+            .Split('=')[1];
+
+    private static string? SessionCookie(ReptarResponse response) =>
+        response.SetCookies
+            .FirstOrDefault(c => c.StartsWith("reptar_session=", StringComparison.Ordinal))
+            ?.Split(';')[0]
+            .Split('=')[1];
+
+    private static string? StateCookie(ReptarResponse response) =>
+        response.SetCookies
+            .FirstOrDefault(c => c.StartsWith("reptar_oauth_state=", StringComparison.Ordinal))
+            ?.Split(';')[0]
+            .Split('=', 2)[1];
+
+    [Fact]
+    public void Pkce_generates_valid_verifier_and_challenge()
+    {
+        var verifier = Pkce.GenerateCodeVerifier();
+        Assert.False(string.IsNullOrWhiteSpace(verifier));
+        Assert.DoesNotContain("=", verifier);
+
+        var challenge = Pkce.GenerateCodeChallenge(verifier);
+        Assert.False(string.IsNullOrWhiteSpace(challenge));
+        Assert.DoesNotContain("=", challenge);
+    }
+
+    [Fact]
+    public async Task BetterAuth_email_password_full_lifecycle()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = ReptarApi.BetterAuth()
+        });
+
+        app.Route("/api/auth", Auth.BetterAuthRoutes());
+        await app.EnsureCreatedAsync();
+
+        // 1. Sign up with email
+        var signUpRes = await app.HandleAsync(Json(
+            "POST",
+            "/api/auth/sign-up/email",
+            """{"email":"better@example.dev","password":"securepassword123","name":"Better Developer"}"""));
+
+        Assert.Equal(201, signUpRes.Status);
+        var token = BetterAuthCookie(signUpRes);
+        Assert.NotNull(token);
+        var signUpBody = Encoding.UTF8.GetString(signUpRes.Body!);
+        Assert.Contains("better@example.dev", signUpBody);
+        Assert.Contains("Better Developer", signUpBody);
+
+        // 2. Query session with cookie
+        var sessionRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/api/auth/get-session",
+            Cookies = new Dictionary<string, string> { ["better-auth.session_token"] = token! },
+        });
+
+        Assert.Equal(200, sessionRes.Status);
+        var sessionBody = Encoding.UTF8.GetString(sessionRes.Body!);
+        Assert.Contains("better@example.dev", sessionBody);
+        Assert.Contains("Better Developer", sessionBody);
+
+        // 3. Query session with Bearer header
+        var bearerRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/api/auth/get-session",
+            Headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {token}" },
+        });
+
+        Assert.Equal(200, bearerRes.Status);
+        Assert.Contains("better@example.dev", Encoding.UTF8.GetString(bearerRes.Body!));
+
+        // 4. Sign in with valid credentials
+        var signInRes = await app.HandleAsync(Json(
+            "POST",
+            "/api/auth/sign-in/email",
+            """{"email":"better@example.dev","password":"securepassword123"}"""));
+
+        Assert.Equal(200, signInRes.Status);
+        Assert.NotNull(BetterAuthCookie(signInRes));
+
+        // 5. Sign in with invalid password
+        var failRes = await app.HandleAsync(Json(
+            "POST",
+            "/api/auth/sign-in/email",
+            """{"email":"better@example.dev","password":"wrongpassword"}"""));
+
+        Assert.Equal(401, failRes.Status);
+
+        // 6. Sign out
+        var signOutRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/api/auth/sign-out",
+            Cookies = new Dictionary<string, string> { ["better-auth.session_token"] = token! },
+        });
+
+        Assert.Equal(200, signOutRes.Status);
+        Assert.Contains("true", Encoding.UTF8.GetString(signOutRes.Body!));
+
+        // 7. Session should now be null
+        var emptyRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/api/auth/get-session",
+            Cookies = new Dictionary<string, string> { ["better-auth.session_token"] = token! },
+        });
+
+        Assert.Equal(200, emptyRes.Status);
+        Assert.Equal("null", Encoding.UTF8.GetString(emptyRes.Body!).Trim());
+    }
+
+    [Fact]
+    public async Task BetterAuth_OAuth_social_flow_with_Google()
+    {
+        var mockHttp = new Func<HttpRequestMessage, Task<HttpResponseMessage>>(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri.Contains("token"))
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"access_token":"mock_google_token_xyz"}""",
+                        Encoding.UTF8,
+                        "application/json")
+                });
+            }
+
+            if (req.RequestUri!.AbsoluteUri.Contains("userinfo"))
+            {
+                return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"sub":"google_user_12345","email":"oauth.user@example.com","name":"OAuth Jane","picture":"https://pic.example.com/jane.jpg"}""",
+                        Encoding.UTF8,
+                        "application/json")
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
+        });
+
+        var googleProvider = new GoogleOAuthProvider(
+            "test_google_client_id",
+            "test_google_client_secret",
+            mockHttp);
+
+        var authOpts = ReptarApi.BetterAuth();
+        authOpts.OAuthProviders.Add(googleProvider);
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts
+        });
+
+        app.Route("/api/auth", Auth.BetterAuthRoutes(authOpts));
+        await app.EnsureCreatedAsync();
+
+        // 1. Request social sign-in URL
+        var socialReq = await app.HandleAsync(Json(
+            "POST",
+            "/api/auth/sign-in/social",
+            """{"provider":"google","callbackURL":"/dashboard"}"""));
+
+        Assert.Equal(200, socialReq.Status);
+        var stateCookie = StateCookie(socialReq);
+        Assert.NotNull(stateCookie);
+
+        var socialBody = Encoding.UTF8.GetString(socialReq.Body!);
+        Assert.Contains("accounts.google.com", socialBody);
+        Assert.Contains("test_google_client_id", socialBody);
+        Assert.Contains("code_challenge_method=S256", socialBody);
+
+        var state = stateCookie.Split('|')[0];
+
+        // 2. Emulate OAuth redirect callback from Google
+        var callbackReq = new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/api/auth/callback/google",
+            Query = $"code=fake_auth_code_123&state={state}",
+            Cookies = new Dictionary<string, string> { ["reptar_oauth_state"] = stateCookie },
+        };
+
+        var callbackRes = await app.HandleAsync(callbackReq);
+        Assert.Equal(302, callbackRes.Status);
+        Assert.Equal("/dashboard", callbackRes.Headers["Location"]);
+
+        var sessionToken = BetterAuthCookie(callbackRes);
+        Assert.NotNull(sessionToken);
+
+        // 3. Verify session was created for the OAuth user
+        var sessionRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/api/auth/get-session",
+            Cookies = new Dictionary<string, string> { ["better-auth.session_token"] = sessionToken! },
+        });
+
+        Assert.Equal(200, sessionRes.Status);
+        var sessionJson = Encoding.UTF8.GetString(sessionRes.Body!);
+        Assert.Contains("oauth.user@example.com", sessionJson);
+        Assert.Contains("OAuth Jane", sessionJson);
+    }
+
+    [Fact]
+    public async Task Auth_BuiltIn_Multi_Session_and_Revocation()
+    {
+        var authOpts = new AuthOptions();
+        Auth.Configure(authOpts);
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts
+        });
+
+        app.Route("/auth", Auth.Routes());
+        await app.EnsureCreatedAsync();
+
+        // 1. Sign up user
+        var signupRes = await app.HandleAsync(Json("POST", "/auth/signup",
+            """{"email":"device.user@example.com","password":"password123","name":"Multi Dev"}"""));
+        Assert.Equal(201, signupRes.Status);
+        var cookie1 = SessionCookie(signupRes);
+        Assert.NotNull(cookie1);
+
+        // 2. Sign in from second device
+        var signinRes = await app.HandleAsync(Json("POST", "/auth/signin",
+            """{"email":"device.user@example.com","password":"password123"}"""));
+        Assert.Equal(200, signinRes.Status);
+        var cookie2 = SessionCookie(signinRes);
+        Assert.NotNull(cookie2);
+        Assert.NotEqual(cookie1, cookie2);
+
+        // 3. List sessions with cookie2 (should see 2 sessions, with cookie2 marked isCurrent)
+        var listRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/sessions",
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie2! }
+        });
+        Assert.Equal(200, listRes.Status);
+        var listJson = Encoding.UTF8.GetString(listRes.Body!);
+        using var listDoc = JsonDocument.Parse(listJson);
+        Assert.Equal(2, listDoc.RootElement.GetArrayLength());
+
+        // 4. Revoke other sessions from device 2
+        var revokeOthersRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/auth/sessions/revoke-others",
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie2! }
+        });
+        Assert.Equal(200, revokeOthersRes.Status);
+
+        // 5. Device 1 should now be logged out
+        var dev1SessionRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/session",
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie1! }
+        });
+        Assert.Equal(200, dev1SessionRes.Status);
+        using var dev1Doc = JsonDocument.Parse(Encoding.UTF8.GetString(dev1SessionRes.Body!));
+        Assert.Equal(JsonValueKind.Null, dev1Doc.RootElement.GetProperty("user").ValueKind);
+
+        // 6. Device 2 should still be logged in
+        var dev2SessionRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/session",
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie2! }
+        });
+        Assert.Equal(200, dev2SessionRes.Status);
+        using var dev2Doc = JsonDocument.Parse(Encoding.UTF8.GetString(dev2SessionRes.Body!));
+        Assert.Equal("device.user@example.com", dev2Doc.RootElement.GetProperty("user").GetProperty("email").GetString());
+    }
+
+    [Fact]
+    public async Task Auth_BuiltIn_Change_Password()
+    {
+        var authOpts = new AuthOptions();
+        Auth.Configure(authOpts);
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts
+        });
+
+        app.Route("/auth", Auth.Routes());
+        await app.EnsureCreatedAsync();
+
+        // 1. Sign up user
+        var signupRes = await app.HandleAsync(Json("POST", "/auth/signup",
+            """{"email":"changepass@example.com","password":"oldpassword123","name":"Pass Changer"}"""));
+        Assert.Equal(201, signupRes.Status);
+        var cookie = SessionCookie(signupRes);
+        Assert.NotNull(cookie);
+
+        // 2. Try changing with wrong current password -> 400
+        var wrongRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/auth/change-password",
+            Body = Encoding.UTF8.GetBytes("""{"currentPassword":"wrongpass","newPassword":"newpassword456"}"""),
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie! },
+            Headers = new Dictionary<string, string> { ["content-type"] = "application/json" }
+        });
+        Assert.Equal(400, wrongRes.Status);
+
+        // 3. Change with correct current password -> 200
+        var correctRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/auth/change-password",
+            Body = Encoding.UTF8.GetBytes("""{"currentPassword":"oldpassword123","newPassword":"newpassword456"}"""),
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie! },
+            Headers = new Dictionary<string, string> { ["content-type"] = "application/json" }
+        });
+        Assert.Equal(200, correctRes.Status);
+
+        // 4. Old password should fail to sign in
+        var oldSignInRes = await app.HandleAsync(Json("POST", "/auth/signin",
+            """{"email":"changepass@example.com","password":"oldpassword123"}"""));
+        Assert.Equal(401, oldSignInRes.Status);
+
+        // 5. New password should succeed
+        var newSignInRes = await app.HandleAsync(Json("POST", "/auth/signin",
+            """{"email":"changepass@example.com","password":"newpassword456"}"""));
+        Assert.Equal(200, newSignInRes.Status);
+    }
+
+    [Fact]
+    public async Task Auth_BuiltIn_ApiKeys_and_Bearer_Authentication()
+    {
+        var authOpts = new AuthOptions();
+        Auth.Configure(authOpts);
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts
+        });
+
+        app.Route("/auth", Auth.Routes());
+        app.Get("/api/protected-resource", Auth.RequireUser, async ctx =>
+            ctx.Json(new { ok = true, email = ctx.User!.Email }));
+
+        await app.EnsureCreatedAsync();
+
+        // 1. Sign up user
+        var signupRes = await app.HandleAsync(Json("POST", "/auth/signup",
+            """{"email":"apikey.owner@example.com","password":"password123","name":"Api Owner"}"""));
+        Assert.Equal(201, signupRes.Status);
+        var cookie = SessionCookie(signupRes);
+        Assert.NotNull(cookie);
+
+        // 2. Create an API Key
+        var createKeyRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/auth/api-keys",
+            Body = Encoding.UTF8.GetBytes("""{"name":"CLI Deploy Token","expiresInDays":30}"""),
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie! },
+            Headers = new Dictionary<string, string> { ["content-type"] = "application/json" }
+        });
+        Assert.Equal(201, createKeyRes.Status);
+        using var createKeyDoc = JsonDocument.Parse(Encoding.UTF8.GetString(createKeyRes.Body!));
+        var rawKey = createKeyDoc.RootElement.GetProperty("key").GetString()!;
+        var keyId = createKeyDoc.RootElement.GetProperty("id").GetString()!;
+        Assert.StartsWith("rep_live_", rawKey);
+
+        // 3. Access protected resource with Bearer API Key (no cookie!)
+        var protectedRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/api/protected-resource",
+            Headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {rawKey}" }
+        });
+        Assert.Equal(200, protectedRes.Status);
+        using var protDoc = JsonDocument.Parse(Encoding.UTF8.GetString(protectedRes.Body!));
+        Assert.Equal("apikey.owner@example.com", protDoc.RootElement.GetProperty("email").GetString());
+
+        // 4. Delete the API key
+        var deleteKeyRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "DELETE",
+            Path = $"/auth/api-keys/{keyId}",
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = cookie! }
+        });
+        Assert.Equal(200, deleteKeyRes.Status);
+
+        // 5. Subsequent request with deleted API key fails with 401
+        var failedRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/api/protected-resource",
+            Headers = new Dictionary<string, string> { ["Authorization"] = $"Bearer {rawKey}" }
+        });
+        Assert.Equal(401, failedRes.Status);
+    }
+
+    [Fact]
+    public async Task Auth_BuiltIn_RequireRole_Middleware()
+    {
+        var authOpts = new AuthOptions
+        {
+            BootstrapAdmins = ["admin@example.com"]
+        };
+        Auth.Configure(authOpts);
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts
+        });
+
+        app.Route("/auth", Auth.Routes());
+        app.Get("/admin/secret", Auth.RequireRole("admin"), async ctx =>
+            ctx.Json(new { secret = 42 }));
+
+        await app.EnsureCreatedAsync();
+
+        // 1. Create normal user
+        var userRes = await app.HandleAsync(Json("POST", "/auth/signup",
+            """{"email":"normal@example.com","password":"password123","name":"Normal User"}"""));
+        var userCookie = SessionCookie(userRes);
+
+        // 2. Normal user gets 403 Forbidden
+        var forbiddenRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/admin/secret",
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = userCookie! }
+        });
+        Assert.Equal(403, forbiddenRes.Status);
+
+        // 3. Create admin user
+        var adminRes = await app.HandleAsync(Json("POST", "/auth/signup",
+            """{"email":"admin@example.com","password":"password123","name":"Admin Boss"}"""));
+        var adminCookie = SessionCookie(adminRes);
+
+        // 4. Admin user gets 200 OK
+        var adminAccessRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/admin/secret",
+            Cookies = new Dictionary<string, string> { [authOpts.CookieName] = adminCookie! }
+        });
+        Assert.Equal(200, adminAccessRes.Status);
+    }
+
+    [Fact]
+    public async Task Auth_BuiltIn_RateLimiting_On_Signin()
+    {
+        var authOpts = new AuthOptions
+        {
+            RateLimitMaxAttempts = 3,
+            RateLimitWindowMinutes = 15,
+            EnableRateLimiting = true
+        };
+        Auth.Configure(authOpts);
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts
+        });
+
+        app.Route("/auth", Auth.Routes());
+        await app.EnsureCreatedAsync();
+
+        // Create test user
+        await app.HandleAsync(Json("POST", "/auth/signup",
+            """{"email":"ratelimit@example.com","password":"password123","name":"Rate Limit"}"""));
+
+        var ipHeader = new Dictionary<string, string> { ["CF-Connecting-IP"] = "192.168.1.100" };
+
+        // 3 failed login attempts
+        for (int i = 0; i < 3; i++)
+        {
+            var res = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "POST",
+                Path = "/auth/signin",
+                Body = Encoding.UTF8.GetBytes("""{"email":"ratelimit@example.com","password":"wrongpassword"}"""),
+                Headers = new Dictionary<string, string>(ipHeader) { ["content-type"] = "application/json" }
+            });
+            Assert.Equal(401, res.Status);
+        }
+
+        // 4th attempt should be blocked with 429 Too Many Requests
+        var blockedRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/auth/signin",
+            Body = Encoding.UTF8.GetBytes("""{"email":"ratelimit@example.com","password":"wrongpassword"}"""),
+            Headers = new Dictionary<string, string>(ipHeader) { ["content-type"] = "application/json" }
+        });
+        Assert.Equal(429, blockedRes.Status);
+        var errBody = Encoding.UTF8.GetString(blockedRes.Body!);
+        Assert.Contains("Too many failed login attempts", errBody);
     }
 }
 

@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.turbo/
+.reptar/
+.env
+.env.local
+*.local
+bin/
+obj/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
