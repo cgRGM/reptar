@@ -1330,3 +1330,205 @@ public class WebSocketTests
         Assert.True(closed);
     }
 }
+
+public class ActionCableTests
+{
+    private sealed class TestTransport : IWebSocketTransport
+    {
+        public List<string> Sent { get; } = [];
+        public List<string> Closed { get; } = [];
+
+        public void Send(string sessionId, string message) =>
+            Sent.Add(message);
+
+        public void Close(string sessionId, int code, string reason) =>
+            Closed.Add($"{code}:{reason}");
+    }
+
+    [Fact]
+    public void Parses_turbo_streams_channel_subscription_command()
+    {
+        var json = """{"command":"subscribe","identifier":"{\"channel\":\"Turbo::StreamsChannel\",\"signed_stream_name\":\"room_42\"}"}""";
+        var cmd = Reptar.Realtime.ActionCableProtocol.ParseClientMessage(json);
+
+        Assert.NotNull(cmd);
+        Assert.Equal("subscribe", cmd.Command);
+        Assert.Equal("Turbo::StreamsChannel", cmd.Channel);
+        Assert.Equal("room_42", cmd.StreamName);
+    }
+
+    [Fact]
+    public void Parses_room_channel_subscription_command()
+    {
+        var json = """{"command":"subscribe","identifier":"{\"channel\":\"RoomChannel\",\"room_id\":105}"}""";
+        var cmd = Reptar.Realtime.ActionCableProtocol.ParseClientMessage(json);
+
+        Assert.NotNull(cmd);
+        Assert.Equal("subscribe", cmd.Command);
+        Assert.Equal("RoomChannel", cmd.Channel);
+        Assert.Equal("room_105", cmd.StreamName);
+        Assert.Equal(105L, cmd.Parameters["room_id"]);
+    }
+
+    [Fact]
+    public void TurboStream_generates_spec_compliant_tags()
+    {
+        var append = Reptar.Realtime.TurboStream.Append("messages", "<p>Hello</p>");
+        Assert.Equal("<turbo-stream action=\"append\" target=\"messages\"><template><p>Hello</p></template></turbo-stream>", append);
+
+        var remove = Reptar.Realtime.TurboStream.Remove("message_12");
+        Assert.Equal("<turbo-stream action=\"remove\" target=\"message_12\"></turbo-stream>", remove);
+
+        var replace = Reptar.Realtime.TurboStream.Replace("message_12", "<p>Edited</p>");
+        Assert.Equal("<turbo-stream action=\"replace\" target=\"message_12\"><template><p>Edited</p></template></turbo-stream>", replace);
+    }
+
+    [Fact]
+    public async Task ActionCableServer_manages_lifecycle_and_broadcasts_to_streams()
+    {
+        var transport = new TestTransport();
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            WebSocket = transport,
+        });
+
+        var cable = app.UseActionCable("/cable");
+
+        var req1 = new ReptarRequest { Method = "GET", Path = "/cable" };
+        var req2 = new ReptarRequest { Method = "GET", Path = "/cable" };
+
+        // 1. Clients connect -> Receive welcome
+        await app.HandleWebSocketOpenAsync("client_1", req1);
+        await app.HandleWebSocketOpenAsync("client_2", req2);
+
+        Assert.Equal("{\"type\":\"welcome\",\"sid\":\"client_1\"}", transport.Sent[0]);
+        Assert.Equal("{\"type\":\"welcome\",\"sid\":\"client_2\"}", transport.Sent[1]);
+        Assert.Equal(2, cable.TotalConnections);
+
+        // 2. Client 1 subscribes to room_42
+        var subJson1 = """{"command":"subscribe","identifier":"{\"channel\":\"Turbo::StreamsChannel\",\"signed_stream_name\":\"room_42\"}"}""";
+        await app.HandleWebSocketMessageAsync("client_1", subJson1);
+
+        Assert.Contains("confirm_subscription", transport.Sent[2]);
+        Assert.Equal(1, cable.GetSubscriberCount("room_42"));
+
+        // 3. Client 2 subscribes to room_42
+        var subJson2 = """{"command":"subscribe","identifier":"{\"channel\":\"Turbo::StreamsChannel\",\"signed_stream_name\":\"room_42\"}"}""";
+        await app.HandleWebSocketMessageAsync("client_2", subJson2);
+
+        Assert.Contains("confirm_subscription", transport.Sent[3]);
+        Assert.Equal(2, cable.GetSubscriberCount("room_42"));
+
+        // 4. Broadcast Turbo Stream to room_42 -> both receive it
+        var sentCountBefore = transport.Sent.Count;
+        var broadcastCount = await cable.BroadcastTurboStreamAsync("room_42", "append", "messages", "<div id='m1'>Hi</div>");
+        Assert.Equal(2, broadcastCount);
+
+        // Both clients received the broadcast
+        Assert.Equal(sentCountBefore + 2, transport.Sent.Count);
+        Assert.Contains("turbo-stream action=\\\"append\\\" target=\\\"messages\\\"", transport.Sent[^1]);
+        Assert.Contains("turbo-stream action=\\\"append\\\" target=\\\"messages\\\"", transport.Sent[^2]);
+
+        // 5. Client 1 disconnects -> cleans up subscription
+        await app.HandleWebSocketCloseAsync("client_1");
+        Assert.Equal(1, cable.TotalConnections);
+        Assert.Equal(1, cable.GetSubscriberCount("room_42"));
+
+        // 6. Broadcast again -> only Client 2 receives it
+        var sentCountAfterClose = transport.Sent.Count;
+        var broadcastCount2 = await cable.BroadcastTurboStreamAsync("room_42", "append", "messages", "<div id='m2'>Hi 2</div>");
+        Assert.Equal(1, broadcastCount2);
+        Assert.Equal(sentCountAfterClose + 1, transport.Sent.Count);
+    }
+
+    [Fact]
+    public async Task ActionCableServer_rejects_unauthorized_subscription()
+    {
+        var transport = new TestTransport();
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            WebSocket = transport,
+        });
+
+        var cable = app.UseActionCable("/cable", server =>
+        {
+            server.AuthorizeSubscription = (conn, cmd) =>
+            {
+                // Only allow room_public
+                return Task.FromResult(cmd.StreamName == "room_public");
+            };
+        });
+
+        await app.HandleWebSocketOpenAsync("c1", new ReptarRequest { Method = "GET", Path = "/cable" });
+
+        var secretSub = """{"command":"subscribe","identifier":"{\"channel\":\"Turbo::StreamsChannel\",\"signed_stream_name\":\"room_secret\"}"}""";
+        await app.HandleWebSocketMessageAsync("c1", secretSub);
+
+        Assert.Contains("reject_subscription", transport.Sent[^1]);
+        Assert.Equal(0, cable.GetSubscriberCount("room_secret"));
+    }
+}
+
+public class CampfireRealtimeTests
+{
+    private sealed class TestTransport : IWebSocketTransport
+    {
+        public List<string> Sent { get; } = [];
+        public void Send(string sessionId, string message) => Sent.Add(message);
+        public void Close(string sessionId, int code, string reason) { }
+    }
+
+    [Fact]
+    public async Task CampfireRealtimeService_broadcasts_message_lifecycle_and_typing()
+    {
+        var transport = new TestTransport();
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            WebSocket = transport,
+        });
+
+        var campfire = app.UseCampfire("/cable");
+
+        await app.HandleWebSocketOpenAsync("user_101", new ReptarRequest { Method = "GET", Path = "/cable" });
+        var subJson = """{"command":"subscribe","identifier":"{\"channel\":\"Turbo::StreamsChannel\",\"signed_stream_name\":\"room_7\"}"}""";
+        await app.HandleWebSocketMessageAsync("user_101", subJson);
+
+        // 1. Message created -> appends to messages container
+        var msg = new Reptar.Realtime.CampfireMessage(
+            Id: 1001,
+            RoomId: 7,
+            UserId: 42,
+            UserName: "DHH",
+            Body: "Welcome to ONCE Campfire!",
+            CreatedAt: "2026-10-24T09:00:00Z"
+        );
+        await campfire.BroadcastMessageCreatedAsync(msg);
+
+        // Checked that Turbo Stream was sent
+        var appendFrame = transport.Sent.First(s => s.Contains("turbo-stream") && s.Contains("message_1001"));
+        Assert.Contains("action=\\\"append\\\"", appendFrame);
+        Assert.Contains("target=\\\"messages\\\"", appendFrame);
+        Assert.Contains("Welcome to ONCE Campfire!", appendFrame);
+
+        // 2. Message updated -> replaces message_1001
+        var updatedMsg = msg with { Body = "Welcome to ONCE Campfire on Reptar Native AOT!" };
+        await campfire.BroadcastMessageUpdatedAsync(updatedMsg);
+
+        var replaceFrame = transport.Sent.First(s => s.Contains("turbo-stream") && s.Contains("action=\\\"replace\\\""));
+        Assert.Contains("target=\\\"message_1001\\\"", replaceFrame);
+        Assert.Contains("Reptar Native AOT", replaceFrame);
+
+        // 3. Typing indicator -> updates typing_indicator container
+        await campfire.BroadcastTypingAsync(new Reptar.Realtime.CampfireTypingStatus(7, 42, "DHH", true));
+        var typingFrame = transport.Sent.First(s => s.Contains("typing-active"));
+        Assert.Contains("DHH is typing...", typingFrame);
+
+        // 4. Message deleted -> removes message_1001
+        await campfire.BroadcastMessageDeletedAsync(7, 1001);
+        var removeFrame = transport.Sent.First(s => s.Contains("action=\\\"remove\\\"") && s.Contains("target=\\\"message_1001\\\""));
+        Assert.NotNull(removeFrame);
+    }
+}

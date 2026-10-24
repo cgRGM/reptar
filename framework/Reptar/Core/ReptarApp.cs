@@ -77,6 +77,14 @@ public sealed class ReptarApp
 
     internal ReptarApp(ReptarConfig config) => _config = config;
 
+    public ReptarConfig Config => _config;
+
+    public void SetWebSocketTransport(IWebSocketTransport transport)
+    {
+        _config.WebSocket = transport;
+        _services = null;
+    }
+
     public static ReptarApp Create(ReptarConfig? config = null)
     {
         var resolved = config ?? new ReptarConfig();
@@ -260,6 +268,9 @@ public sealed class ReptarApp
         _webSocketHandlers[Normalize(path)] = handlers;
         return this;
     }
+
+    public bool HasWebSocketHandler(string path) =>
+        _webSocketHandlers.ContainsKey(Normalize(path));
 
     public async Task HandleWebSocketOpenAsync(
         string sessionId,

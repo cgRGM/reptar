@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Runtime.InteropServices.JavaScript;
 using System.Text;
 using System.Text.Json;
@@ -210,6 +211,33 @@ public sealed class D1DbClient : IDbClient
         if (param is string or int or long or double or float or decimal or bool or Guid)
         {
             return (sql, SerializeParams([param]));
+        }
+
+        if (param is IDictionary dictionary)
+        {
+            var dictFromMap = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                dictFromMap[entry.Key?.ToString() ?? ""] = entry.Value;
+            }
+
+            if (sql.Contains('@') || sql.Contains('$'))
+            {
+                var (rewrittenSql, paramNames) =
+                    SqlParamParser.ParseNamedParameters(sql);
+                var positionalValues = new List<object?>();
+
+                foreach (var name in paramNames)
+                {
+                    positionalValues.Add(
+                        dictFromMap.TryGetValue(name, out var value) ? value : null);
+                }
+
+                return (rewrittenSql, SerializeParams(positionalValues));
+            }
+
+            return (sql, SerializeParams(dictFromMap.Values));
         }
 
         if (param is System.Collections.IEnumerable list and not string and not System.Collections.IDictionary)
