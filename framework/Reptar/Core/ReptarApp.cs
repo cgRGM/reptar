@@ -33,6 +33,10 @@ internal sealed class RouteEntry
     public required string Method { get; init; }
     public required string Path { get; init; }
     public required string[] Segments { get; init; }
+    public required bool HasParams { get; init; }
+    public required bool[] IsParamSegment { get; init; }
+    public required string[] ParamNames { get; init; }
+    public required int[] ParamIndices { get; init; }
     public ReptarMiddleware? Middleware { get; init; }
     public required Func<Ctx, Task<ReptarResponse>> Handler { get; init; }
     public required RouteMeta Meta { get; init; }
@@ -63,7 +67,10 @@ public sealed record ScheduledResult(
 
 public sealed class ReptarApp
 {
+    private static readonly Dictionary<string, string> EmptyParams = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<RouteEntry> _routes = new();
+    private readonly Dictionary<string, RouteEntry> _staticRoutes = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<(string Method, int SegmentCount), List<RouteEntry>> _paramRoutes = new();
     private readonly List<ReptarMiddleware> _middlewares = new();
     private readonly Dictionary<string, Func<Ctx, QueueMessage, Task>> _queueHandlers =
         new(StringComparer.OrdinalIgnoreCase);
@@ -233,15 +240,14 @@ public sealed class ReptarApp
         {
             var path = Combine(prefix, route.Path);
 
-            _routes.Add(new RouteEntry
-            {
-                Method = route.Method,
-                Path = path,
-                Segments = Split(path),
-                Middleware = route.Middleware,
-                Handler = route.Handler,
-                Meta = route.Meta.CloneWithPath(path),
-            });
+            var entry = CreateRouteEntry(
+                route.Method,
+                path,
+                route.Middleware,
+                route.Handler,
+                route.Meta.CloneWithPath(path));
+
+            RegisterRouteEntry(entry);
         }
 
         Tables.AddRange(subApp.Tables);
@@ -542,9 +548,9 @@ public sealed class ReptarApp
 
         Func<Ctx, Task<ReptarResponse>> wrapped = async ctx =>
         {
-            var body = ctx.Req.BodyText;
+            var bodyBytes = ctx.Req.Body;
 
-            if (string.IsNullOrWhiteSpace(body))
+            if (bodyBytes is null || bodyBytes.Length == 0)
             {
                 return ctx.Invalid(
                     [new ValidationIssue("Request body is required.", ["body"])]);
@@ -554,7 +560,7 @@ public sealed class ReptarApp
 
             try
             {
-                input = ctx.JsonCodec.Deserialize<TInput>(body);
+                input = ctx.JsonCodec.Deserialize<TInput>(bodyBytes.AsSpan());
             }
             catch (JsonException)
             {
@@ -587,56 +593,118 @@ public sealed class ReptarApp
         RouteMeta? meta = null)
     {
         var normalized = Normalize(path);
-
         var routeMeta = meta ?? new RouteMeta { Method = method, Path = normalized };
 
-        _routes.Add(new RouteEntry
-        {
-            Method = method,
-            Path = normalized,
-            Segments = Split(normalized),
-            Middleware = middleware,
-            Handler = handler,
-            Meta = routeMeta,
-        });
+        var entry = CreateRouteEntry(method, normalized, middleware, handler, routeMeta);
+        RegisterRouteEntry(entry);
 
         return new RouteBuilder(this, routeMeta);
     }
 
+    private static RouteEntry CreateRouteEntry(
+        string method,
+        string path,
+        ReptarMiddleware? middleware,
+        Func<Ctx, Task<ReptarResponse>> handler,
+        RouteMeta meta)
+    {
+        var segments = Split(path);
+        var isParamSegment = new bool[segments.Length];
+        var paramNames = new List<string>();
+        var paramIndices = new List<int>();
+
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (segments[i].StartsWith(':'))
+            {
+                isParamSegment[i] = true;
+                paramNames.Add(segments[i][1..]);
+                paramIndices.Add(i);
+            }
+        }
+
+        return new RouteEntry
+        {
+            Method = method,
+            Path = path,
+            Segments = segments,
+            HasParams = paramNames.Count > 0,
+            IsParamSegment = isParamSegment,
+            ParamNames = paramNames.ToArray(),
+            ParamIndices = paramIndices.ToArray(),
+            Middleware = middleware,
+            Handler = handler,
+            Meta = meta,
+        };
+    }
+
+    private void RegisterRouteEntry(RouteEntry entry)
+    {
+        _routes.Add(entry);
+
+        var upperMethod = entry.Method.ToUpperInvariant();
+
+        if (!entry.HasParams)
+        {
+            _staticRoutes[$"{upperMethod}:{entry.Path}"] = entry;
+        }
+        else
+        {
+            var key = (upperMethod, entry.Segments.Length);
+            if (!_paramRoutes.TryGetValue(key, out var list))
+            {
+                list = new List<RouteEntry>();
+                _paramRoutes[key] = list;
+            }
+            list.Add(entry);
+        }
+    }
+
     private (RouteEntry Entry, Dictionary<string, string> Params)? Match(string method, string path)
     {
-        var segments = Split(Normalize(path));
+        var normalizedPath = Normalize(path);
+        var upperMethod = method.ToUpperInvariant();
 
-        foreach (var entry in _routes)
+        // 1. O(1) Fast-Path: Static Routes (Zero-Allocation, No Loops)
+        var staticKey = $"{upperMethod}:{normalizedPath}";
+        if (_staticRoutes.TryGetValue(staticKey, out var staticEntry))
         {
-            if (!string.Equals(entry.Method, method, StringComparison.OrdinalIgnoreCase))
-                continue;
+            return (staticEntry, EmptyParams);
+        }
 
-            if (entry.Segments.Length != segments.Length)
-                continue;
+        // 2. Parameterized Routes (Pre-Filtered by Method and Segment Count)
+        var segments = Split(normalizedPath);
+        var paramKey = (upperMethod, segments.Length);
 
-            var routeParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            var matched = true;
-
-            for (var index = 0; index < segments.Length; index++)
+        if (_paramRoutes.TryGetValue(paramKey, out var candidates))
+        {
+            for (var c = 0; c < candidates.Count; c++)
             {
-                var pattern = entry.Segments[index];
+                var entry = candidates[c];
+                var matched = true;
 
-                if (pattern.StartsWith(':'))
+                // Check static segments first (fail fast before allocating dictionary)
+                for (var i = 0; i < segments.Length; i++)
                 {
-                    routeParams[pattern[1..]] = segments[index];
-                    continue;
+                    if (!entry.IsParamSegment[i] &&
+                        !string.Equals(entry.Segments[i], segments[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        matched = false;
+                        break;
+                    }
                 }
 
-                if (!string.Equals(pattern, segments[index], StringComparison.OrdinalIgnoreCase))
-                {
-                    matched = false;
-                    break;
-                }
-            }
+                if (!matched) continue;
 
-            if (matched)
+                // Match confirmed! Allocate dictionary with exact capacity and zero substring allocation
+                var routeParams = new Dictionary<string, string>(entry.ParamNames.Length, StringComparer.OrdinalIgnoreCase);
+                for (var p = 0; p < entry.ParamNames.Length; p++)
+                {
+                    routeParams[entry.ParamNames[p]] = segments[entry.ParamIndices[p]];
+                }
+
                 return (entry, routeParams);
+            }
         }
 
         return null;

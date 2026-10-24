@@ -56,7 +56,7 @@ public sealed class Ctx
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value, int status = 200) =>
-        ReptarResponse.Json(_services.Json.Serialize(value), status);
+        ReptarResponse.Json(_services.Json.SerializeUtf8(value), status);
 
     public ReptarResponse Text(string text, int status = 200, string contentType = "text/plain; charset=utf-8") => new()
     {

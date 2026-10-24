@@ -32,6 +32,7 @@ public sealed class AuthOptions
     public bool AllowAnonymous { get; set; } = true;
     public string[] BootstrapAdmins { get; set; } = [];
     public JwtOptions? Jwt { get; set; }
+#if !NETWASM
     public List<IOAuthProvider> OAuthProviders { get; set; } = [];
     public int RateLimitMaxAttempts { get; set; } = 5;
     public int RateLimitWindowMinutes { get; set; } = 15;
@@ -48,6 +49,7 @@ public sealed class AuthOptions
         OAuthProviders.Add(new GitHubOAuthProvider(clientId, clientSecret));
         return this;
     }
+#endif
 }
 
 public sealed class TelemetryOptions

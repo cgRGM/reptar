@@ -38,10 +38,16 @@ const versionAtLeast = (actual: string, required: string): boolean => {
   return true;
 };
 
-const dotnetPath = (): string =>
-  process.env.DOTNET_ROOT
-    ? path.join(process.env.DOTNET_ROOT, "dotnet")
-    : "dotnet";
+const dotnetPath = (): string => {
+  if (process.env.DOTNET_ROOT) {
+    return path.join(process.env.DOTNET_ROOT, "dotnet");
+  }
+  const localDotnet = path.join(sdkDir, "dotnet");
+  if (existsSync(localDotnet)) {
+    return localDotnet;
+  }
+  return "dotnet";
+};
 
 const dotnetEnv = (): NodeJS.ProcessEnv => ({
   ...process.env,

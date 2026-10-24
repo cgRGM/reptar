@@ -214,33 +214,41 @@ public static class KestrelHost
         }
     }
 
+    private static readonly Dictionary<string, string> EmptyCookies = new(StringComparer.OrdinalIgnoreCase);
+
     private static async Task<ReptarRequest> ToReptarRequest(HttpContext http)
     {
         byte[]? body = null;
 
         if (http.Request.ContentLength is > 0)
         {
-            using var memory = new MemoryStream();
+            var len = (int)http.Request.ContentLength.Value;
+            using var memory = new MemoryStream(len);
             await http.Request.Body.CopyToAsync(memory);
             body = memory.ToArray();
         }
 
-        var cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var cookies = EmptyCookies;
 
         if (http.Request.Headers.TryGetValue("Cookie", out var cookieHeader))
         {
-            foreach (var segment in cookieHeader.ToString().Split(
-                ';',
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            var headerStr = cookieHeader.ToString();
+            if (!string.IsNullOrEmpty(headerStr))
             {
-                var separator = segment.IndexOf('=');
+                cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var segment in headerStr.Split(
+                    ';',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    var separator = segment.IndexOf('=');
 
-                if (separator > 0)
-                    cookies[segment[..separator]] = segment[(separator + 1)..];
+                    if (separator > 0)
+                        cookies[segment[..separator]] = segment[(separator + 1)..];
+                }
             }
         }
 
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var headers = new Dictionary<string, string>(http.Request.Headers.Count, StringComparer.OrdinalIgnoreCase);
 
         foreach (var (key, value) in http.Request.Headers)
             headers[key] = value.ToString();
@@ -283,6 +291,13 @@ public static class KestrelHost
         }
 
         if (response.Body is { Length: > 0 } body)
-            await http.Response.Body.WriteAsync(body);
+        {
+            http.Response.ContentLength = body.Length;
+            await http.Response.Body.WriteAsync(body, http.RequestAborted);
+        }
+        else
+        {
+            http.Response.ContentLength = 0;
+        }
     }
 }

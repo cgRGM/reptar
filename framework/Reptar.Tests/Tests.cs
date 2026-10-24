@@ -73,6 +73,33 @@ public class RouterTests
         var response = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/nope" });
         Assert.Equal(404, response.Status);
     }
+
+    [Fact]
+    public async Task Matches_deeply_nested_multi_parameter_routes_without_allocations()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+
+        app.Get("/__bench/router/:orgId/:projectId/:taskId", ctx =>
+            Task.FromResult(ctx.Json(new
+            {
+                org = ctx.Req.Param("orgId"),
+                project = ctx.Req.Param("projectId"),
+                task = ctx.Req.Param("taskId"),
+            })));
+
+        var res = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/__bench/router/org_001/prj_002/tsk_003"
+        });
+
+        Assert.Equal(200, res.Status);
+        var json = Encoding.UTF8.GetString(res.Body!);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("org_001", doc.RootElement.GetProperty("org").GetString());
+        Assert.Equal("prj_002", doc.RootElement.GetProperty("project").GetString());
+        Assert.Equal("tsk_003", doc.RootElement.GetProperty("task").GetString());
+    }
 }
 
 public class ValidationTests

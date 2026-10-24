@@ -11,6 +11,13 @@ public sealed class ReptarResponse
     public Dictionary<string, string> Headers { get; } = new();
     public List<string> SetCookies { get; } = new();
 
+    public static ReptarResponse Json(byte[] utf8Bytes, int status = 200) => new()
+    {
+        Status = status,
+        ContentType = "application/json; charset=utf-8",
+        Body = utf8Bytes,
+    };
+
     public static ReptarResponse Json(string json, int status = 200) => new()
     {
         Status = status,

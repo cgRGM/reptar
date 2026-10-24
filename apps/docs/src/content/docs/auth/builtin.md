@@ -65,7 +65,7 @@ Mounting `Reptar.Auth.Routes()` exposes the following endpoints:
 | `/auth/callback/:provider` | GET | 302 | Exchanges OAuth code for tokens and starts session |
 | `/auth/sessions` | GET | 200 | Lists all active sessions for current user |
 | `/auth/sessions/revoke` | POST | 200 | Revokes a specific session by ID |
-| `/auth/sessions/revoke-others`| POST | 200 | Revokes all active sessions except the current request |
+| `/auth/sessions/revoke-others` | POST | 200 | Revokes all active sessions except the current request |
 | `/auth/change-password` | POST | 200 | Validates current password and sets new password |
 | `/auth/api-keys` | POST | 201 | Generates a `rep_live_...` personal access token |
 | `/auth/api-keys` | GET | 200 | Lists active API keys (with prefix and creation date) |

@@ -10,10 +10,20 @@ public interface IJsonCodec
             DynamicallyAccessedMemberTypes.PublicConstructors |
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value);
 
+    byte[] SerializeUtf8<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value);
+
     T? Deserialize<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(string json);
+
+    T? Deserialize<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(ReadOnlySpan<byte> utf8Json);
 }
 
 public sealed class DefaultJsonCodec : IJsonCodec
@@ -24,9 +34,21 @@ public sealed class DefaultJsonCodec : IJsonCodec
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value) =>
         JsonSerializer.Serialize(value, ReptarJson.Options);
 
+    public byte[] SerializeUtf8<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value) =>
+        JsonSerializer.SerializeToUtf8Bytes(value, ReptarJson.Options);
+
     public T? Deserialize<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(string json) =>
         JsonSerializer.Deserialize<T>(json, ReptarJson.Options);
+
+    public T? Deserialize<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(ReadOnlySpan<byte> utf8Json) =>
+        JsonSerializer.Deserialize<T>(utf8Json, ReptarJson.Options);
 }
