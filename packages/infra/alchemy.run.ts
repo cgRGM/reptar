@@ -30,6 +30,17 @@ export default Alchemy.Stack(
       name: "reptar-api",
     });
 
+    const docsWorker = yield* Cloudflare.Website.StaticSite("docs", {
+      command: "bun run build",
+      cwd: "../../apps/docs",
+      dev: {
+        command: "bun run dev",
+        url: "http://localhost:4322",
+      },
+      name: "reptar-docs",
+      outdir: "../../apps/docs/dist",
+    });
+
     const webWorker = yield* Cloudflare.Website.Astro("web", {
       dev: {
         port: 4321,
@@ -48,6 +59,7 @@ export default Alchemy.Stack(
     return {
       api: api.url,
       db: db.databaseName,
+      docs: docsWorker.url,
       web: webWorker.url,
     };
   })

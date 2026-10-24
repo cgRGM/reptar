@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "17166aace990bc2610d806b7c03733d4218e792f66f8250db20a192a42b06b35",
+  "semanticBuildId": "b2ad2f1a5fb2fd7925f5322bdb1ac334fb5a20123c18891980fa9026851b02db",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "4257e7e5dd638c9b9cba9f77b8fff9ccd32eddea367ef5e5a55d7d4e84e81123",
+  "buildFingerprint": "12f63d387c578168d0f0f681e4fbc578cdfbea5da8889cf2baaa4f0b9bee6539",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,7 +23,7 @@
       "relativePath": "HelloReptar.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "9431a6b21cd3fc03cdc71b7f08d894a2a10b02b1e6b7278b3af55053ac88e18d",
+      "sha256": "65f7e33d1b90324e16be45e61a59d2e4f8a193d78d2358c81d5630b99f8b9840",
       "schemaVersion": 2
     },
     {
@@ -37,7 +37,7 @@
       "relativePath": "HelloReptar.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "d8d4ef15da46fb1493fb24fd4081c2671ddbb6b54f360addda28aff258650db5",
+      "sha256": "aa086b2f974ea4ccef3644bf8ce817875696a6be677be3236e11f7b29806c490",
       "schemaVersion": null
     },
     {
@@ -58,7 +58,7 @@
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "92af408df7aaeb7a0e23a7e4c363492303c7ec5be0a57b096fe8a2b11baee021",
+      "sha256": "84fa60ecfdcb495e61c70b9cc7771456780c8547acdd0ebbd8729421d2c01a20",
       "schemaVersion": 1
     }
   ],
