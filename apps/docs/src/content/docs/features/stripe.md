@@ -5,158 +5,130 @@ description: Zero-bloat Stripe Checkout sessions and HMAC-SHA256 webhook verific
 
 ## Overview
 
-Reptar provides an optional, built-in payments module (`Reptar.Stripe`) designed specifically for serverless edge execution on Cloudflare Workers.
+`Reptar.Stripe` is an optional feature slice in `framework/Reptar/Features/Stripe.cs`. It is not part of the framework core and the reference blog does not mount it. The module exists to prove that Stripe Checkout and webhook verification can run on Workers without `Stripe.net` or a large reflection-heavy SDK.
 
-Traditional .NET applications rely on the official `Stripe.net` NuGet package. While powerful, `Stripe.net` is ~50 MB, contains thousands of reflection-heavy types, and links BCL networking and XML components that fail under WebAssembly ahead-of-time (AOT) compilation.
-
-`Reptar.Stripe` is zero-dependency, AOT-safe, and compiled directly into the framework core:
-
-- **Direct Edge REST Calls**: Invokes Stripe's official REST API (`https://api.stripe.com/v1/checkout/sessions`) via the host's native `fetch` bridge.
-- **Lightweight Form Encoding**: Serializes checkout payloads without heavy `System.Uri` or reflection overhead.
-- **Hardware-Accelerated Webhook Verification**: Verifies incoming `Stripe-Signature` headers using native WebCrypto **HMAC-SHA256** with replay attack protection.
+- **Direct REST calls** to `https://api.stripe.com/v1/checkout/sessions` through `c.Http`.
+- **Zero dependency form encoding** using UTF-8 percent encoding.
+- **Native HMAC-SHA256** webhook verification through `c.Crypto`.
+- **Fail-closed behavior** when Stripe is not configured.
 
 ---
 
 ## Configuration
 
-Initialize `StripeConfig` using environment variables passed from Cloudflare Workers or Alchemy:
-
 ```csharp
 var stripeConfig = new StripeConfig
 {
-    ApiKey = Environment.GetEnvironmentVariable("STRIPE_KEY") ?? "",
-    WebhookSecret = Environment.GetEnvironmentVariable("STRIPE_WEBHOOK_SECRET") ?? "",
-    ToleranceSeconds = 300 // Replay attack protection window (default: 300s)
+    ApiKey = "sk_live_...",
+    WebhookSecret = "whsec_...",
+    ToleranceSeconds = 300,
 };
 ```
 
-> [!IMPORTANT] If `WebhookSecret` is empty or null, webhook signature verification **fails closed** and rejects all incoming webhook requests.
+`StripeConfig` also exposes `ApiUrl` for testing or a proxy.
+
+The current Wasm host does not inject Cloudflare environment variables into C# automatically. Pass `StripeConfig` from your application's configuration layer (or add an explicit host env binding) and mount the routes only when the values are present.
 
 ---
 
 ## 1. Creating Checkout Sessions
 
-Create a Stripe Checkout session in your route handler:
-
 ```csharp
 app.Post("/orders/checkout", Auth.RequireUser, async ctx =>
 {
-    var input = await ctx.Req.JsonAsync<CheckoutInput>();
-    if (input is null) return ctx.BadRequest("Invalid payload");
+    var input = ctx.JsonCodec.Deserialize<CreateCheckoutInput>(
+        ctx.Req.BodyText ?? "{}");
 
-    var session = await Stripe.CreateCheckoutSessionAsync(stripeConfig, new CreateCheckoutInput(
-        SuccessUrl: "https://my-app.com/orders/success?session_id={CHECKOUT_SESSION_ID}",
-        CancelUrl: "https://my-app.com/orders/cancel",
-        LineItems: [
-            new StripeLineItem(PriceId: input.PriceId, Quantity: input.Quantity)
-        ],
-        ClientReferenceId: ctx.User!.Id,
-        CustomerEmail: ctx.User.Email
-    ));
+    if (input is null)
+    {
+        return ctx.BadRequest("Invalid payload.");
+    }
+
+    var session = await Stripe.CreateCheckoutSessionAsync(
+        ctx,
+        stripeConfig,
+        new CreateCheckoutInput(
+            SuccessUrl: "https://my-app.com/orders/success?session_id={CHECKOUT_SESSION_ID}",
+            CancelUrl: "https://my-app.com/orders/cancel",
+            LineItems:
+            [
+                new StripeLineItem(
+                    Name: "Reptar Pro",
+                    UnitAmountInCents: 1900,
+                    Currency: "usd",
+                    Quantity: 1),
+            ],
+            ClientReferenceId: ctx.User!.Id,
+            CustomerEmail: ctx.User.Email));
 
     return ctx.Json(session, 201);
 });
 ```
 
-The returned `CheckoutSession` record includes `Id` and `Url`, allowing your frontend to redirect the customer directly to Stripe:
+The returned `CheckoutSession` contains `Id`, `Url`, and `Status`.
 
-```typescript
-const res = await api.orders.checkout.$post({
-  json: { priceId: "price_1N...", quantity: 1 },
-});
-if (res.ok) {
-  const session = await res.json();
-  window.location.href = session.url;
-}
-```
+`StripeLineItem` uses `Name`, `UnitAmountInCents`, `Currency`, and `Quantity`. This module creates ad-hoc prices; it does not look up pre-created Stripe Price objects.
 
 ---
 
 ## 2. Mounting the Stripe Routes
 
-You can mount pre-built checkout and webhook routes directly:
-
 ```csharp
-app.Route("/stripe", Stripe.Routes(stripeConfig, async (stripeEvent, ctx) =>
+app.Route("/stripe", Stripe.Routes(stripeConfig, async (ctx, stripeEvent) =>
 {
-    // Handle verified webhook events
     switch (stripeEvent.Type)
     {
         case "checkout.session.completed":
-            Console.WriteLine($"Order completed: {stripeEvent.Id}");
-            // Fulfill digital goods, update D1 database, or send queue event
-            break;
-
-        case "customer.subscription.deleted":
-            // Handle cancellation
+            // Fulfill the order in D1, enqueue work, etc.
             break;
     }
+
+    return ctx.Status(200);
 }));
 ```
 
-Mounting `Stripe.Routes` automatically exposes:
+Mounted routes:
 
-- `POST /stripe/checkout`: Accepts `CreateCheckoutInput` and returns `CheckoutSession`.
-- `POST /stripe/webhook`: Validates `Stripe-Signature` via HMAC-SHA256, verifies timestamps, and invokes your `onEvent` delegate.
+- `POST /stripe/checkout` — accepts `CreateCheckoutInput` and returns `CheckoutSession`.
+- `POST /stripe/webhook` — validates `Stripe-Signature`, checks the timestamp tolerance, and invokes `onEvent`.
+
+If `ApiKey` or `WebhookSecret` is missing, the corresponding route returns `503 stripe_not_configured` instead of making an unauthenticated request or accepting an unverified webhook.
 
 ---
 
 ## 3. Webhook Signature Verification
 
-If you prefer to handle webhooks in a custom endpoint, call `Stripe.VerifyWebhookSignatureAsync`:
-
 ```csharp
 app.Post("/webhooks/stripe", async ctx =>
 {
-    var signature = ctx.Req.Header("stripe-signature");
-    var body = ctx.Req.BodyString();
+    var signature = ctx.Req.Header("stripe-signature") ?? "";
+    var body = ctx.Req.BodyText ?? "";
 
-    var isValid = await Stripe.VerifyWebhookSignatureAsync(
+    var valid = await Stripe.VerifyWebhookSignatureAsync(
+        ctx,
         stripeConfig,
         body,
-        signature,
-        ctx.Clock
-    );
+        signature);
 
-    if (!isValid)
+    if (!valid)
     {
-        return ctx.Error(400, "invalid_signature", "Webhook signature verification failed.");
+        return ctx.Error(
+            400,
+            "invalid_signature",
+            "Webhook signature verification failed.");
     }
 
-    var evt = ctx.JsonCodec.Deserialize<StripeEvent>(body);
-    // Process event safely
+    var stripeEvent = ctx.JsonCodec.Deserialize<StripeEvent>(body);
+    // Process the verified event.
     return ctx.Status(200);
 });
 ```
 
-### Security Guarantees
+Verification parses `t=` and `v1=` from the `Stripe-Signature` header, rejects missing or malformed timestamps, enforces `ToleranceSeconds`, and compares the expected HMAC against every provided `v1` signature.
 
-1. **Timing Attack Protection**: Uses constant-time signature comparison.
-2. **Replay Attack Protection**: Compares event timestamp `t` with `ctx.Clock.IsoNow()`; timestamps older than `ToleranceSeconds` (default: 5 minutes) are rejected.
-3. **Fail-Closed**: If the webhook secret is missing, all requests are rejected immediately.
+## Security notes
 
----
-
-## 4. Production Deployment with Alchemy
-
-Define your Stripe secrets in your `alchemy.run.ts` stack:
-
-```typescript
-import * as Alchemy from "alchemy";
-import * as Cloudflare from "alchemy/Cloudflare";
-
-export default Alchemy.Stack("reptar", { ... }, Effect.gen(function* () {
-  const api = yield* Cloudflare.Worker("api", {
-    env: {
-      STRIPE_KEY: Alchemy.secret("STRIPE_KEY"),
-      STRIPE_WEBHOOK_SECRET: Alchemy.secret("STRIPE_WEBHOOK_SECRET"),
-      DB: db,
-      BUCKET: bucket,
-    },
-    main: "../../spikes/netwasm-worker/src/index.ts",
-    name: "reptar-api",
-  });
-
-  return { api: api.url };
-}));
-```
+- Keep `STRIPE_KEY` and `STRIPE_WEBHOOK_SECRET` out of source control.
+- Reject webhooks when the secret is missing; never skip verification.
+- The timestamp window limits replay, but production systems should also deduplicate `StripeEvent.Id` values in D1 or KV.
+- The reference blog intentionally exposes no `/stripe` routes.

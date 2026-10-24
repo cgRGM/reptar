@@ -83,7 +83,8 @@ public sealed class TableDef
         new(name, columns);
 
     public static TableDef Create(string name, object? columns = null) =>
-        new(name, (ColumnDef[])[]);
+        throw new NotSupportedException(
+            "Use TableDef.Define(...) with explicit columns on the Wasm target.");
 
     public static TableDef Define(string name, params ColumnBuilder[] columns) =>
         new(name, columns);

@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "b2ad2f1a5fb2fd7925f5322bdb1ac334fb5a20123c18891980fa9026851b02db",
+  "semanticBuildId": "0a446c430c3a5787bad579353d7fb1e24bc7cc5531dde31ef59cceb9abad280c",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "12f63d387c578168d0f0f681e4fbc578cdfbea5da8889cf2baaa4f0b9bee6539",
+  "buildFingerprint": "ae26d5f5c8c2fe720d9ae2cd07bf117a5224b3a5efd838fcaf72f06db5ee18e4",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,7 +23,7 @@
       "relativePath": "HelloReptar.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "65f7e33d1b90324e16be45e61a59d2e4f8a193d78d2358c81d5630b99f8b9840",
+      "sha256": "d78f78053f69477f9c28700b8ac3705be33f7807bbc38347da87456f1ab21d91",
       "schemaVersion": 2
     },
     {
@@ -37,28 +37,28 @@
       "relativePath": "HelloReptar.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "aa086b2f974ea4ccef3644bf8ce817875696a6be677be3236e11f7b29806c490",
+      "sha256": "2247b730f658cd0e5ec5a5db76e17b3d8105cd425f9f4d3d551f92fdf2d5bf5e",
       "schemaVersion": null
     },
     {
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "e5af55706f3e2fab599a48f7a341e9bb02ab2cf975af57227637e7fa43e1ed2e",
+      "sha256": "8b17a010a099b5a16b39225d0bd78eaba61d465d88cf004ba0ec9549056a8cee",
       "schemaVersion": 1
     },
     {
       "relativePath": "netwasm.page.mjs",
       "role": "hosting-javascript",
       "mediaType": "text/javascript",
-      "sha256": "85349f1c473d078218f5e309f0bc82569ea03e383bd3ab731059960d53cd365a",
+      "sha256": "4ed44b3bda9c69606cccdb840be15dd2217ac8a2231a092de6c6fb6cbaab117b",
       "schemaVersion": null
     },
     {
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "84fa60ecfdcb495e61c70b9cc7771456780c8547acdd0ebbd8729421d2c01a20",
+      "sha256": "f1293bc0472d421b50c460716dfef12810c893029502fcea44c81f0fe4ce4881",
       "schemaVersion": 1
     }
   ],

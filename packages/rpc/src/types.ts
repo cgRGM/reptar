@@ -2,7 +2,6 @@ export interface CreatePost {
   title: string;
   content: string;
   imageKey?: string | null;
-  excerpt?: string | null;
 }
 
 export interface ErrorBody {
@@ -17,10 +16,6 @@ export interface Post {
   content: string;
   imageKey?: string | null;
   createdAt: string;
-  authorId?: string;
-  slug?: string;
-  published?: number;
-  updatedAt?: string;
 }
 
 export interface UploadResult {
@@ -51,7 +46,6 @@ export interface SignUpInput {
 
 export interface UpdatePost {
   content?: string | null;
-  excerpt?: string | null;
   imageKey?: string | null;
   title?: string | null;
 }

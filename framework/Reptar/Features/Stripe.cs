@@ -8,6 +8,7 @@ public sealed class StripeConfig
     public required string ApiKey { get; init; }
     public string? WebhookSecret { get; init; }
     public string ApiUrl { get; init; } = "https://api.stripe.com/v1";
+    public int ToleranceSeconds { get; init; } = 300;
 }
 
 public sealed record StripeLineItem(
@@ -44,8 +45,11 @@ public static class Stripe
         }
 
         var sb = new StringBuilder();
-        foreach (var c in value)
+
+        foreach (var b in Encoding.UTF8.GetBytes(value))
         {
+            var c = (char)b;
+
             if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
                 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~')
             {
@@ -53,7 +57,7 @@ public static class Stripe
             }
             else
             {
-                sb.Append('%').Append(((int)c).ToString("X2"));
+                sb.Append('%').Append(b.ToString("X2"));
             }
         }
 
@@ -65,6 +69,12 @@ public static class Stripe
         StripeConfig config,
         CreateCheckoutInput input)
     {
+        if (string.IsNullOrWhiteSpace(config.ApiKey))
+        {
+            throw new InvalidOperationException(
+                "Stripe API key is not configured.");
+        }
+
         var form = new List<string>
         {
             $"success_url={UrlEncode(input.SuccessUrl)}",
@@ -123,11 +133,14 @@ public static class Stripe
 
     public static async Task<bool> VerifyWebhookSignatureAsync(
         Ctx ctx,
-        string webhookSecret,
+        StripeConfig config,
         string payload,
         string signatureHeader)
     {
-        if (string.IsNullOrEmpty(webhookSecret) || string.IsNullOrEmpty(signatureHeader))
+        var webhookSecret = config.WebhookSecret;
+
+        if (string.IsNullOrEmpty(webhookSecret) ||
+            string.IsNullOrEmpty(signatureHeader))
         {
             return false;
         }
@@ -158,14 +171,19 @@ public static class Stripe
             return false;
         }
 
-        if (long.TryParse(timestamp, out var t))
+        if (!long.TryParse(timestamp, out var t))
         {
-            var epoch = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            var now = (DateTime.UtcNow - epoch).TotalSeconds;
-            if (Math.Abs(now - t) > 300)
-            {
-                return false;
-            }
+            return false;
+        }
+
+        var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var tolerance = config.ToleranceSeconds > 0
+            ? config.ToleranceSeconds
+            : 300;
+
+        if (Math.Abs(now - t) > tolerance)
+        {
+            return false;
         }
 
         var signedPayload = $"{timestamp}.{payload}";
@@ -190,6 +208,14 @@ public static class Stripe
 
         app.Post("/checkout", async ctx =>
         {
+            if (string.IsNullOrWhiteSpace(config.ApiKey))
+            {
+                return ctx.Error(
+                    503,
+                    "stripe_not_configured",
+                    "Stripe API key is not configured.");
+            }
+
             var bodyText = ctx.Req.Body is null
                 ? "{}"
                 : Encoding.UTF8.GetString(ctx.Req.Body);
@@ -208,23 +234,28 @@ public static class Stripe
 
         app.Post("/webhook", async ctx =>
         {
+            if (string.IsNullOrWhiteSpace(config.WebhookSecret))
+            {
+                return ctx.Error(
+                    503,
+                    "stripe_not_configured",
+                    "Stripe webhook secret is not configured.");
+            }
+
             var sigHeader = ctx.Req.Header("stripe-signature");
             var bodyText = ctx.Req.Body is null
                 ? ""
                 : Encoding.UTF8.GetString(ctx.Req.Body);
 
-            if (config.WebhookSecret is not null)
-            {
-                var valid = await VerifyWebhookSignatureAsync(
-                    ctx,
-                    config.WebhookSecret,
-                    bodyText,
-                    sigHeader ?? "");
+            var valid = await VerifyWebhookSignatureAsync(
+                ctx,
+                config,
+                bodyText,
+                sigHeader ?? "");
 
-                if (!valid)
-                {
-                    return ctx.BadRequest("Invalid Stripe webhook signature.");
-                }
+            if (!valid)
+            {
+                return ctx.BadRequest("Invalid Stripe webhook signature.");
             }
 
             if (onEvent is not null && !string.IsNullOrWhiteSpace(bodyText))

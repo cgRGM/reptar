@@ -46,4 +46,5 @@ export const hmacSha256 = (key, message) =>
 export const randomToken = (bytes) =>
   globalThis.__REPTAR_CRYPTO_RANDOM_TOKEN(bytes);
 
-export const respond = (json) => globalThis.__REPTAR_RESPOND(json);
+export const respond = (requestId, json) =>
+  globalThis.__REPTAR_RESPOND(requestId, json);

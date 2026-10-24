@@ -1,7 +1,5 @@
 import type { Endpoint } from "./client";
 import type {
-  CheckoutSession,
-  CreateCheckoutInput,
   CreatePost,
   ErrorBody,
   Post,
@@ -48,32 +46,16 @@ export interface AppType {
     $post: Endpoint<
       { json: CreatePost },
       Post | ValidationError | ErrorBody,
-      201 | 400 | 401
+      201 | 400
     >;
     ":id": {
-      $delete: Endpoint<
-        { param: { id: string } },
-        ErrorBody | null,
-        204 | 401 | 403 | 404
-      >;
+      $delete: Endpoint<{ param: { id: string } }, ErrorBody | null, 204 | 404>;
       $get: Endpoint<{ param: { id: string } }, Post | ErrorBody, 200 | 404>;
       $put: Endpoint<
         { json: UpdatePost; param: { id: string } },
         Post | ValidationError | ErrorBody,
-        200 | 400 | 401 | 403 | 404
+        200 | 400 | 404
       >;
-    };
-  };
-  stripe: {
-    checkout: {
-      $post: Endpoint<
-        { json: CreateCheckoutInput },
-        CheckoutSession | ValidationError | ErrorBody,
-        201 | 400
-      >;
-    };
-    webhook: {
-      $post: Endpoint<undefined, ErrorBody | null, 200 | 400>;
     };
   };
   upload: {

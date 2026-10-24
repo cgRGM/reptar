@@ -13,7 +13,8 @@ public sealed record HostRequest(
     string Path,
     string Query,
     Dictionary<string, string> Headers,
-    string Body);
+    string Body,
+    string RequestId);
 
 public sealed record HostResponse(
     int Status,
@@ -30,6 +31,11 @@ public sealed record Post(
 
 public sealed record CreatePost(string Title, string Content, string? ImageKey);
 
+public sealed record UpdatePost(
+    string? Title,
+    string? Content,
+    string? ImageKey);
+
 public sealed record UploadResult(string Key, string Url);
 
 [JsonSerializable(typeof(HostRequest))]
@@ -37,6 +43,7 @@ public sealed record UploadResult(string Key, string Url);
 [JsonSerializable(typeof(Post))]
 [JsonSerializable(typeof(List<Post>))]
 [JsonSerializable(typeof(CreatePost))]
+[JsonSerializable(typeof(UpdatePost))]
 [JsonSerializable(typeof(UploadResult))]
 [JsonSerializable(typeof(ErrorBody))]
 [JsonSerializable(typeof(ValidationError))]
@@ -53,10 +60,6 @@ public sealed record UploadResult(string Key, string Url);
 [JsonSerializable(typeof(List<SessionUser>))]
 [JsonSerializable(typeof(Auth.SignUpInput))]
 [JsonSerializable(typeof(Auth.SignInInput))]
-[JsonSerializable(typeof(CheckoutSession))]
-[JsonSerializable(typeof(CreateCheckoutInput))]
-[JsonSerializable(typeof(StripeLineItem))]
-[JsonSerializable(typeof(List<StripeLineItem>))]
 internal partial class BlogJsonContext : JsonSerializerContext
 {
 }
@@ -66,6 +69,10 @@ public static partial class PageExports
     private static readonly Validator<CreatePost> CreateSchema = Rule<CreatePost>()
         .Prop(x => x.Title, rules => rules.Min(3).Max(120))
         .Prop(x => x.Content, rules => rules.Min(1));
+
+    private static readonly Validator<UpdatePost> UpdateSchema = Rule<UpdatePost>()
+        .Prop(x => x.Title, rules => rules.Min(3).Max(120).Optional())
+        .Prop(x => x.Content, rules => rules.Min(1).Optional());
 
     public static readonly TableDef PostsTable = DefineTable("posts",
         Col.Text("id").PrimaryKey(),
@@ -84,7 +91,7 @@ public static partial class PageExports
     }
 
     [JSImport("respond", "app.host")]
-    private static extern void Respond(string json);
+    private static extern void Respond(string requestId, string json);
 
     [JSExport("handle")]
     public static void Handle(string requestJson)
@@ -100,9 +107,11 @@ public static partial class PageExports
 
         if (request is null)
         {
-            Respond(JsonSerializer.Serialize(
-                new HostResponse(400, [], "{\"error\":\"bad_request\"}", []),
-                ReptarJson.Options));
+            Respond(
+                ExtractRequestId(requestJson),
+                JsonSerializer.Serialize(
+                    new HostResponse(400, [], "{\"error\":\"bad_request\"}", []),
+                    ReptarJson.Options));
             return;
         }
 
@@ -127,13 +136,33 @@ public static partial class PageExports
             headers["content-type"] = response.ContentType;
         }
 
-        Respond(JsonSerializer.Serialize(
-            new HostResponse(
-                response.Status,
-                headers,
-                body,
-                response.SetCookies.ToArray()),
-            ReptarJson.Options));
+        Respond(
+            request.RequestId,
+            JsonSerializer.Serialize(
+                new HostResponse(
+                    response.Status,
+                    headers,
+                    body,
+                    response.SetCookies.ToArray()),
+                ReptarJson.Options));
+    }
+
+    private static string ExtractRequestId(string requestJson)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(requestJson);
+
+            return document.RootElement.TryGetProperty(
+                "requestId",
+                out var requestId)
+                ? requestId.GetString() ?? ""
+                : "";
+        }
+        catch (JsonException)
+        {
+            return "";
+        }
     }
 
     private static Dictionary<string, string> ParseCookies(
@@ -174,7 +203,6 @@ public static partial class PageExports
 
         var app = ReptarApp.Create(new ReptarConfig
         {
-            Debug = true,
             Auth = BuiltIn(),
             Database = new D1DbClient(json),
             Storage = new R2Client(),
@@ -210,7 +238,7 @@ public static partial class PageExports
             return ctx.Json(post, 201);
         });
 
-        app.Put("/posts/:id", CreateSchema, async (ctx, input) =>
+        app.Put("/posts/:id", UpdateSchema, async (ctx, input) =>
         {
             var post = await ctx.Db.GetAsync<Post>(PostsTable, ctx.Req.Param("id")!);
             if (post is null)
@@ -220,8 +248,8 @@ public static partial class PageExports
 
             var updated = post with
             {
-                Title = input.Title.Trim(),
-                Content = input.Content,
+                Title = input.Title?.Trim() ?? post.Title,
+                Content = input.Content ?? post.Content,
                 ImageKey = input.ImageKey ?? post.ImageKey,
             };
 
@@ -250,13 +278,6 @@ public static partial class PageExports
             var url = await ctx.Storage.PutAsync(key, body, contentType);
             return ctx.Json(new UploadResult(key, url), 201);
         });
-
-        // Built-in Stripe module
-        app.Route("/stripe", Stripe.Routes(new StripeConfig
-        {
-            ApiKey = "sk_test_placeholder",
-            WebhookSecret = "whsec_placeholder",
-        }));
 
         return app;
     }

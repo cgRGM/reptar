@@ -14,6 +14,7 @@
     <Compile Include="../Reptar/Core/**/*.cs" />
     <Compile Include="../Reptar/Validation/**/*.cs" />
     <Compile Include="../Reptar/Data/Services.cs" />
+    <Compile Include="../Reptar/Data/SqlParamParser.cs" />
     <Compile Include="../Reptar/Features/Stripe.cs" />
     <Compile Include="Data/TableDef.Wasm.cs" />
     <Compile Include="Data/D1DbClient.cs" />

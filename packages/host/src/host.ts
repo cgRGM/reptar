@@ -18,6 +18,7 @@ export interface ReptarHostOptions<TEnv> {
     fetch: (request: Request) => Promise<Response>;
   };
   bindings: (env: TEnv) => ReptarBindings;
+  httpAllowedHosts?: string[];
   manifestUrl?: (origin: string) => string;
   open: () => Promise<ReptarWasmApp>;
   wasm: WebAssembly.Module;
@@ -83,7 +84,7 @@ interface ReptarScope {
     bytes: Uint8Array,
     contentType: string
   ) => Promise<string>;
-  __REPTAR_RESPOND?: (value: string) => void;
+  __REPTAR_RESPOND?: (requestId: string, value: string) => void;
   __REPTAR_WASM_MODULE?: WebAssembly.Module;
 }
 
@@ -210,8 +211,106 @@ const registerDurableBinding = (
   };
 };
 
-const registerHttpFetch = (scope: ReptarScope): void => {
+const isPrivateHostName = (host: string): boolean =>
+  host === "localhost" ||
+  host.endsWith(".localhost") ||
+  host.endsWith(".local") ||
+  host === "metadata" ||
+  host === "metadata.google.internal";
+
+const isPrivateIpv6 = (host: string): boolean =>
+  host === "::1" ||
+  host.startsWith("fc") ||
+  host.startsWith("fd") ||
+  host.startsWith("fe80") ||
+  host.startsWith("::ffff:127.");
+
+const parseIpv4 = (host: string): number[] | null => {
+  const parts = host.split(".");
+
+  if (parts.length !== 4) {
+    return null;
+  }
+
+  const octets: number[] = [];
+
+  for (const part of parts) {
+    if (!/^\d{1,3}$/u.test(part)) {
+      return null;
+    }
+
+    const value = Number(part);
+
+    if (value > 255) {
+      return null;
+    }
+
+    octets.push(value);
+  }
+
+  return octets;
+};
+
+const isPrivateIpv4 = (octets: number[]): boolean => {
+  const [a, b] = octets;
+
+  return (
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    a >= 224
+  );
+};
+
+const isPrivateHostname = (hostname: string): boolean => {
+  const host = hostname.toLowerCase().replaceAll(/^\[|\]$/gu, "");
+
+  if (isPrivateHostName(host) || isPrivateIpv6(host)) {
+    return true;
+  }
+
+  const octets = parseIpv4(host);
+  return octets !== null && isPrivateIpv4(octets);
+};
+
+const isAllowedHttpUrl = (
+  url: string,
+  allowedHosts: string[] | undefined
+): boolean => {
+  let parsed: URL;
+
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+
+  if (parsed.protocol !== "https:") {
+    return false;
+  }
+
+  if (allowedHosts && allowedHosts.length > 0) {
+    return allowedHosts.some(
+      (host) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`)
+    );
+  }
+
+  return !isPrivateHostname(parsed.hostname);
+};
+
+const registerHttpFetch = (
+  scope: ReptarScope,
+  allowedHosts: string[] | undefined
+): void => {
   scope.__REPTAR_HTTP_FETCH ??= async (url, method, headersJson, body) => {
+    if (!isAllowedHttpUrl(url, allowedHosts)) {
+      throw new Error(`Outbound HTTP host is not allowed: ${url}`);
+    }
+
     const headers = JSON.parse(headersJson || "{}") as Record<string, string>;
     const res = await fetch(url, {
       body: body || undefined,
@@ -239,10 +338,19 @@ export const createReptarHost = <TEnv>(
   options: ReptarHostOptions<TEnv>
 ): ReptarHost<TEnv> => {
   let appPromise: Promise<ReptarWasmApp> | null = null;
+  const pending = new Map<string, (value: string) => void>();
+  const scope = globalThis as typeof globalThis & ReptarScope;
+
+  scope.__REPTAR_RESPOND = (requestId, value) => {
+    const resolve = pending.get(requestId);
+
+    if (resolve) {
+      pending.delete(requestId);
+      resolve(value);
+    }
+  };
 
   const getApp = (origin: string, env: TEnv): Promise<ReptarWasmApp> => {
-    const scope = globalThis as typeof globalThis & ReptarScope;
-
     scope.__REPTAR_MANIFEST_URL ??= (options.manifestUrl ?? defaultManifestUrl)(
       origin
     );
@@ -256,7 +364,7 @@ export const createReptarHost = <TEnv>(
     registerQueuesBinding(scope, bindings.queues);
     registerAiBinding(scope, bindings.ai);
     registerDurableBinding(scope, bindings.durable);
-    registerHttpFetch(scope);
+    registerHttpFetch(scope, options.httpAllowedHosts);
 
     scope.__REPTAR_FETCH ??= (input, init) => {
       const request = new Request(input, init);
@@ -285,13 +393,13 @@ export const createReptarHost = <TEnv>(
     }
 
     const body = await request.text();
-    const scope = globalThis as typeof globalThis & ReptarScope;
+    const requestId = crypto.randomUUID();
 
     // The C# app responds through a JS import, so the host owns the promise.
-    // Requests are serialized per isolate because the responder is a global.
+    // The request ID keeps concurrent requests from crossing responses.
     // eslint-disable-next-line promise/avoid-new
     const response = new Promise<string>((resolve) => {
-      scope.__REPTAR_RESPOND = resolve;
+      pending.set(requestId, resolve);
     });
 
     try {
@@ -302,17 +410,18 @@ export const createReptarHost = <TEnv>(
           method: request.method,
           path: url.pathname,
           query: url.search.replace(/^\?/u, ""),
+          requestId,
         })
       );
     } catch (error) {
-      delete scope.__REPTAR_RESPOND;
+      pending.delete(requestId);
       return errorResponse(
         error instanceof Error ? error.message : "Reptar app failed"
       );
     }
 
     const json = await response;
-    scope.__REPTAR_RESPOND = undefined;
+    pending.delete(requestId);
 
     let payload: HostResponseEnvelope;
 
@@ -334,27 +443,7 @@ export const createReptarHost = <TEnv>(
     });
   };
 
-  let tail: Promise<unknown> = Promise.resolve();
-
-  const enqueue = async <T>(task: () => Promise<T>): Promise<T> => {
-    const previous = tail;
-    const gate = Promise.withResolvers<boolean>();
-    tail = gate.promise;
-
-    try {
-      await previous;
-    } catch {
-      // A failed request must not block the queue.
-    }
-
-    try {
-      return await task();
-    } finally {
-      gate.resolve(true);
-    }
-  };
-
   return {
-    fetch: (request, env) => enqueue(() => handleRequest(request, env)),
+    fetch: handleRequest,
   };
 };

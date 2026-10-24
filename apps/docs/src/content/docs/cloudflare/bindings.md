@@ -7,6 +7,8 @@ description: Direct C# APIs for Cloudflare D1, R2, KV, Queues, Workers AI, Durab
 
 Reptar exposes Cloudflare platform capabilities as idiomatic C# interfaces on `c`. Rather than making external REST API roundtrips over the public internet, each call bridges in-memory via `[JSImport]` to native Cloudflare Worker `env` bindings inside the `workerd` isolate.
 
+> [!NOTE] The reference blog Worker currently binds **D1 and R2 only**. KV, Queues, Workers AI, and Durable Objects are implemented host surfaces; wire each one in your Worker's `bindings` function and provision it in the Alchemy stack before using it in an app.
+
 ---
 
 ## 1. Cloudflare D1 (`c.Db`)
@@ -154,9 +156,9 @@ var response = await client.PostJsonAsync("https://api.external.com/v1/event", p
 | :-- | :-- | :-- | :-- |
 | **D1 (SQL Database)** | `c.Db` | `D1DbClient` via `[JSImport]` | ✅ Production Ready |
 | **R2 (Object Storage)** | `c.Storage` | `R2Client` + Binary Stream | ✅ Production Ready |
-| **KV Storage** | `c.Cache` | `KvClient` via `[JSImport]` | ✅ Supported |
-| **Cloudflare Queues** | `c.Queues` | `QueueClient` via `[JSImport]` | ✅ Supported |
-| **Workers AI** | `c.AI` | `AiClient` via `[JSImport]` | ✅ Supported |
-| **Durable Objects** | `c.Durable` | `DurableBridge` via `[JSImport]` | ✅ Supported |
+| **KV Storage** | `c.Cache` | `KvClient` via `[JSImport]` | ✅ Surface ready; wire binding |
+| **Cloudflare Queues** | `c.Queues` | `QueueClient` via `[JSImport]` | ✅ Surface ready; wire binding |
+| **Workers AI** | `c.AI` | `AiClient` via `[JSImport]` | ✅ Surface ready; wire binding |
+| **Durable Objects** | `c.Durable` | `DurableBridge` via `[JSImport]` | ✅ Surface ready; wire binding |
 | **WebCrypto** | `c.Crypto` | PBKDF2 / SHA-256 / HMAC | ✅ Production Ready |
 | **Outbound HTTP** | `WasmHttpClient` | Edge `fetch` Bridge | ✅ Production Ready |

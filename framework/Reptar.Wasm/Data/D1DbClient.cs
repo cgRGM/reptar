@@ -219,7 +219,8 @@ public sealed class D1DbClient : IDbClient
 
         if (sql.Contains('@') || sql.Contains('$'))
         {
-            var (rewrittenSql, paramNames) = ParseNamedParameters(sql);
+            var (rewrittenSql, paramNames) =
+                SqlParamParser.ParseNamedParameters(sql);
             var positionalValues = new List<object?>();
 
             foreach (var name in paramNames)
@@ -243,36 +244,6 @@ public sealed class D1DbClient : IDbClient
             valuesList.Add(val);
         }
         return (sql, SerializeParams(valuesList));
-    }
-
-    private static (string Sql, List<string> ParamNames) ParseNamedParameters(string sql)
-    {
-        var sb = new StringBuilder();
-        var names = new List<string>();
-
-        for (var i = 0; i < sql.Length; i++)
-        {
-            var c = sql[i];
-            if ((c == '@' || c == '$') && i + 1 < sql.Length && (char.IsLetter(sql[i + 1]) || sql[i + 1] == '_'))
-            {
-                var start = i + 1;
-                var end = start;
-                while (end < sql.Length && (char.IsLetterOrDigit(sql[end]) || sql[end] == '_'))
-                {
-                    end++;
-                }
-
-                names.Add(sql[start..end]);
-                sb.Append('?');
-                i = end - 1;
-            }
-            else
-            {
-                sb.Append(c);
-            }
-        }
-
-        return (sb.ToString(), names);
     }
 
     private static string ResolveColumnName(TableDef table, string propName)

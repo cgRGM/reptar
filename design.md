@@ -386,7 +386,7 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
 
 ## 16. Implementation status (current)
 
-- **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, Stripe module, codegen, and the file-based blog app are implemented. `bun api:test` passes (10 tests); `bun rpc:gen` + `bun rpc:check` pass.
+- **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, Stripe module, codegen, and the file-based blog app are implemented. `bun api:test` passes (14 tests); `bun rpc:gen` + `bun rpc:check` pass.
 - **Wasm core & reflection-free CRUD:** `framework/Reptar.Wasm` compiles the shared router, `Ctx`, middleware, `Rule<T>`/`Validator<T>`, and the JSON codec to `netwasm0.1`. `D1DbClient` and `TableDef.Wasm` implement generic, reflection-free CRUD (`GetAsync<T>`, `ListAsync<T>`, `InsertAsync<T>`, `UpdateAsync<T>`, `DeleteAsync`, `ExistsAsync`) with transparent SQLite `snake_case` &harr; `camelCase` property normalization.
 - **Cloudflare platform bindings:**
   - **D1:** Query and execute with typed parameter binding.
@@ -396,12 +396,14 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
   - **Workers AI:** `c.AI` (`AiClient.cs`) for serverless neural inference.
   - **Durable Objects:** `c.Durable` (`DurableBridge.cs`) for in-process stub fetching.
   - **Native WebCrypto:** PBKDF2 password hashing (100k cap), SHA-256 session tokens, and HMAC-SHA256 signature verification.
-  - **Outbound HTTP:** `WasmHttpClient.cs` bridging edge `fetch` into C# Wasm.
-- **Built-in Stripe module (`Reptar.Stripe`):** Zero-bloat checkout session creation and HMAC-SHA256 webhook signature verification with replay attack timestamp protection.
-- **Typed client & contracts:** `@reptar/client` export with `createClient<AppType>` providing full type inference for route segments, URL params, query strings, and request/response payloads for frontend consumers (Astro, React, Next.js).
+  - **Outbound HTTP:** `WasmHttpClient.cs` bridging edge `fetch` into C# Wasm, guarded by a host allowlist/private-address check.
+  - The reference Worker binds D1 and R2; KV, Queues, AI, and Durable Objects are host surfaces that an app must wire in its own `bindings` function and Alchemy stack.
+- **Built-in Stripe module (`Reptar.Stripe`):** Optional zero-bloat checkout session creation and HMAC-SHA256 webhook verification. Webhooks and checkout fail closed (`503`) when the secret/API key is missing; timestamps are required and bounded by `ToleranceSeconds`. The reference blog does not mount Stripe.
+- **Typed client & contracts:** `@reptar/client` exports `createClient<AppType>` with inference for route segments, URL params, query strings, and request/response payloads. The current `AppType` is hand-maintained and has been aligned with the deployed blog routes; generating it directly from the Wasm app remains the next contract milestone.
 - **Auth on Wasm:** The D1 auth slice implements signup/signin/signout/session, `/auth/anonymous` guest sessions, and `RequireUser`. Passwords use PBKDF2 (100,000 iterations, the workerd maximum) through the host WebCrypto shim; sessions are SHA-256 token hashes in D1; cookies use `Max-Age`, `HttpOnly`, and `SameSite=Lax`.
-- **Host contract:** `@reptar/host` owns the runtime shim (`createReptarHost`, bindings, crypto) and the NetWasm host rewrite (`patchNetWasmHost`). The C# app exposes one `[JSExport] handle(string)` and responds through `[JSImport] respond(string)`. `bun reptar build:worker` publishes the C# app, copies the browser artifacts, and applies the host rewrite.
+- **Host contract:** `@reptar/host` owns the runtime shim (`createReptarHost`, bindings, crypto) and the NetWasm host rewrite (`patchNetWasmHost`). The C# app exposes one `[JSExport] handle(string)` and responds through `[JSImport] respond(requestId, string)`; the host keeps a per-request resolver map, so concurrent requests no longer serialize per isolate. `bun reptar build:worker` publishes the C# app, copies the browser artifacts, and applies the host rewrite.
 - **Blog demo & login UI:** Astro `/blog` renders posts from the C# Worker, uploads images to R2, and interacts via `@reptar/client`. Astro `/login` provides a dark-first authentication and guest session onboarding interface.
+- **Hardening pass:** `Debug` is off in the reference app, Stripe is not mounted in the blog, D1 named parameters ignore quoted strings/comments, `TableDef.Create(object)` fails fast on Wasm, and outbound HTTP rejects non-HTTPS/private hosts unless an allowlist is supplied.
 - **Deployed clean URLs:** `bun run deploy` builds the C# Wasm Worker, provisions D1 + R2, applies migrations, and deploys both the API Worker and the Astro Worker under clean names:
   - API: `https://reptar-api.rocktown-labs.workers.dev`
   - Web: `https://reptar-web.rocktown-labs.workers.dev`
@@ -414,7 +416,7 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
 - C# `[JSImport]` → Worker `env.DB.prepare(sql).all()` works inside workerd.
 - `GET /db?sql=select * from posts` returned `[{"id":"1","title":"Hello D1"}]` from a local D1 database.
 - NetWasm does not support async `[JSExport]` returning `Task<string>`. The host-driven pattern is: C# starts async work from a `void` export, awaits a JS import, then calls a `respond` import; the Worker awaits a JS Promise resolved by that callback. This is the contract for `@reptar/host`.
-- The same pattern now carries a generic request/response envelope, so the framework exposes one `handle` export instead of one export per route.
+- The same pattern now carries a generic request/response envelope, so the framework exposes one `handle` export instead of one export per route. Responses are correlated by a per-request ID, which allows concurrent requests without a global response queue.
 - `Validator<T>`'s expression-tree rules execute under NetWasm; `POST /posts` with a short title/empty content returns `400 validation_error` with field paths.
 - Auth works end-to-end in workerd and on deployed Cloudflare: signup inserts a D1 user and session, returns an HttpOnly cookie, and `/auth/session` + `/me` resolve the user on later requests.
 - workerd caps PBKDF2 at 100,000 iterations; higher counts work in local dev but throw `NotSupportedError` in production. The host crypto shim uses the 100,000 cap.

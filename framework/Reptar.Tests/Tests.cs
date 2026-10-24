@@ -238,6 +238,26 @@ public class E2eTests
     }
 }
 
+public class SqlParamParserTests
+{
+    [Fact]
+    public void Ignores_parameters_inside_quotes_and_comments()
+    {
+        var sql =
+            "select * from posts where title = @title " +
+            "and body like '%@literal%' /* @comment */ " +
+            "and id = $id -- @line\n";
+
+        var (rewritten, names) = SqlParamParser.ParseNamedParameters(sql);
+
+        Assert.Equal(["title", "id"], names);
+        Assert.Contains("%@literal%", rewritten);
+        Assert.Contains("/* @comment */", rewritten);
+        Assert.DoesNotContain("@title", rewritten);
+        Assert.DoesNotContain("$id", rewritten);
+    }
+}
+
 public class StripeTests
 {
     [Fact]
@@ -302,5 +322,89 @@ public class StripeTests
         });
 
         Assert.Equal(400, badRes.Status);
+    }
+
+    [Fact]
+    public async Task Webhook_fails_closed_without_a_secret()
+    {
+        var app = ReptarApp.Create();
+        app.Route("/stripe", Stripe.Routes(new StripeConfig
+        {
+            ApiKey = "sk_test_123",
+            WebhookSecret = null,
+        }));
+
+        var res = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/stripe/webhook",
+            Headers = new Dictionary<string, string>
+            {
+                ["stripe-signature"] = "t=1,v1=deadbeef",
+            },
+            Body = Encoding.UTF8.GetBytes("{}"),
+        });
+
+        Assert.Equal(503, res.Status);
+    }
+
+    [Fact]
+    public async Task Webhook_rejects_a_stale_timestamp()
+    {
+        var secret = "whsec_test_secret_123";
+        var app = ReptarApp.Create();
+        app.Route("/stripe", Stripe.Routes(new StripeConfig
+        {
+            ApiKey = "sk_test_123",
+            WebhookSecret = secret,
+        }));
+
+        var payload = "{\"id\":\"evt_stale\",\"type\":\"checkout.session.completed\"}";
+        var timestamp = DateTimeOffset.UtcNow
+            .AddHours(-1)
+            .ToUnixTimeSeconds()
+            .ToString();
+        var crypto = new DevCrypto();
+        var sig = await crypto.HmacSha256(
+            secret,
+            $"{timestamp}.{payload}");
+
+        var res = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/stripe/webhook",
+            Headers = new Dictionary<string, string>
+            {
+                ["stripe-signature"] = $"t={timestamp},v1={sig}",
+            },
+            Body = Encoding.UTF8.GetBytes(payload),
+        });
+
+        Assert.Equal(400, res.Status);
+    }
+
+    [Fact]
+    public async Task Checkout_fails_closed_without_an_api_key()
+    {
+        var app = ReptarApp.Create();
+        app.Route("/stripe", Stripe.Routes(new StripeConfig
+        {
+            ApiKey = "",
+            WebhookSecret = "whsec_test",
+        }));
+
+        var res = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/stripe/checkout",
+            Headers = new Dictionary<string, string>
+            {
+                ["content-type"] = "application/json",
+            },
+            Body = Encoding.UTF8.GetBytes(
+                "{\"successUrl\":\"https://example.com/s\",\"cancelUrl\":\"https://example.com/c\",\"lineItems\":[]}"),
+        });
+
+        Assert.Equal(503, res.Status);
     }
 }
