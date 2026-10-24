@@ -1,0 +1,16 @@
+{
+  "name": "@reptar/adapter-lambda",
+  "version": "0.1.0",
+  "description": "AWS Lambda adapter for Reptar edge and serverless backends",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "check-types": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.147",
+    "@types/node": "^26.4.1",
+    "typescript": "catalog:"
+  }
+}

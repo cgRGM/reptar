@@ -92,8 +92,15 @@ const runSuite = () => {
       : process.env.API_URL || "https://reptar-api.rocktown-labs.workers.dev"
   ).replace(/\/$/u, "");
 
-  const connections = 10;
-  const duration = 5;
+  const connArgIdx = args.findIndex((a) => a === "--connections" || a === "-c");
+  const connections =
+    connArgIdx !== -1 && args[connArgIdx + 1]
+      ? Number(args[connArgIdx + 1])
+      : 10;
+
+  const durArgIdx = args.findIndex((a) => a === "--duration" || a === "-d");
+  const duration =
+    durArgIdx !== -1 && args[durArgIdx + 1] ? Number(args[durArgIdx + 1]) : 5;
 
   console.log(`\n======================================================`);
   console.log(`  REPTAR BENCHMARK SUITE`);

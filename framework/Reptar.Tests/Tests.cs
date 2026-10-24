@@ -408,6 +408,75 @@ public class StripeTests
         Assert.Equal(503, res.Status);
     }
 
+    private sealed class MockHttpClient : IHttpClient
+    {
+        public string LastUrl { get; private set; } = "";
+        public string LastMethod { get; private set; } = "";
+        public Dictionary<string, string>? LastHeaders { get; private set; }
+        public string LastBody { get; private set; } = "";
+        public HttpResponseData ResponseToReturn { get; set; } = new(
+            200,
+            new Dictionary<string, string>(),
+            "{\"id\":\"cs_test_123\",\"url\":\"https://checkout.stripe.com/pay/cs_test_123\",\"status\":\"open\"}");
+
+        public Task<HttpResponseData> FetchAsync(string url, string method = "GET", Dictionary<string, string>? headers = null, string body = "")
+        {
+            LastUrl = url;
+            LastMethod = method;
+            LastHeaders = headers;
+            LastBody = body;
+            return Task.FromResult(ResponseToReturn);
+        }
+    }
+
+    [Fact]
+    public async Task CreateCheckoutSession_formats_spec_compliant_form_body_and_headers()
+    {
+        var mockHttp = new MockHttpClient();
+        var app = ReptarApp.Create(new ReptarConfig { Http = mockHttp });
+        var config = new StripeConfig { ApiKey = "sk_test_mock_key_555" };
+        app.Route("/stripe", Stripe.Routes(config));
+
+        var requestJson = System.Text.Json.JsonSerializer.Serialize(new CreateCheckoutInput(
+            SuccessUrl: "https://example.com/success?session_id={CHECKOUT_SESSION_ID}",
+            CancelUrl: "https://example.com/cancel",
+            CustomerEmail: "customer@example.com",
+            ClientReferenceId: "order_999",
+            LineItems:
+            [
+                new StripeLineItem("Premium Plan", 4900, "usd", 2)
+            ]));
+
+        var res = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/stripe/checkout",
+            Headers = new Dictionary<string, string>
+            {
+                ["content-type"] = "application/json",
+            },
+            Body = Encoding.UTF8.GetBytes(requestJson),
+        });
+
+        Assert.Equal(201, res.Status);
+        Assert.Equal("https://api.stripe.com/v1/checkout/sessions", mockHttp.LastUrl);
+        Assert.Equal("POST", mockHttp.LastMethod);
+        Assert.NotNull(mockHttp.LastHeaders);
+        Assert.Equal("Bearer sk_test_mock_key_555", mockHttp.LastHeaders["authorization"]);
+        Assert.Equal("application/x-www-form-urlencoded", mockHttp.LastHeaders["content-type"]);
+
+        var body = mockHttp.LastBody;
+        Assert.Contains("success_url=https%3A%2F%2Fexample.com%2Fsuccess%3Fsession_id%3D%7BCHECKOUT_SESSION_ID%7D", body);
+        Assert.Contains("cancel_url=https%3A%2F%2Fexample.com%2Fcancel", body);
+        Assert.Contains("mode=payment", body);
+        Assert.Contains("customer_email=customer%40example.com", body);
+        Assert.Contains("client_reference_id=order_999", body);
+        Assert.Contains("line_items[0][price_data][currency]=usd", body);
+        Assert.Contains("line_items[0][price_data][unit_amount]=4900", body);
+        Assert.Contains("line_items[0][price_data][product_data][name]=Premium%20Plan", body);
+        Assert.Contains("line_items[0][quantity]=2", body);
+    }
+
     [Fact]
     public void SqlParamParser_rewrites_positional_and_named_params_for_postgres()
     {
