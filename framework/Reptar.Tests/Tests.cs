@@ -1513,6 +1513,12 @@ public class CampfireRealtimeTests
         Assert.Contains("target=\\\"messages\\\"", appendFrame);
         Assert.Contains("Welcome to ONCE Campfire!", appendFrame);
 
+        // Checked that typed JSON Action Cable frame was sent
+        var jsonCreatedFrame = transport.Sent.First(s => s.Contains("message_created"));
+        Assert.Contains("\"type\":\"message_created\"", jsonCreatedFrame);
+        Assert.Contains("\"body\":\"Welcome to ONCE Campfire!\"", jsonCreatedFrame);
+        Assert.Contains("\"user_name\":\"DHH\"", jsonCreatedFrame);
+
         // 2. Message updated -> replaces message_1001
         var updatedMsg = msg with { Body = "Welcome to ONCE Campfire on Reptar Native AOT!" };
         await campfire.BroadcastMessageUpdatedAsync(updatedMsg);

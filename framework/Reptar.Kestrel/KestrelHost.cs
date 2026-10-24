@@ -86,28 +86,130 @@ public static class KestrelHost
 
     internal sealed class KestrelWebSocketTransport : IWebSocketTransport
     {
-        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, System.Net.WebSockets.WebSocket> _sockets = new();
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, KestrelWebSocketConnection> _connections = new();
 
         public void Register(string sessionId, System.Net.WebSockets.WebSocket socket) =>
-            _sockets[sessionId] = socket;
+            _connections[sessionId] = new KestrelWebSocketConnection(socket);
 
-        public void Unregister(string sessionId) =>
-            _sockets.TryRemove(sessionId, out _);
+        public void Unregister(string sessionId)
+        {
+            if (_connections.TryRemove(sessionId, out var conn))
+            {
+                _ = conn.CloseAsync(1000, "Normal closure");
+            }
+        }
 
         public void Send(string sessionId, string message)
         {
-            if (_sockets.TryGetValue(sessionId, out var socket) && socket.State == System.Net.WebSockets.WebSocketState.Open)
+            if (_connections.TryGetValue(sessionId, out var conn))
             {
                 var bytes = System.Text.Encoding.UTF8.GetBytes(message);
-                _ = socket.SendAsync(new ArraySegment<byte>(bytes), System.Net.WebSockets.WebSocketMessageType.Text, true, CancellationToken.None);
+                conn.TryEnqueue(bytes);
             }
         }
 
         public void Close(string sessionId, int code, string reason)
         {
-            if (_sockets.TryRemove(sessionId, out var socket) && socket.State == System.Net.WebSockets.WebSocketState.Open)
+            if (_connections.TryRemove(sessionId, out var conn))
             {
-                _ = socket.CloseAsync((System.Net.WebSockets.WebSocketCloseStatus)code, reason, CancellationToken.None);
+                _ = conn.CloseAsync(code, reason);
+            }
+        }
+    }
+
+    internal sealed class KestrelWebSocketConnection
+    {
+        private readonly System.Net.WebSockets.WebSocket _socket;
+        private readonly System.Threading.Channels.Channel<byte[]> _channel;
+        private readonly CancellationTokenSource _cts = new();
+        private long _sent;
+        private long _dropped;
+        private long _errors;
+
+        public KestrelWebSocketConnection(System.Net.WebSockets.WebSocket socket)
+        {
+            _socket = socket;
+            _channel = System.Threading.Channels.Channel.CreateBounded<byte[]>(
+                new System.Threading.Channels.BoundedChannelOptions(1024)
+                {
+                    FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest,
+                    SingleReader = true,
+                    SingleWriter = false,
+                });
+
+            _ = Task.Run(SendPumpAsync);
+        }
+
+        public long Sent => Volatile.Read(ref _sent);
+        public long Dropped => Volatile.Read(ref _dropped);
+        public long Errors => Volatile.Read(ref _errors);
+
+        public bool TryEnqueue(byte[] message)
+        {
+            if (_socket.State != System.Net.WebSockets.WebSocketState.Open)
+                return false;
+
+            if (_channel.Writer.TryWrite(message))
+                return true;
+
+            Interlocked.Increment(ref _dropped);
+            return false;
+        }
+
+        private async Task SendPumpAsync()
+        {
+            var reader = _channel.Reader;
+            try
+            {
+                while (await reader.WaitToReadAsync(_cts.Token))
+                {
+                    while (reader.TryRead(out var frame))
+                    {
+                        if (_socket.State != System.Net.WebSockets.WebSocketState.Open)
+                            return;
+
+                        await _socket.SendAsync(
+                            new ArraySegment<byte>(frame),
+                            System.Net.WebSockets.WebSocketMessageType.Text,
+                            true,
+                            _cts.Token);
+
+                        Interlocked.Increment(ref _sent);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Normal closure
+            }
+            catch
+            {
+                Interlocked.Increment(ref _errors);
+            }
+        }
+
+        public async Task CloseAsync(int code, string reason)
+        {
+            try
+            {
+                _channel.Writer.TryComplete();
+                _cts.Cancel();
+
+                if (_socket.State == System.Net.WebSockets.WebSocketState.Open)
+                {
+                    await _socket.CloseAsync(
+                        (System.Net.WebSockets.WebSocketCloseStatus)code,
+                        reason,
+                        CancellationToken.None);
+                }
+            }
+            catch
+            {
+                // Ignore disconnect exceptions
+            }
+            finally
+            {
+                _cts.Dispose();
             }
         }
     }

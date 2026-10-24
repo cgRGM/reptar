@@ -73,9 +73,31 @@ public static class ActionCableProtocol
 
     public static string Broadcast(string identifier, object message, IJsonCodec? json = null)
     {
-        var serializedMessage = message is string s && (s.StartsWith("{") || s.StartsWith("<"))
-            ? EscapeString(s)
-            : (json?.Serialize(message) ?? (message is string str ? EscapeString(str) : EscapeString(message.ToString() ?? "")));
+        string serializedMessage;
+        if (message is string s)
+        {
+            serializedMessage = s.StartsWith("{") || s.StartsWith("<")
+                ? EscapeString(s)
+                : EscapeString(s);
+        }
+        else if (message is CampfireMessageEvent cme)
+        {
+            var msgJson = $"{{\"id\":{cme.Message.Id},\"room_id\":{cme.Message.RoomId},\"user_id\":{cme.Message.UserId},\"user_name\":{EscapeString(cme.Message.UserName)},\"body\":{EscapeString(cme.Message.Body)},\"created_at\":{EscapeString(cme.Message.CreatedAt)}}}";
+            serializedMessage = $"{{\"type\":{EscapeString(cme.Type)},\"message\":{msgJson}}}";
+        }
+        else if (message is CampfireDeletedEvent cde)
+        {
+            serializedMessage = $"{{\"type\":{EscapeString(cde.Type)},\"room_id\":{cde.RoomId},\"message_id\":{cde.MessageId}}}";
+        }
+        else if (message is CampfireTypingEvent cte)
+        {
+            var typJson = $"{{\"room_id\":{cte.Typing.RoomId},\"user_id\":{cte.Typing.UserId},\"user_name\":{EscapeString(cte.Typing.UserName)},\"is_typing\":{(cte.Typing.IsTyping ? "true" : "false")}}}";
+            serializedMessage = $"{{\"type\":{EscapeString(cte.Type)},\"typing\":{typJson}}}";
+        }
+        else
+        {
+            serializedMessage = json?.Serialize(message) ?? EscapeString(message.ToString() ?? "");
+        }
 
         return $"{{\"identifier\":{EscapeString(identifier)},\"message\":{serializedMessage}}}";
     }

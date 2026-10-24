@@ -49,11 +49,7 @@ public sealed class CampfireRealtimeService
         );
 
         // Also broadcast JSON payload for native/API clients & benchmark verification suites
-        await _server.BroadcastAsync(stream, new
-        {
-            type = "message_created",
-            message = message
-        });
+        await _server.BroadcastAsync(stream, new CampfireMessageEvent("message_created", message));
 
         return turboCount;
     }
@@ -70,11 +66,7 @@ public sealed class CampfireRealtimeService
             htmlContent: messageHtml
         );
 
-        await _server.BroadcastAsync(stream, new
-        {
-            type = "message_updated",
-            message = message
-        });
+        await _server.BroadcastAsync(stream, new CampfireMessageEvent("message_updated", message));
 
         return turboCount;
     }
@@ -90,17 +82,12 @@ public sealed class CampfireRealtimeService
             htmlContent: ""
         );
 
-        await _server.BroadcastAsync(stream, new
-        {
-            type = "message_deleted",
-            messageId = messageId,
-            roomId = roomId
-        });
+        await _server.BroadcastAsync(stream, new CampfireDeletedEvent("message_deleted", roomId, messageId));
 
         return turboCount;
     }
 
-    public Task<int> BroadcastTypingAsync(CampfireTypingStatus typing)
+    public async Task<int> BroadcastTypingAsync(CampfireTypingStatus typing)
     {
         var stream = RoomStream(typing.RoomId);
 
@@ -108,12 +95,15 @@ public sealed class CampfireRealtimeService
             ? $"<div id=\"typing_indicator\" class=\"typing-active\"><span>{WebUtility.HtmlEncode(typing.UserName)} is typing...</span></div>"
             : "<div id=\"typing_indicator\" class=\"typing-idle\"></div>";
 
-        return _server.BroadcastTurboStreamAsync(
+        var count = await _server.BroadcastTurboStreamAsync(
             streamName: stream,
             action: "update",
             target: "typing_indicator",
             htmlContent: typingHtml
         );
+
+        await _server.BroadcastAsync(stream, new CampfireTypingEvent("typing", typing));
+        return count;
     }
 
     public static string RenderMessageHtml(CampfireMessage message)
@@ -132,3 +122,7 @@ public sealed class CampfireRealtimeService
         """;
     }
 }
+
+public sealed record CampfireMessageEvent(string Type, CampfireMessage Message);
+public sealed record CampfireDeletedEvent(string Type, long RoomId, long MessageId);
+public sealed record CampfireTypingEvent(string Type, CampfireTypingStatus Typing);
