@@ -331,7 +331,29 @@ app.Delete("/api/files/:id", async ctx =>
     return ctx.Json(new { deleted = true, id });
 });
 
-// 9. Health & Service Metadata Probe
+// 9. Studio Admin Console / Web GUI (OpenShip & PocketBase style)
+string GetDashboardHtml()
+{
+    var candidates = new[]
+    {
+        "dashboard.html",
+        Path.Combine(AppContext.BaseDirectory, "dashboard.html"),
+        Path.Combine(Directory.GetCurrentDirectory(), "dashboard.html"),
+        Path.Combine(Directory.GetCurrentDirectory(), "examples", "baas", "dashboard.html"),
+    };
+    foreach (var path in candidates)
+    {
+        if (File.Exists(path))
+            return File.ReadAllText(path);
+    }
+    return "<!DOCTYPE html><html><body style='background:#050811;color:#fff;font-family:sans-serif;padding:40px;'><h1>ReptarBase Studio</h1><p>dashboard.html not found.</p></body></html>";
+}
+
+app.Get("/", ctx => ctx.Html(GetDashboardHtml()));
+app.Get("/dashboard", ctx => ctx.Html(GetDashboardHtml()));
+app.Get("/_", ctx => ctx.Html(GetDashboardHtml()));
+
+// 10. Health & Service Metadata Probe
 app.Get("/health", ctx => Task.FromResult(ctx.Json(new
 {
     status = "ok",
@@ -340,7 +362,7 @@ app.Get("/health", ctx => Task.FromResult(ctx.Json(new
     collections = new[] { "documents", "files", "users", "sessions", "api_keys" }
 })));
 
-// 10. Start Server
+// 11. Start Server
 await app.RunAsync(args);
 
 // ---------------------------------------------------------

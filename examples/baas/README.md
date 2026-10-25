@@ -12,6 +12,7 @@
 - **Built-in Authentication & API Keys**: Full Better Auth protocol support (`/api/auth/signup`, `/api/auth/signin`, `/api/auth/session`, `/api/auth/api-keys`) supporting cookie sessions and `Authorization: Bearer <token>` personal access tokens.
 - **Magic-Byte Verified Storage**: File uploads are inspected stack-allocated via `Files.Check(...)` against magic bytes (PNG, JPEG, GIF, WebP, PDF) and stored using `ctx.Storage`.
 - **Real-Time Change Feed**: Instant Server-Sent Events (`GET /api/realtime`) stream document creations, updates, deletions, and file uploads to connected clients with automatic heartbeat pings.
+- **OpenShip-Style Studio GUI**: Built-in developer console served right from `GET /` and `GET /dashboard` with collection viewer, drag-and-drop file manager, API key manager, and live SSE streaming terminal.
 
 ---
 
@@ -24,9 +25,30 @@ cd examples/baas
 dotnet run app.cs
 ```
 
-Server boots on `http://localhost:8787` (or custom `PORT`).
+Server boots on `http://localhost:8787` (or custom `PORT`). Open `http://localhost:8787` in your browser to launch the **ReptarBase Studio** GUI.
 
-### Environment Variables
+### Automated Verification
+
+Run the automated 12-step verification suite:
+
+```bash
+cd examples/baas
+./test.sh
+```
+
+---
+
+## Studio Web Console (`GET /` / `GET /_`)
+
+ReptarBase embeds a sleek, dark-mode developer console inspired by **OpenShip**, **PocketBase**, and **Linear**:
+
+- **System Overview**: Metrics for documents, file storage, active SSE connections, and Native AOT runtime footprint (~15 MB RAM).
+- **Collections Explorer**: View, filter (`draft`, `published`, `archived`), create, and delete documents with instant updates.
+- **Storage Manager**: Drag-and-drop file uploader with thumbnail previews, MIME detection, and one-click public URL copying.
+- **Service API Keys**: Generate personal access tokens (`rep_live_...`) with configurable expiration for agents and microservices.
+- **Live Event Stream**: Real-time terminal streaming Server-Sent Events directly from `/api/realtime` as records are modified.
+
+---
 
 | Variable | Default | Description |
 | :-- | :-- | :-- |

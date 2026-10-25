@@ -77,6 +77,8 @@ packages/infra/alchemy.run.js
 
 # Local example uploads
 examples/blog/uploads/
+examples/baas/uploads/
+uploads/
 
 # Harness-managed skills
 .agents/

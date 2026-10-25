@@ -1,0 +1,954 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ReptarBase — Studio Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+          },
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              100: '#d1fae5',
+              400: '#34d399',
+              500: '#10b981',
+              600: '#059669',
+              900: '#064e3b',
+            },
+            surface: {
+              800: '#131b2e',
+              850: '#0f172a',
+              900: '#090d16',
+              950: '#050811',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #050811; color: #f1f5f9; }
+    code, pre { font-family: 'JetBrains Mono', monospace; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #090d16; }
+    ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #334155; }
+    .pulse-dot { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .3; } }
+  </style>
+</head>
+<body class="h-screen flex overflow-hidden">
+
+  <!-- Sidebar -->
+  <aside class="w-64 bg-surface-950 border-r border-slate-800/80 flex flex-col flex-shrink-0 select-none">
+    <!-- Brand -->
+    <div class="h-16 px-5 flex items-center justify-between border-b border-slate-800/60">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 font-bold text-lg">
+          🦖
+        </div>
+        <div>
+          <span class="font-bold tracking-tight text-white flex items-center gap-1.5 text-sm">
+            ReptarBase
+            <span class="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">BaaS</span>
+          </span>
+          <span class="text-[11px] text-slate-400 font-mono">v1.0.0 • Native AOT</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="flex-1 px-3 py-4 space-y-6 overflow-y-auto">
+      <div>
+        <div class="px-3 text-[10px] font-semibold font-mono tracking-wider text-slate-300 uppercase">Platform</div>
+        <div class="mt-2 space-y-1">
+          <button onclick="switchTab('overview')" id="nav-overview" class="w-full flex items-center gap-3 px-3 py-2 text-sm font-medium rounded-lg text-white bg-slate-800/70 hover:bg-slate-800 transition">
+            <i data-lucide="layout-dashboard" class="w-4 h-4 text-emerald-400"></i>
+            <span>Overview</span>
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="px-3 text-[10px] font-semibold font-mono tracking-wider text-slate-300 uppercase">Collections</div>
+        <div class="mt-2 space-y-1">
+          <button onclick="switchTab('documents')" id="nav-documents" class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-850 transition">
+            <div class="flex items-center gap-3">
+              <i data-lucide="file-text" class="w-4 h-4 text-slate-400"></i>
+              <span>documents</span>
+            </div>
+            <span id="badge-doc-count" class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">0</span>
+          </button>
+
+          <button onclick="switchTab('files')" id="nav-files" class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-850 transition">
+            <div class="flex items-center gap-3">
+              <i data-lucide="folder-archive" class="w-4 h-4 text-slate-400"></i>
+              <span>files</span>
+            </div>
+            <span id="badge-file-count" class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">0</span>
+          </button>
+
+          <button onclick="switchTab('users')" id="nav-users" class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-850 transition">
+            <div class="flex items-center gap-3">
+              <i data-lucide="users" class="w-4 h-4 text-slate-400"></i>
+              <span>users</span>
+            </div>
+            <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">auth</span>
+          </button>
+
+          <button onclick="switchTab('apikeys')" id="nav-apikeys" class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-850 transition">
+            <div class="flex items-center gap-3">
+              <i data-lucide="key" class="w-4 h-4 text-slate-400"></i>
+              <span>api_keys</span>
+            </div>
+            <span class="text-[11px] font-mono px-1.5 py-0.5 rounded bg-slate-800 text-slate-400">tokens</span>
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="px-3 text-[10px] font-semibold font-mono tracking-wider text-slate-300 uppercase">Observability</div>
+        <div class="mt-2 space-y-1">
+          <button onclick="switchTab('realtime')" id="nav-realtime" class="w-full flex items-center justify-between px-3 py-2 text-sm font-medium rounded-lg text-slate-400 hover:text-white hover:bg-slate-850 transition">
+            <div class="flex items-center gap-3">
+              <i data-lucide="radio" class="w-4 h-4 text-emerald-400"></i>
+              <span>Realtime Feed</span>
+            </div>
+            <span id="sse-pulse" class="w-2 h-2 rounded-full bg-emerald-500 pulse-dot"></span>
+          </button>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Footer Status -->
+    <div class="p-4 border-t border-slate-800/60 bg-surface-900/60 text-xs text-slate-400 flex flex-col gap-1.5">
+      <div class="flex items-center justify-between font-mono">
+        <span class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full bg-emerald-400"></span>
+          Engine Live
+        </span>
+        <span id="sys-memory" class="text-slate-300">~15 MB RAM</span>
+      </div>
+      <div class="text-[11px] text-slate-400 truncate">Zero Reflection • SQLite WAL</div>
+    </div>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 flex flex-col min-w-0 bg-surface-900 overflow-hidden">
+    <!-- Top Header -->
+    <header class="h-16 px-8 flex items-center justify-between border-b border-slate-800/80 bg-surface-950/70 backdrop-blur-md">
+      <div class="flex items-center gap-4">
+        <h1 id="view-title" class="text-lg font-semibold text-white tracking-tight">System Overview</h1>
+        <div id="status-chip" class="hidden sm:flex items-center gap-2 px-2.5 py-1 rounded-full text-xs font-mono bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+          SSE Connected
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <!-- Auth User Badge -->
+        <div id="user-badge" class="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/70 border border-slate-700/60 text-xs">
+          <div class="w-5 h-5 rounded-full bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-[10px]">
+            U
+          </div>
+          <span id="user-display-name" class="font-medium text-slate-200">Not Logged In</span>
+          <button onclick="openAuthModal()" class="ml-1 text-emerald-400 hover:text-emerald-300 font-mono text-[11px] underline">
+            Auth
+          </button>
+        </div>
+
+        <!-- Primary Action Button -->
+        <button id="primary-action-btn" onclick="handlePrimaryAction()" class="flex items-center gap-2 px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-medium text-xs shadow-sm shadow-emerald-500/20 transition">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          <span id="primary-action-label">New Document</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Tab View Container -->
+    <div class="flex-1 overflow-y-auto p-8">
+      
+      <!-- 1. OVERVIEW TAB -->
+      <section id="view-overview" class="space-y-8">
+        <!-- Stats Row -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div class="p-5 rounded-xl bg-surface-850 border border-slate-800/80 shadow-sm">
+            <div class="flex items-center justify-between text-slate-400">
+              <span class="text-xs font-mono uppercase tracking-wider">Documents</span>
+              <i data-lucide="file-text" class="w-4 h-4 text-emerald-400"></i>
+            </div>
+            <div id="stat-doc-count" class="mt-3 text-2xl font-bold font-mono text-white">0</div>
+            <div class="mt-1 text-xs text-slate-300">Typed records in SQLite</div>
+          </div>
+
+          <div class="p-5 rounded-xl bg-surface-850 border border-slate-800/80 shadow-sm">
+            <div class="flex items-center justify-between text-slate-400">
+              <span class="text-xs font-mono uppercase tracking-wider">Storage Files</span>
+              <i data-lucide="folder-archive" class="w-4 h-4 text-violet-400"></i>
+            </div>
+            <div id="stat-file-count" class="mt-3 text-2xl font-bold font-mono text-white">0</div>
+            <div class="mt-1 text-xs text-slate-300">Magic-byte verified uploads</div>
+          </div>
+
+          <div class="p-5 rounded-xl bg-surface-850 border border-slate-800/80 shadow-sm">
+            <div class="flex items-center justify-between text-slate-400">
+              <span class="text-xs font-mono uppercase tracking-wider">Realtime SSE</span>
+              <i data-lucide="radio" class="w-4 h-4 text-amber-400"></i>
+            </div>
+            <div id="stat-event-count" class="mt-3 text-2xl font-bold font-mono text-white">0</div>
+            <div class="mt-1 text-xs text-slate-300">Events streamed this session</div>
+          </div>
+
+          <div class="p-5 rounded-xl bg-surface-850 border border-slate-800/80 shadow-sm">
+            <div class="flex items-center justify-between text-slate-400">
+              <span class="text-xs font-mono uppercase tracking-wider">Binary Size</span>
+              <i data-lucide="cpu" class="w-4 h-4 text-cyan-400"></i>
+            </div>
+            <div class="mt-3 text-2xl font-bold font-mono text-white">10.4 MB</div>
+            <div class="mt-1 text-xs text-slate-300">Distroless Native AOT</div>
+          </div>
+        </div>
+
+        <!-- Architecture & Quick Start -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div class="p-6 rounded-xl bg-surface-850 border border-slate-800/80 space-y-4">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-semibold text-white tracking-tight flex items-center gap-2">
+                <i data-lucide="layers" class="w-4 h-4 text-emerald-400"></i>
+                Architecture Highlights
+              </h2>
+              <span class="text-xs font-mono text-slate-300">PocketBase / Convex Alternative</span>
+            </div>
+            <div class="space-y-3 text-xs text-slate-300 leading-relaxed">
+              <div class="p-3 rounded-lg bg-surface-900 border border-slate-800/60 flex items-start gap-3">
+                <i data-lucide="zap" class="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5"></i>
+                <div>
+                  <strong class="text-white">Zero Runtime Reflection:</strong> Compiled for Native AOT and NetWasm with stack-allocated column tokens (<code class="text-emerald-400">ColumnRef&lt;T&gt;</code>) preventing typos before runtime.
+                </div>
+              </div>
+              <div class="p-3 rounded-lg bg-surface-900 border border-slate-800/60 flex items-start gap-3">
+                <i data-lucide="shield-check" class="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5"></i>
+                <div>
+                  <strong class="text-white">Magic-Byte Sniffing:</strong> File uploads inspect raw file signatures (PNG, JPEG, WebP, PDF) to stop spoofed MIME attacks with zero heap overhead.
+                </div>
+              </div>
+              <div class="p-3 rounded-lg bg-surface-900 border border-slate-800/60 flex items-start gap-3">
+                <i data-lucide="radio" class="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5"></i>
+                <div>
+                  <strong class="text-white">Instant SSE Feeds:</strong> Mutations broadcast over server-sent events directly to subscribers with automatic 15-second heartbeat keepalives.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Type-Safe Client Snippet -->
+          <div class="p-6 rounded-xl bg-surface-850 border border-slate-800/80 flex flex-col justify-between">
+            <div>
+              <div class="flex items-center justify-between">
+                <h2 class="text-sm font-semibold text-white tracking-tight flex items-center gap-2">
+                  <i data-lucide="code-2" class="w-4 h-4 text-emerald-400"></i>
+                  End-to-End TypeScript Client
+                </h2>
+                <span class="text-xs font-mono text-emerald-400">@reptar/client</span>
+              </div>
+              <p class="text-xs text-slate-300 mt-2">Generated via <code class="text-slate-300 bg-surface-900 px-1 py-0.5 rounded">bun reptar codegen</code> from C# routes.</p>
+              <pre class="mt-3 p-4 rounded-lg bg-surface-900 border border-slate-800 text-[11px] font-mono text-slate-300 overflow-x-auto leading-relaxed">
+<span class="text-slate-300">// Type-safe query with zero reflection</span>
+<span class="text-purple-400">import</span> { createReptarClient } <span class="text-purple-400">from</span> <span class="text-emerald-300">"@reptar/client"</span>;
+
+<span class="text-purple-400">const</span> client = <span class="text-blue-400">createReptarClient</span>();
+<span class="text-purple-400">const</span> docs = <span class="text-purple-400">await</span> client.api.documents.<span class="text-blue-400">get</span>({
+  status: <span class="text-emerald-300">"published"</span>,
+  limit: <span class="text-amber-400">20</span>
+});
+console.<span class="text-blue-400">log</span>(docs[<span class="text-amber-400">0</span>].title);</pre>
+            </div>
+            <div class="mt-4 flex items-center gap-3">
+              <a href="/api/realtime" target="_blank" class="text-xs font-mono text-emerald-400 hover:underline flex items-center gap-1">
+                Inspect Raw SSE Stream <i data-lucide="external-link" class="w-3 h-3"></i>
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 2. DOCUMENTS TAB -->
+      <section id="view-documents" class="hidden space-y-6">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono text-slate-400">Filter status:</span>
+            <div class="flex items-center gap-1 bg-surface-950 p-1 rounded-lg border border-slate-800">
+              <button onclick="filterDocuments('')" class="doc-filter-btn px-2.5 py-1 text-xs rounded-md bg-slate-800 text-white font-medium" data-filter="">All</button>
+              <button onclick="filterDocuments('published')" class="doc-filter-btn px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-white font-medium" data-filter="published">published</button>
+              <button onclick="filterDocuments('draft')" class="doc-filter-btn px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-white font-medium" data-filter="draft">draft</button>
+              <button onclick="filterDocuments('archived')" class="doc-filter-btn px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-white font-medium" data-filter="archived">archived</button>
+            </div>
+          </div>
+          <button onclick="loadDocuments()" class="flex items-center gap-1.5 px-3 py-1.5 text-xs text-slate-300 bg-surface-850 hover:bg-slate-800 border border-slate-800 rounded-lg transition">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            Refresh
+          </button>
+        </div>
+
+        <div class="rounded-xl border border-slate-800/80 bg-surface-850 overflow-hidden shadow-sm">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-surface-900/80 border-b border-slate-800/80 font-mono text-[11px] text-slate-400">
+              <tr>
+                <th class="py-3 px-4">ID</th>
+                <th class="py-3 px-4">Title</th>
+                <th class="py-3 px-4">Status</th>
+                <th class="py-3 px-4">Views</th>
+                <th class="py-3 px-4">File Key</th>
+                <th class="py-3 px-4">Created</th>
+                <th class="py-3 px-4 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="documents-table-body" class="divide-y divide-slate-800/60 font-mono">
+              <tr>
+                <td colspan="7" class="py-8 text-center text-slate-300 font-sans">Loading documents...</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 3. FILES TAB -->
+      <section id="view-files" class="hidden space-y-6">
+        <!-- Drag & Drop Upload Zone -->
+        <div id="drop-zone" class="border-2 border-dashed border-slate-800 hover:border-emerald-500/50 rounded-2xl p-8 bg-surface-850/50 text-center transition flex flex-col items-center justify-center cursor-pointer">
+          <input type="file" id="file-input" class="hidden" onchange="handleFileSelect(event)">
+          <div class="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mb-3">
+            <i data-lucide="upload-cloud" class="w-6 h-6"></i>
+          </div>
+          <h3 class="text-sm font-semibold text-white">Click or drag & drop files to upload</h3>
+          <p class="text-xs text-slate-300 mt-1">Automatic stack-allocated magic-byte sniffing (PNG, JPEG, GIF, WebP, PDF up to 25MB)</p>
+        </div>
+
+        <!-- Files Grid -->
+        <div id="files-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          <!-- Populated by JS -->
+        </div>
+      </section>
+
+      <!-- 4. USERS TAB -->
+      <section id="view-users" class="hidden space-y-6">
+        <div class="p-6 rounded-xl bg-surface-850 border border-slate-800/80">
+          <h2 class="text-sm font-semibold text-white flex items-center gap-2 mb-4">
+            <i data-lucide="shield" class="w-4 h-4 text-emerald-400"></i>
+            User Accounts & Roles
+          </h2>
+          <div id="users-container" class="text-xs text-slate-400 space-y-3 font-mono">
+            <p class="font-sans text-slate-300">
+              Users authenticate via Better Auth protocol endpoints (<code class="text-emerald-400">/api/auth/signup</code>, <code class="text-emerald-400">/api/auth/signin</code>).
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 5. API KEYS TAB -->
+      <section id="view-apikeys" class="hidden space-y-6">
+        <div class="flex items-center justify-between">
+          <div>
+            <h2 class="text-sm font-semibold text-white">Service API Keys</h2>
+            <p class="text-xs text-slate-300">Personal access tokens for backend jobs, agents, and external microservices.</p>
+          </div>
+          <button onclick="openNewKeyModal()" class="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-medium flex items-center gap-2">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            Generate Key
+          </button>
+        </div>
+
+        <div class="rounded-xl border border-slate-800/80 bg-surface-850 overflow-hidden shadow-sm">
+          <table class="w-full text-left text-xs font-mono">
+            <thead class="bg-surface-900/80 border-b border-slate-800/80 text-[11px] text-slate-400">
+              <tr>
+                <th class="py-3 px-4">Name</th>
+                <th class="py-3 px-4">Key Prefix</th>
+                <th class="py-3 px-4">Expires</th>
+                <th class="py-3 px-4">Created</th>
+                <th class="py-3 px-4 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody id="apikeys-table-body" class="divide-y divide-slate-800/60">
+              <tr>
+                <td colspan="5" class="py-8 text-center text-slate-300 font-sans">No API keys generated yet.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 6. REALTIME FEED TAB -->
+      <section id="view-realtime" class="hidden space-y-4">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-3">
+            <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 pulse-dot"></span>
+            <h2 class="text-sm font-semibold text-white">Live Event Stream (SSE)</h2>
+            <span class="text-xs font-mono text-slate-300">/api/realtime</span>
+          </div>
+          <button onclick="clearSseLogs()" class="px-2.5 py-1 text-xs font-mono text-slate-400 hover:text-white bg-surface-950 border border-slate-800 rounded-md">
+            Clear Logs
+          </button>
+        </div>
+
+        <div id="sse-log-terminal" class="h-[520px] rounded-xl bg-surface-950 border border-slate-800/80 p-4 font-mono text-[11px] overflow-y-auto space-y-2">
+          <div class="text-slate-400">// Connecting to Server-Sent Events change feed...</div>
+        </div>
+      </section>
+
+    </div>
+  </main>
+
+  <!-- Create Document Modal -->
+  <div id="modal-new-doc" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+    <div class="w-full max-w-lg rounded-2xl bg-surface-850 border border-slate-800 p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+          <i data-lucide="file-plus" class="w-4 h-4 text-emerald-400"></i>
+          New Document
+        </h3>
+        <button onclick="closeNewDocModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-300 mb-1 font-mono">Title</label>
+          <input id="new-doc-title" type="text" placeholder="e.g. Production Release Notes" class="w-full px-3 py-2 rounded-lg bg-surface-900 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500">
+        </div>
+        <div>
+          <label class="block text-slate-300 mb-1 font-mono">Status</label>
+          <select id="new-doc-status" class="w-full px-3 py-2 rounded-lg bg-surface-900 border border-slate-800 text-white focus:outline-none focus:border-emerald-500">
+            <option value="draft">draft</option>
+            <option value="published">published</option>
+            <option value="archived">archived</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-slate-300 mb-1 font-mono">Content</label>
+          <textarea id="new-doc-content" rows="4" placeholder="Markdown or plaintext content..." class="w-full px-3 py-2 rounded-lg bg-surface-900 border border-slate-800 text-white placeholder-slate-600 focus:outline-none focus:border-emerald-500 font-mono text-xs"></textarea>
+        </div>
+      </div>
+
+      <div class="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+        <button onclick="closeNewDocModal()" class="px-3.5 py-1.5 rounded-lg text-slate-400 hover:text-white text-xs">Cancel</button>
+        <button onclick="submitNewDoc()" class="px-4 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-medium text-xs">Create Record</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Auth Modal -->
+  <div id="modal-auth" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+    <div class="w-full max-w-sm rounded-2xl bg-surface-850 border border-slate-800 p-6 space-y-4 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+          <i data-lucide="lock" class="w-4 h-4 text-emerald-400"></i>
+          Authentication
+        </h3>
+        <button onclick="closeAuthModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-300 mb-1 font-mono">Email</label>
+          <input id="auth-email" type="email" value="admin@reptarbase.local" class="w-full px-3 py-2 rounded-lg bg-surface-900 border border-slate-800 text-white focus:outline-none focus:border-emerald-500">
+        </div>
+        <div>
+          <label class="block text-slate-300 mb-1 font-mono">Password</label>
+          <input id="auth-password" type="password" value="Password123!" class="w-full px-3 py-2 rounded-lg bg-surface-900 border border-slate-800 text-white focus:outline-none focus:border-emerald-500">
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-2 pt-2">
+        <button onclick="submitSignIn()" class="w-full py-2 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-medium text-xs">Sign In</button>
+        <button onclick="submitSignUp()" class="w-full py-2 rounded-lg bg-surface-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs">Register New User</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Key Created Modal -->
+  <div id="modal-key-created" class="fixed inset-0 bg-black/70 backdrop-blur-sm hidden items-center justify-center p-4 z-50">
+    <div class="w-full max-w-md rounded-2xl bg-surface-850 border border-slate-800 p-6 space-y-4 shadow-2xl">
+      <h3 class="text-sm font-semibold text-white flex items-center gap-2">
+        <i data-lucide="key" class="w-4 h-4 text-emerald-400"></i>
+        API Key Created
+      </h3>
+      <p class="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 p-3 rounded-lg">
+        Make sure to copy your API key now. You won't be able to see it again!
+      </p>
+      <div class="p-3 bg-surface-950 rounded-lg border border-slate-800 flex items-center justify-between">
+        <code id="display-api-token" class="text-xs text-emerald-400 font-mono select-all">rep_live_...</code>
+        <button onclick="copyApiToken()" class="text-xs font-mono text-slate-400 hover:text-white px-2 py-1 bg-surface-900 rounded border border-slate-700">Copy</button>
+      </div>
+      <div class="flex justify-end pt-2">
+        <button onclick="closeKeyCreatedModal()" class="px-4 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-white">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let currentTab = 'overview';
+    let currentUser = null;
+    let sseEvents = 0;
+    let documents = [];
+    let files = [];
+    let activeFilter = '';
+
+    // Initialize Lucide Icons
+    function renderIcons() {
+      if (window.lucide) {
+        lucide.createIcons();
+      }
+    }
+
+    // Switch Tabs
+    function switchTab(tab) {
+      currentTab = tab;
+      const tabs = ['overview', 'documents', 'files', 'users', 'apikeys', 'realtime'];
+      
+      tabs.forEach(t => {
+        const viewEl = document.getElementById(`view-${t}`);
+        const navEl = document.getElementById(`nav-${t}`);
+        if (t === tab) {
+          viewEl.classList.remove('hidden');
+          navEl.classList.add('bg-slate-800/70', 'text-white');
+          navEl.classList.remove('text-slate-400');
+        } else {
+          viewEl.classList.add('hidden');
+          navEl.classList.remove('bg-slate-800/70', 'text-white');
+          navEl.classList.add('text-slate-400');
+        }
+      });
+
+      // Update titles & primary action
+      const titleEl = document.getElementById('view-title');
+      const actionBtn = document.getElementById('primary-action-btn');
+      const actionLabel = document.getElementById('primary-action-label');
+
+      if (tab === 'overview') {
+        titleEl.textContent = 'System Overview';
+        actionBtn.classList.remove('hidden');
+        actionLabel.textContent = 'New Document';
+      } else if (tab === 'documents') {
+        titleEl.textContent = 'Collection: documents';
+        actionBtn.classList.remove('hidden');
+        actionLabel.textContent = 'New Document';
+        loadDocuments();
+      } else if (tab === 'files') {
+        titleEl.textContent = 'Storage: files';
+        actionBtn.classList.remove('hidden');
+        actionLabel.textContent = 'Upload File';
+        loadFiles();
+      } else if (tab === 'users') {
+        titleEl.textContent = 'Collection: users';
+        actionBtn.classList.add('hidden');
+      } else if (tab === 'apikeys') {
+        titleEl.textContent = 'Security: api_keys';
+        actionBtn.classList.remove('hidden');
+        actionLabel.textContent = 'Generate Key';
+        loadApiKeys();
+      } else if (tab === 'realtime') {
+        titleEl.textContent = 'Live Event Stream';
+        actionBtn.classList.add('hidden');
+      }
+
+      renderIcons();
+    }
+
+    function handlePrimaryAction() {
+      if (currentTab === 'documents' || currentTab === 'overview') {
+        openNewDocModal();
+      } else if (currentTab === 'files') {
+        document.getElementById('file-input').click();
+      } else if (currentTab === 'apikeys') {
+        openNewKeyModal();
+      }
+    }
+
+    // Modal Handlers
+    function openNewDocModal() {
+      document.getElementById('modal-new-doc').classList.remove('hidden');
+      document.getElementById('modal-new-doc').classList.add('flex');
+    }
+    function closeNewDocModal() {
+      document.getElementById('modal-new-doc').classList.add('hidden');
+      document.getElementById('modal-new-doc').classList.remove('flex');
+    }
+
+    function openAuthModal() {
+      document.getElementById('modal-auth').classList.remove('hidden');
+      document.getElementById('modal-auth').classList.add('flex');
+    }
+    function closeAuthModal() {
+      document.getElementById('modal-auth').classList.add('hidden');
+      document.getElementById('modal-auth').classList.remove('flex');
+    }
+
+    function closeKeyCreatedModal() {
+      document.getElementById('modal-key-created').classList.add('hidden');
+      document.getElementById('modal-key-created').classList.remove('flex');
+    }
+
+    // API & Data Fetching
+    async function loadDocuments() {
+      try {
+        const url = activeFilter ? `/api/documents?status=${activeFilter}` : '/api/documents';
+        const res = await fetch(url);
+        if (!res.ok) return;
+        documents = await res.json();
+        
+        document.getElementById('badge-doc-count').textContent = documents.length;
+        document.getElementById('stat-doc-count').textContent = documents.length;
+        
+        const tbody = document.getElementById('documents-table-body');
+        if (documents.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="7" class="py-8 text-center text-slate-500 font-sans">No documents found in collection.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = documents.map(d => `
+          <tr class="hover:bg-surface-900/40 transition">
+            <td class="py-3 px-4 text-emerald-400 font-semibold">${d.id}</td>
+            <td class="py-3 px-4 font-sans text-white font-medium">${escapeHtml(d.title)}</td>
+            <td class="py-3 px-4">
+              <span class="px-2 py-0.5 rounded text-[10px] ${
+                d.status === 'published' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                d.status === 'draft' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' :
+                'bg-slate-800 text-slate-400'
+              }">${d.status}</span>
+            </td>
+            <td class="py-3 px-4 text-slate-300">${d.views}</td>
+            <td class="py-3 px-4 text-slate-500">${d.fileKey || '-'}</td>
+            <td class="py-3 px-4 text-slate-500">${new Date(d.createdAt).toLocaleDateString()}</td>
+            <td class="py-3 px-4 text-right">
+              <button onclick="deleteDoc('${d.id}')" class="text-rose-400 hover:text-rose-300 font-sans text-xs">Delete</button>
+            </td>
+          </tr>
+        `).join('');
+      } catch (err) {
+        console.error("Failed to load documents", err);
+      }
+    }
+
+    async function submitNewDoc() {
+      const title = document.getElementById('new-doc-title').value.trim();
+      const status = document.getElementById('new-doc-status').value;
+      const content = document.getElementById('new-doc-content').value.trim();
+
+      if (!title || !content) {
+        alert("Title and content are required.");
+        return;
+      }
+
+      const res = await fetch('/api/documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, status, content })
+      });
+
+      if (res.status === 401) {
+        openAuthModal();
+        return;
+      }
+
+      if (res.ok) {
+        closeNewDocModal();
+        document.getElementById('new-doc-title').value = '';
+        document.getElementById('new-doc-content').value = '';
+        loadDocuments();
+      } else {
+        alert("Failed to create document: " + (await res.text()));
+      }
+    }
+
+    async function deleteDoc(id) {
+      if (!confirm(`Delete document ${id}?`)) return;
+      const res = await fetch(`/api/documents/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        loadDocuments();
+      } else {
+        alert("Failed to delete document: " + (await res.text()));
+      }
+    }
+
+    function filterDocuments(status) {
+      activeFilter = status;
+      document.querySelectorAll('.doc-filter-btn').forEach(b => {
+        if (b.dataset.filter === status) {
+          b.className = 'doc-filter-btn px-2.5 py-1 text-xs rounded-md bg-slate-800 text-white font-medium';
+        } else {
+          b.className = 'doc-filter-btn px-2.5 py-1 text-xs rounded-md text-slate-400 hover:text-white font-medium';
+        }
+      });
+      loadDocuments();
+    }
+
+    // File Management
+    async function loadFiles() {
+      // In a real BaaS we could list files from /api/files, here we reflect stats
+    }
+
+    async function handleFileSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const res = await fetch('/api/files/upload', {
+          method: 'POST',
+          body: formData
+        });
+
+        if (res.status === 401) {
+          openAuthModal();
+          return;
+        }
+
+        if (res.ok) {
+          const fileData = await res.json();
+          addFileCard(fileData);
+        } else {
+          alert("File upload failed: " + (await res.text()));
+        }
+      } catch (err) {
+        alert("Upload error: " + err.message);
+      }
+    }
+
+    function addFileCard(f) {
+      const grid = document.getElementById('files-grid');
+      const isImg = f.mimeType && f.mimeType.startsWith('image/');
+      const card = document.createElement('div');
+      card.className = "p-4 rounded-xl bg-surface-850 border border-slate-800 space-y-3 flex flex-col justify-between";
+      card.innerHTML = `
+        <div>
+          <div class="h-28 rounded-lg bg-surface-950 border border-slate-800/80 flex items-center justify-center overflow-hidden mb-3">
+            ${isImg ? `<img src="/api/files/${f.storageKey}" class="max-h-full max-w-full object-cover">` : `<i data-lucide="file" class="w-8 h-8 text-slate-500"></i>`}
+          </div>
+          <div class="font-medium text-white text-xs truncate">${escapeHtml(f.filename)}</div>
+          <div class="text-[11px] font-mono text-slate-500 mt-1 flex items-center gap-2">
+            <span>${(f.sizeBytes / 1024).toFixed(1)} KB</span>
+            <span>•</span>
+            <span class="text-emerald-400">${f.mimeType}</span>
+          </div>
+        </div>
+        <div class="pt-2 border-t border-slate-800/80 flex items-center justify-between">
+          <a href="/api/files/${f.storageKey}" target="_blank" class="text-xs font-mono text-emerald-400 hover:underline">Download</a>
+          <button onclick="navigator.clipboard.writeText(location.origin + '/api/files/${f.storageKey}'); alert('Copied URL!')" class="text-xs text-slate-400 hover:text-white">Copy URL</button>
+        </div>
+      `;
+      grid.prepend(card);
+      renderIcons();
+
+      const count = grid.children.length;
+      document.getElementById('badge-file-count').textContent = count;
+      document.getElementById('stat-file-count').textContent = count;
+    }
+
+    // API Keys
+    async function loadApiKeys() {
+      try {
+        const res = await fetch('/api/auth/api-keys');
+        if (!res.ok) return;
+        const keys = await res.json();
+        const tbody = document.getElementById('apikeys-table-body');
+        if (keys.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-slate-500 font-sans">No API keys created yet.</td></tr>`;
+          return;
+        }
+
+        tbody.innerHTML = keys.map(k => `
+          <tr>
+            <td class="py-3 px-4 font-sans text-white font-medium">${escapeHtml(k.name)}</td>
+            <td class="py-3 px-4 text-emerald-400">${escapeHtml(k.prefix)}...</td>
+            <td class="py-3 px-4 text-slate-400">${k.expiresAt ? new Date(k.expiresAt).toLocaleDateString() : 'Never'}</td>
+            <td class="py-3 px-4 text-slate-400">${new Date(k.createdAt).toLocaleDateString()}</td>
+            <td class="py-3 px-4 text-right">
+              <button onclick="revokeApiKey('${k.id}')" class="text-rose-400 hover:text-rose-300 font-sans text-xs">Revoke</button>
+            </td>
+          </tr>
+        `).join('');
+      } catch (e) {}
+    }
+
+    async function openNewKeyModal() {
+      const name = prompt("Enter a descriptive name for this API Key:", "CI / Worker Agent");
+      if (!name) return;
+
+      const res = await fetch('/api/auth/api-keys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, expiresInDays: 30 })
+      });
+
+      if (res.status === 401) {
+        openAuthModal();
+        return;
+      }
+
+      if (res.ok) {
+        const data = await res.json();
+        document.getElementById('display-api-token').textContent = data.key;
+        document.getElementById('modal-key-created').classList.remove('hidden');
+        document.getElementById('modal-key-created').classList.add('flex');
+        loadApiKeys();
+      } else {
+        alert("Failed to generate API Key: " + (await res.text()));
+      }
+    }
+
+    async function revokeApiKey(id) {
+      if (!confirm("Revoke this API Key?")) return;
+      await fetch(`/api/auth/api-keys/${id}`, { method: 'DELETE' });
+      loadApiKeys();
+    }
+
+    function copyApiToken() {
+      const token = document.getElementById('display-api-token').textContent;
+      navigator.clipboard.writeText(token);
+      alert("API Key copied to clipboard!");
+    }
+
+    // Auth Actions
+    async function submitSignIn() {
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-password').value.trim();
+
+      const res = await fetch('/api/auth/signin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        currentUser = data;
+        document.getElementById('user-display-name').textContent = data.email;
+        closeAuthModal();
+        loadDocuments();
+      } else {
+        alert("Login failed: " + (await res.text()));
+      }
+    }
+
+    async function submitSignUp() {
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-password').value.trim();
+
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, name: email.split('@')[0] })
+      });
+
+      if (res.ok) {
+        await submitSignIn();
+      } else {
+        alert("Registration failed: " + (await res.text()));
+      }
+    }
+
+    // Realtime SSE Change Feed
+    function initRealtimeFeed() {
+      const terminal = document.getElementById('sse-log-terminal');
+      const es = new EventSource('/api/realtime');
+
+      es.onopen = () => {
+        document.getElementById('status-chip').classList.remove('hidden');
+        appendLog('system', 'Connected to SSE event stream.');
+      };
+
+      es.addEventListener('ready', e => {
+        appendLog('ready', e.data);
+      });
+
+      es.addEventListener('document_created', e => {
+        sseEvents++;
+        document.getElementById('stat-event-count').textContent = sseEvents;
+        appendLog('document_created', e.data);
+        loadDocuments();
+      });
+
+      es.addEventListener('document_updated', e => {
+        sseEvents++;
+        document.getElementById('stat-event-count').textContent = sseEvents;
+        appendLog('document_updated', e.data);
+        loadDocuments();
+      });
+
+      es.addEventListener('document_deleted', e => {
+        sseEvents++;
+        document.getElementById('stat-event-count').textContent = sseEvents;
+        appendLog('document_deleted', e.data);
+        loadDocuments();
+      });
+
+      es.addEventListener('file_uploaded', e => {
+        sseEvents++;
+        document.getElementById('stat-event-count').textContent = sseEvents;
+        appendLog('file_uploaded', e.data);
+      });
+
+      es.onerror = () => {
+        // Retry automatically
+      };
+    }
+
+    function appendLog(event, data) {
+      const terminal = document.getElementById('sse-log-terminal');
+      const time = new Date().toLocaleTimeString();
+      const row = document.createElement('div');
+      row.className = "flex items-start gap-2 leading-relaxed";
+      row.innerHTML = `
+        <span class="text-slate-600">[${time}]</span>
+        <span class="text-emerald-400 font-semibold">&lt;${event}&gt;</span>
+        <span class="text-slate-300 break-all">${escapeHtml(data)}</span>
+      `;
+      terminal.appendChild(row);
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function clearSseLogs() {
+      document.getElementById('sse-log-terminal').innerHTML = '<div class="text-slate-500">// Logs cleared. Waiting for events...</div>';
+    }
+
+    function escapeHtml(str) {
+      if (!str) return '';
+      return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // Startup
+    window.addEventListener('DOMContentLoaded', () => {
+      renderIcons();
+      initRealtimeFeed();
+      loadDocuments();
+      
+      // Auto-check session
+      fetch('/api/auth/session').then(r => r.json()).then(data => {
+        if (data && data.user) {
+          currentUser = data.user;
+          document.getElementById('user-display-name').textContent = data.user.email;
+        }
+      }).catch(() => {});
+    });
+  </script>
+</body>
+</html>
