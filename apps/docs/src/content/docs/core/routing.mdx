@@ -58,6 +58,9 @@ app.Post("/api/tasks", CreateTaskValidator, async (ctx, input) =>
 
 ## Server-Sent Events (SSE) for AI & Real-Time Streaming
 
+> [!NOTE]
+> `Sse` and `ctx.StreamLlmAsync` execute directly in C# on `net10.0` (`Reptar.Kestrel`). On `Cloudflare Workers` (`netwasm0.1`), SSE responses are streamed by the TypeScript `@reptar/host` Worker layer due to NetWasm's single-export constraint. See the [Per-Target Feature Support Matrix](/overview/deployment-targets/#per-target-feature-support-matrix) for full details.
+
 Reptar includes native, zero-allocation Server-Sent Events (`ctx.Sse`) backed by `System.Threading.Channels.Channel<byte[]>`. Chunks stream directly into Kestrel's `PipeWriter` with automatic `FlushAsync()` and proxy-buffering disabled (`X-Accel-Buffering: no`):
 
 ```csharp

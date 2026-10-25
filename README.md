@@ -32,6 +32,18 @@ Reptar runs across four tier-one deployment targets from a single C# codebase:
 | **Linux VPS / Bare Metal** | Systemd / Docker Compose | PostgreSQL 17, SQLite | **10.8 MB** standalone binary | **~31 MB** RSS | **2,799 req/s** (database I/O) |
 | **AWS Lambda** | Custom Runtime (`provided.al2023`) | PostgreSQL, SQLite | Self-contained AOT zip | ~31 MB RSS | Sub-15ms cold boot |
 
+### Per-Target Feature Support Matrix
+
+Due to NetWasm `0.10.0` Binaryen's single-`[JSExport]` constraint (`Program.Handle`), core request/response features run inside C# on all targets while streaming/event-loop hooks on Cloudflare Workers are bridged by `@reptar/host`:
+
+| Feature | Cloudflare Workers (`netwasm0.1`) | Kestrel (`net10.0` AOT) | AWS Lambda (`net10.0` AOT) |
+| :-- | :-- | :-- | :-- |
+| **Routing, `Rule<T>` Validation, Auth, JWT** | C# (`Wasm`) | C# (`Native AOT`) | C# (`Native AOT`) |
+| **Database (`c.Db`)** | C# `D1DbClient` (`[JSImport]`) / Postgres | C# `SqliteDbClient` / `PostgresDbClient` / `MySqlDbClient` | C# `SqliteDbClient` / `PostgresDbClient` / `MySqlDbClient` |
+| **Storage (`c.Storage`) & `Files.Check`** | C# `R2Client` (`[JSImport]`) | C# `LocalStorage` / `S3Storage` (SigV4) | C# `S3Storage` (SigV4) / `LocalStorage` |
+| **SSE (`Sse.cs`), WebSockets, Static Files** | TS `@reptar/host` Worker layer (`#if !NETWASM` in C#) | Native C# (`KestrelHost` / `ProductionExtensions`) | Buffered HTTP / API Gateway |
+| **Queue & Cron Consumers (`OnQueue`, `OnScheduled`)** | TS `@reptar/host` `queue`/`scheduled` bridge | Native C# (`HandleQueueBatchAsync`, `HandleScheduledAsync`) | Lambda Event Adapter |
+
 ---
 
 ## Repository Layout

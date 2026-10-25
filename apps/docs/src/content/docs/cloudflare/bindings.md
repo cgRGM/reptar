@@ -159,6 +159,8 @@ The host rejects non-HTTPS URLs and private/link-local hosts by default. Pass `h
 
 ## Platform Availability Matrix
 
+See the [Per-Target Feature Support Matrix](/overview/deployment-targets/#per-target-feature-support-matrix) for a full comparison of features executing in C# (`netwasm0.1` vs `net10.0`) versus features bridged by the `@reptar/host` TypeScript Worker shim.
+
 | Surface | C# Accessor | Implementation | Availability |
 | :-- | :-- | :-- | :-- |
 | **D1 (SQL Database)** | `c.Db` | `D1DbClient` via `[JSImport]` | ✅ Production Ready |
