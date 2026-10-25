@@ -62,6 +62,13 @@ internal sealed class RouteEntry
     public required RouteMeta Meta { get; init; }
 }
 
+internal sealed record WebSocketRoute(
+    string[] Segments,
+    bool[] IsParamSegment,
+    string[] ParamNames,
+    int[] ParamIndices,
+    WebSocketHandlers Handlers);
+
 public sealed record QueueMessage(
     string Id,
     string Body,
@@ -103,6 +110,7 @@ public sealed class ReptarApp
         new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, WebSocketHandlers> _webSocketHandlers =
         new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<WebSocketRoute> _webSocketParamRoutes = [];
     private readonly Dictionary<string, (WebSocketConnection Connection, WebSocketHandlers Handlers)> _webSocketSessions =
         new(StringComparer.Ordinal);
     private readonly ReptarConfig _config;
@@ -267,6 +275,51 @@ public sealed class ReptarApp
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         AddTypedRoute("PUT", path, middleware, validator, handler);
 
+    public RouteBuilder Patch(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
+        AddRoute("PATCH", path, null, handler);
+
+    public RouteBuilder Patch(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, Task<ReptarResponse>> handler) =>
+        AddRoute("PATCH", path, middleware, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("PATCH", path, null, null, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("PATCH", path, middleware, null, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        Validator<TInput> validator,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("PATCH", path, null, validator, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Validator<TInput> validator,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        AddTypedRoute("PATCH", path, middleware, validator, handler);
+
     public RouteBuilder Delete(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("DELETE", path, null, handler);
 
@@ -319,6 +372,8 @@ public sealed class ReptarApp
             _webSocketHandlers[path] = handlers;
         }
 
+        _webSocketParamRoutes.AddRange(subApp._webSocketParamRoutes);
+
         return this;
     }
 
@@ -351,24 +406,118 @@ public sealed class ReptarApp
 
     public ReptarApp OnWebSocket(string path, WebSocketHandlers handlers)
     {
-        _webSocketHandlers[Normalize(path)] = handlers;
+        var normalized = Normalize(path);
+        var segments = Split(normalized);
+        var isParamSegment = new bool[segments.Length];
+        var paramNames = new List<string>();
+        var paramIndices = new List<int>();
+
+        for (var i = 0; i < segments.Length; i++)
+        {
+            if (TryParseParamSegment(segments[i], out var name))
+            {
+                isParamSegment[i] = true;
+                paramNames.Add(name);
+                paramIndices.Add(i);
+            }
+        }
+
+        if (paramNames.Count > 0)
+        {
+            _webSocketParamRoutes.Add(new WebSocketRoute(
+                segments,
+                isParamSegment,
+                [.. paramNames],
+                [.. paramIndices],
+                handlers));
+        }
+        else
+        {
+            _webSocketHandlers[normalized] = handlers;
+        }
+
         return this;
     }
 
     public bool HasWebSocketHandler(string path) =>
-        _webSocketHandlers.ContainsKey(Normalize(path));
+        TryMatchWebSocket(path) is not null;
+
+    private (WebSocketHandlers Handlers, Dictionary<string, string> Params)? TryMatchWebSocket(string path)
+    {
+        var normalized = Normalize(path);
+
+        // O(1) fast path: exact static match
+        if (_webSocketHandlers.TryGetValue(normalized, out var exact))
+        {
+            return (exact, EmptyParams);
+        }
+
+        var segments = Split(normalized);
+
+        foreach (var route in _webSocketParamRoutes)
+        {
+            if (route.Segments.Length != segments.Length)
+                continue;
+
+            var matched = true;
+            for (var i = 0; i < segments.Length; i++)
+            {
+                if (!route.IsParamSegment[i] &&
+                    !string.Equals(route.Segments[i], segments[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (!matched)
+                continue;
+
+            var routeParams = new Dictionary<string, string>(route.ParamNames.Length, StringComparer.OrdinalIgnoreCase);
+            for (var p = 0; p < route.ParamNames.Length; p++)
+            {
+                routeParams[route.ParamNames[p]] = segments[route.ParamIndices[p]];
+            }
+
+            return (route.Handlers, routeParams);
+        }
+
+        return null;
+    }
+
+    // Accepts both ":param" (HTTP route style) and "{param}" (OpenAPI style).
+    private static bool TryParseParamSegment(string segment, out string name)
+    {
+        if (segment.StartsWith(':'))
+        {
+            name = segment[1..];
+            return name.Length > 0;
+        }
+
+        if (segment.Length > 2 && segment[0] == '{' && segment[^1] == '}')
+        {
+            name = segment[1..^1];
+            return true;
+        }
+
+        name = segment;
+        return false;
+    }
 
     public async Task HandleWebSocketOpenAsync(
         string sessionId,
         ReptarRequest request)
     {
-        var path = Normalize(request.Path);
+        var match = TryMatchWebSocket(request.Path);
 
-        if (!_webSocketHandlers.TryGetValue(path, out var handlers))
+        if (match is null)
         {
             Services.WebSocket.Close(sessionId, 1008, "No WebSocket handler.");
             return;
         }
+
+        var handlers = match.Value.Handlers;
+        request.RouteParams = match.Value.Params;
 
         var ctx = new Ctx(request, Services)
         {
@@ -1193,6 +1342,51 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         Validator<TInput> validator,
         Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
         app.Put(path, middleware, validator, handler);
+
+    public RouteBuilder Patch(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
+        app.Patch(path, handler);
+
+    public RouteBuilder Patch(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, Task<ReptarResponse>> handler) =>
+        app.Patch(path, middleware, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Patch(path, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Patch(path, middleware, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        Validator<TInput> validator,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Patch(path, validator, handler);
+
+    public RouteBuilder Patch<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] TInput>(
+        string path,
+        ReptarMiddleware middleware,
+        Validator<TInput> validator,
+        Func<Ctx, TInput, Task<ReptarResponse>> handler) =>
+        app.Patch(path, middleware, validator, handler);
 
     public RouteBuilder Delete(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         app.Delete(path, handler);

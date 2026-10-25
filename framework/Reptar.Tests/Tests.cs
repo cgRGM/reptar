@@ -100,6 +100,31 @@ public class RouterTests
         Assert.Equal("prj_002", doc.RootElement.GetProperty("project").GetString());
         Assert.Equal("tsk_003", doc.RootElement.GetProperty("task").GetString());
     }
+
+    [Fact]
+    public async Task Matches_patch_routes_with_typed_body()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+
+        app.Patch<Widget>("/widgets/:id", (ctx, input) =>
+            Task.FromResult(ctx.Json(new { id = ctx.Req.Param("id"), updated = input.Name, count = input.Count })));
+
+        var payload = Encoding.UTF8.GetBytes("{\"Name\":\"Widget V2\",\"Count\":42}");
+        var res = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "PATCH",
+            Path = "/widgets/w_123",
+            Body = payload,
+            Headers = new Dictionary<string, string> { ["content-type"] = "application/json" }
+        });
+
+        Assert.Equal(200, res.Status);
+        var json = Encoding.UTF8.GetString(res.Body!);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("w_123", doc.RootElement.GetProperty("id").GetString());
+        Assert.Equal("Widget V2", doc.RootElement.GetProperty("updated").GetString());
+        Assert.Equal(42, doc.RootElement.GetProperty("count").GetInt32());
+    }
 }
 
 public class ValidationTests
@@ -1418,6 +1443,57 @@ public class WebSocketTests
             ["session_1:connected", "session_1:echo:hello"],
             transport.Sent);
         Assert.True(closed);
+    }
+
+    [Fact]
+    public async Task Parameterized_websocket_routes_extract_path_params()
+    {
+        var transport = new TestTransport();
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            WebSocket = transport,
+        });
+
+        app.OnWebSocket("/rooms/:roomId", new WebSocketHandlers
+        {
+            Open = connection => connection.SendAsync(
+                $"room:{connection.Ctx.Req.Param("roomId")}"),
+        });
+
+        Assert.True(app.HasWebSocketHandler("/rooms/lobby"));
+        Assert.True(app.HasWebSocketHandler("/rooms/lobby/"));
+        Assert.False(app.HasWebSocketHandler("/rooms"));
+        Assert.False(app.HasWebSocketHandler("/rooms/lobby/extra"));
+
+        await app.HandleWebSocketOpenAsync(
+            "session_1",
+            new ReptarRequest { Method = "GET", Path = "/rooms/lobby" });
+
+        Assert.Equal(["session_1:room:lobby"], transport.Sent);
+    }
+
+    [Fact]
+    public async Task Parameterized_websocket_routes_support_openapi_syntax()
+    {
+        var transport = new TestTransport();
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            WebSocket = transport,
+        });
+
+        app.OnWebSocket("/rooms/{roomId}", new WebSocketHandlers
+        {
+            Open = connection => connection.SendAsync(
+                $"room:{connection.Ctx.Req.Param("roomId")}"),
+        });
+
+        await app.HandleWebSocketOpenAsync(
+            "session_1",
+            new ReptarRequest { Method = "GET", Path = "/rooms/general" });
+
+        Assert.Equal(["session_1:room:general"], transport.Sent);
     }
 }
 
