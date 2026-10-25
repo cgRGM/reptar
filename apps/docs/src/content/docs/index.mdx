@@ -32,10 +32,10 @@ await app.RunAsync(args);
 
 <CardGrid>
   <Card title="Dual-Target Wasm & Native AOT" icon="rocket">
-    Compile the same C# feature slices to WebAssembly for Cloudflare Workers (&lt;2 ms warm execution) or a **10.9 MB** standalone Linux Native AOT binary (`-p:ReptarSqliteOnly=true`) that boots in 258 ms.
+    Compile the same C# feature slices to WebAssembly for Cloudflare Workers (&lt;2 ms warm execution) or a **10.4 MB** standalone Linux Native AOT binary (`-p:ReptarSqliteOnly=true`) that boots in 124 ms.
   </Card>
   <Card title="Zero-Reflection Data Layer" icon="seti:db">
-    Decorate records with `[ReptarEntity]` to emit compile-time positional `DbDataReader` mappers. Query D1, SQLite (32-channel WAL read pool), PostgreSQL (`NpgsqlBatch`), and MySQL with stack-allocated value tuples.
+    Decorate records with `[ReptarEntity]` to emit compile-time positional `DbDataReader` mappers and `ColumnRef<T>` query tokens. Query D1, SQLite (synchronous WAL read pool + group-commit batcher), PostgreSQL (`NpgsqlBatch`), and MySQL with zero reflection.
   </Card>
   <Card title="OpenAPI 3.1, SSE & SWR Cache" icon="open-book">
     `Rule<T>()` validators automatically populate OpenAPI 3.1 JSON Schemas served via Scalar UI (`/reference`). Stream AI responses over zero-alloc `ctx.Sse(...)` channels and serve reads at 39k+ req/s with `CacheControl.SWR`.

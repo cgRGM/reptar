@@ -35,22 +35,40 @@ var activeUsers = await c.Db.QueryAsync<User>(
 
 ---
 
-## 2. Cloudflare R2 (`c.Storage`)
+## 2. Cloudflare R2 & Portable Object Storage (`c.Storage`)
 
-S3-compatible, zero-egress object storage with direct binary streaming:
+`c.Storage` implements the unified `IStorage` interface across Cloudflare R2 (`R2Client`), local filesystem storage (`LocalStorage`), and S3-compatible object stores (`S3Storage` for AWS S3, Cloudflare R2 S3 API, MinIO, and Tigris with zero-dependency SigV4 signing and `PresignPutAsync`):
 
 ```csharp
 // Upload an asset
 await c.Storage.PutAsync("uploads/avatar.png", imageBytes, contentType: "image/png");
 
-// Verify existence
+// Verify existence & read metadata (HeadAsync)
 bool exists = await c.Storage.ExistsAsync("uploads/avatar.png");
+StorageObjectMeta? meta = await c.Storage.HeadAsync("uploads/avatar.png");
 
-// Download object
+// Download object or stream directly
 byte[]? file = await c.Storage.GetAsync("uploads/avatar.png");
 
 // Delete object
 await c.Storage.DeleteAsync("uploads/avatar.png");
+```
+
+### Multipart File Uploads & Validation (`MultipartForm` & `Files.Check`)
+
+Parse `multipart/form-data` payloads and validate file size, MIME type, and magic-byte signatures (`png`, `jpeg`, `webp`, `gif`, `pdf`) without external dependencies:
+
+```csharp
+app.Post("/upload", async c =>
+{
+    var form = MultipartForm.Parse(c.Req.BodyBytes, c.Req.Header("content-type"));
+    var file = form.File("file");
+    var check = Files.Check(file, maxBytes: 5 * 1024 * 1024, allowedSignatures: ["png", "jpeg", "webp"]);
+    if (!check.IsValid) return c.BadRequest(check.Error!);
+
+    await c.Storage.PutAsync($"uploads/{file!.FileName}", file.Data, file.ContentType);
+    return c.Json(new { key = $"uploads/{file.FileName}" }, 201);
+}).AcceptsFile("file", maxBytes: 5 * 1024 * 1024);
 ```
 
 ---

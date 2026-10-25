@@ -41,9 +41,16 @@ Reptar provides column definitions tailored to SQLite and Cloudflare D1:
 
 ---
 
-## Aggregation (`apps/api/schema/index.cs`)
+## Aggregation & Automatic Schema Registry
 
-You can explicitly aggregate tables or allow build-time discovery to find every `TableDef` across partial classes:
+Every `DefineTable(...)` / `TableDef.Define(...)` declaration automatically registers itself into `SchemaRegistry.All` at startup via source-generated `[ModuleInitializer]` hooks—so CLI tools (`bun reptar inspect --json`, `bun reptar db plan`, `bun reptar db generate`) and `app.ExportSchemaJson()` discover every table without manual wiring:
+
+```csharp
+// Export all registered TableDef schemas as compiler-backed JSON
+string schemaJson = app.ExportSchemaJson();
+```
+
+You can also explicitly group tables in `apps/api/schema/index.cs`:
 
 ```csharp
 public static partial class Schema
@@ -51,3 +58,27 @@ public static partial class Schema
     public static readonly TableDef[] All = [Users, Posts];
 }
 ```
+
+---
+
+## Compile-Time `ColumnRef<T>` Tokens
+
+`Reptar.SourceGenerators` inspects every `DefineTable` / `TableDef.Define` call and `[ReptarEntity]` record at compile time to emit strongly-typed `ColumnRef<T>` tokens (`Int` -> `long`, `Real` -> `double`, `Blob` -> `byte[]`, `Text` -> `string`):
+
+1. **Table-Scoped Wrapper Class** (when a static `TableDef Table` field is inside a dedicated class like `Users`):
+   ```csharp
+   // Automatically generated on partial class Users:
+   // Users.Id, Users.Email, Users.CreatedAt
+   var filter = Users.Email.Eq("ada@example.com");
+   ```
+2. **Shared `Schema` Partial Class** (when multiple `TableDef` fields live on `Schema`, e.g., `Schema.Posts`):
+   ```csharp
+   // Automatically generated as Schema.<FieldName>Cols.<ColumnPascal>:
+   // Schema.PostsCols.Id, Schema.PostsCols.Slug, Schema.PostsCols.Published
+   var posts = await c.Db.From<Post>(Schema.Posts)
+       .Where(Schema.PostsCols.Published.Eq(1))
+       .OrderBy(Schema.PostsCols.CreatedAt.Desc())
+       .Limit(20)
+       .ToListAsync();
+   ```
+3. **`[ReptarEntity]` Record Columns**: Every `[ReptarEntity]` type also emits a nested `Cols` helper (`Post.Cols.Title`, `Post.Cols.CreatedAt`) mapped to its `snake_case` SQL column name.

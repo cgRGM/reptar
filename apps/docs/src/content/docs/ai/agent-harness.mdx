@@ -143,3 +143,42 @@ app.Post("/api/chat", async ctx =>
 
 - **Instant Disconnect Cleanup**: If the user clicks "Stop Generating" or closes their app, `ctx.CancellationToken` aborts immediately, stopping upstream LLM billing.
 - **Done Sentinel**: Emits `data: [DONE]\n\n` automatically when the token stream finishes.
+
+---
+
+## 6. Coding Agent Tooling: MCP Server, CLI Inspection & Two-Layer Agent Docs
+
+Reptar is designed from the ground up to be operated by AI coding agents (Claude Code, Cursor, Antigravity, Windsurf) with zero guesswork:
+
+### Built-In MCP Server (`bun reptar mcp`)
+
+Expose your project's routes, compiler-backed `TableDef` schemas, schema drift plan, and codegen tools over Model Context Protocol (stdio JSON-RPC 2.0):
+
+```bash
+bun reptar mcp
+```
+
+Published MCP tools:
+- `reptar_inspect` — Full project topology (routes, compiler-extracted `TableDef` columns, `[ReptarEntity]` records, migrations, and environment bindings).
+- `reptar_doctor` — Verifies .NET SDK, Bun, SQLite connectivity, `AGENTS.md` pointer block, and RPC contract freshness.
+- `reptar_db_plan` — Compares compiled `TableDef` schemas (`--schema`) against the active SQLite database and returns pending DDL statements.
+- `reptar_db_generate` — Generates a timestamped `.sql` migration file from the current schema diff.
+- `reptar_db_migrate` — Transactionally applies pending `.sql` migrations.
+- `reptar_codegen` — Regenerates `@reptar/client` TypeScript RPC contracts and OpenAPI 3.1 specs.
+
+### Machine-Readable CLI Flags (`--json`)
+
+Every inspection command supports deterministic `--json` output for agent tool calls:
+
+```bash
+bun reptar inspect --json
+bun reptar doctor --json
+bun reptar db plan --json
+```
+
+### Two-Layer Agent Documentation (`@reptar/client`)
+
+Reptar uses a non-destructive two-layer documentation pattern so upgrading `@reptar/client` automatically updates your agent's framework knowledge without cluttering your repository root:
+
+1. **Version-Pinned Manual in `node_modules`**: `@reptar/client` ships `node_modules/@reptar/client/AGENTS.md`, `node_modules/@reptar/client/llms.txt`, and `node_modules/@reptar/client/skills/reptar/SKILL.md`.
+2. **Non-Destructive Managed Pointer Block**: Running `bun create reptar` or `bun reptar init` (or `bun reptar doctor --fix`) appends or updates a compact `<!-- reptar:agents:start --> ... <!-- reptar:agents:end -->` pointer block inside your root `AGENTS.md` while preserving all existing team/linter rules.

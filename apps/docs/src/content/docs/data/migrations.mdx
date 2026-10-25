@@ -75,29 +75,32 @@ var runner = await MigrationRunner.LoadFromDirectoryAsync(app.Db, "./migrations"
 await MigrationRunner.RunCliAsync(runner, args); // Supports "migrate", "rollback", "status"
 ```
 
-## 3. Schema-Driven DDL Generation
+## 3. Compiler-Backed Schema Drift & DDL Generation
 
-When defining tables with `TableDef` in `schema/`, you can generate and apply DDL directly:
+When defining tables with `TableDef` in `schema/`, Reptar extracts the exact compiled `SchemaRegistry.All` graph (`dotnet run -- --schema`) and diffs it against your active SQLite database (`pragma_table_info`):
+
+- `bun reptar db plan [--json]` — Inspects schema drift (`create_table`, `add_column`, `create_index`) between your compiled C# `TableDef` declarations and the active SQLite database.
+- `bun reptar db generate [--name <name>]` — Emits the next sequential timestamped `.sql` migration file in `migrations/` from the compiler-verified diff.
+- `bun reptar db migrate` — Applies all pending `.sql` migrations transactionally.
 
 <Tabs syncKey="pkg">
   <TabItem label="bun">
     <Code
-      code={"bun reptar db generate\nbun reptar db push\nbun reptar db apply"}
+      code={"bun reptar db plan --json\nbun reptar db generate --name add_posts\nbun reptar db migrate"}
       lang="bash"
     />
   </TabItem>
   <TabItem label="npm">
     <Code
-      code={"npx reptar db generate\nnpx reptar db push\nnpx reptar db apply"}
+      code={"npx reptar db plan --json\nnpx reptar db generate --name add_posts\nnpx reptar db migrate"}
       lang="bash"
     />
   </TabItem>
   <TabItem label="pnpm">
     <Code
       code={
-        "pnpm dlx reptar db generate\npnpm dlx reptar db push\npnpm dlx reptar db apply"
+        "pnpm dlx reptar db plan --json\npnpm dlx reptar db generate --name add_posts\npnpm dlx reptar db migrate"
       }
-      lang="bash"
     />
   </TabItem>
 </Tabs>

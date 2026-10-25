@@ -1,75 +1,83 @@
 ---
 const benchmarks = [
   {
-    delta: "+5%",
-    hono: "48,764",
-    minimal: "41,340",
-    reptar: "43,228",
+    delta: "+0%",
+    hono: "47,298",
+    minimal: "41,852",
+    reptar: "41,877",
     scenario: "T0 · Plaintext HTTP",
     swr: "—",
   },
   {
     delta: "+1%",
-    hono: "39,315",
-    minimal: "41,030",
-    reptar: "41,395",
+    hono: "39,289",
+    minimal: "41,675",
+    reptar: "42,239",
     scenario: "T1 · JSON Serialization",
     swr: "—",
   },
   {
-    delta: "-2%",
-    hono: "35,877",
-    minimal: "41,009",
-    reptar: "40,300",
+    delta: "+1%",
+    hono: "34,401",
+    minimal: "40,954",
+    reptar: "41,355",
     scenario: "T2 · Router & Path Params",
     swr: "—",
   },
   {
-    delta: "+9%",
-    hono: "17,504",
-    minimal: "33,236",
-    reptar: "36,105",
+    delta: "+5%",
+    hono: "18,256",
+    minimal: "34,427",
+    reptar: "36,262",
     scenario: "T3 · Payload Validation (Rule<T>)",
     swr: "—",
   },
   {
-    delta: "3.4x w/ SWR",
-    hono: "18,555",
-    minimal: "14,163",
-    reptar: "11,802",
+    delta: "+6%",
+    hono: "17,909",
+    minimal: "12,973",
+    reptar: "13,765",
     scenario: "T4 · Task Detail (SQLite Join)",
     swr: "39,214 req/s (2.6ms p50)",
   },
   {
-    delta: "5.6x w/ SWR",
-    hono: "6,785",
-    minimal: "9,864",
-    reptar: "5,368",
+    delta: "+1%",
+    hono: "6,753",
+    minimal: "5,884",
+    reptar: "5,945",
     scenario: "T5 · Task List (20 Rows + Filter)",
     swr: "29,874 req/s (3.3ms p50)",
   },
   {
-    delta: "3.7x w/ SWR",
-    hono: "10,101",
-    minimal: "10,263",
-    reptar: "10,058",
+    delta: "+6%",
+    hono: "9,806",
+    minimal: "10,126",
+    reptar: "10,707",
     scenario: "T6 · Task Comments (Ordered Join)",
     swr: "35,485 req/s (2.8ms p50)",
   },
   {
-    delta: "+67%",
-    hono: "5,273",
-    minimal: "2,182",
-    reptar: "3,653",
-    scenario: "T10 · Authenticated Update (JWT + Write)",
+    delta: "+72%",
+    hono: "4,235",
+    minimal: "3,628",
+    reptar: "6,224",
+    scenario: "T7 · Create Task (Group-Commit Write)",
     swr: "—",
   },
   {
-    delta: "+7%",
-    hono: "7,742",
-    minimal: "5,281",
-    reptar: "5,665",
-    scenario: "T11 · Mixed Read/Write Workload",
+    delta: "+6%",
+    hono: "12,052",
+    minimal: "14,765",
+    reptar: "15,683",
+    scenario: "T8 · /me (JWT Auth + Single-Row Read)",
+    swr: "—",
+  },
+  {
+    delta: "+129%",
+    hono: "4,949",
+    minimal: "2,150",
+    reptar: "4,925",
+    scenario: "T10 · Authenticated Update (JWT + Write)",
     swr: "—",
   },
 ];
@@ -88,8 +96,8 @@ const targets = [
   },
   {
     metrics: [
-      { label: "AOT Binary", value: "10.9 MB" },
-      { label: "Cold Boot", value: "258 ms" },
+      { label: "AOT Binary", value: "10.4 MB" },
+      { label: "Cold Boot", value: "124 ms" },
     ],
     name: "Docker & Linux VPS",
     runtime: "net10.0 · Native AOT",
@@ -111,7 +119,7 @@ const targets = [
   {
     metrics: [
       { label: "Conduit Hurl Suite", value: "154 / 154" },
-      { label: "Framework Tests", value: "92 / 92" },
+      { label: "Framework Tests", value: "118 / 118" },
     ],
     name: "Fullstack Monorepos",
     runtime: "@reptar/client · OpenAPI 3.1",
@@ -134,9 +142,9 @@ const targets = [
         </p>
       </div>
       <div class="flex items-center gap-6 font-mono text-xs text-zinc-400 border border-[#222630] bg-[#0f1116] px-4 py-2.5">
-        <div>Reptar Binary: <span class="text-white font-semibold">10.9 MB</span></div>
+        <div>Reptar Binary: <span class="text-white font-semibold">10.4 MB</span></div>
         <span class="text-zinc-700">|</span>
-        <div>Boot: <span class="text-white font-semibold">258 ms</span></div>
+        <div>Boot: <span class="text-white font-semibold">124 ms</span></div>
         <span class="text-zinc-700">|</span>
         <div>Hono Bundle: <span class="text-zinc-300">104.3 MB</span></div>
       </div>

@@ -99,9 +99,34 @@ await c.Db.TransactionAsync(async tx =>
 });
 ```
 
-## 4. TableDef CRUD Helpers
+## 4. Fluent `TableQuery<T>` & Typed `ColumnRef<T>` Filters
 
-For standard table operations, `c.Db` also exposes schema-driven CRUD helpers backed by `TableDef`:
+For single-table queries, combine `c.Db.From<T>(table)` with Roslyn-generated `ColumnRef<T>` tokens (`Schema.PostsCols.Published`, `Users.Email`, or `Post.Cols.CreatedAt`) for compile-time column safety and zero heap overhead:
+
+```csharp
+// Fluent query builder with compile-time ColumnRef<T> tokens
+var publishedPosts = await c.Db.From<Post>(Schema.Posts)
+    .Where(Schema.PostsCols.Published.Eq(1) & Schema.PostsCols.AuthorId.Eq(authorId))
+    .OrderBy(Schema.PostsCols.CreatedAt.Desc())
+    .Limit(20)
+    .Offset(0)
+    .ToListAsync();
+
+// Single-row lookup, Count, Exists, and Delete
+var post = await c.Db.From<Post>(Schema.Posts)
+    .Where(Schema.PostsCols.Slug.Eq(slug))
+    .FirstOrDefaultAsync();
+
+long total = await c.Db.From<Post>(Schema.Posts)
+    .Where(Schema.PostsCols.Published.Eq(1))
+    .CountAsync();
+```
+
+Supported `ColumnRef<T>` operators include `.Eq(val)`, `.Neq(val)`, `.Gt(val)`, `.Gte(val)`, `.Lt(val)`, `.Lte(val)`, `.Like(pattern)`, `.In(values)`, `.IsNull()`, `.IsNotNull()`, `.Asc()`, and `.Desc()`. Filters compose with `&` (`AND`) and `|` (`OR`).
+
+## 5. TableDef CRUD Helpers & Zero-Reflection `IReptarEntity` Writes
+
+For standard table operations, `c.Db` exposes schema-driven CRUD helpers backed by `TableDef`. Every `[ReptarEntity]` record automatically implements `IReptarEntity.ToDbParameters()` at compile time, so `InsertAsync` and `UpdateAsync` bind columns with zero runtime reflection:
 
 ```csharp
 // Get single record by primary key
@@ -110,13 +135,13 @@ var post = await c.Db.GetAsync<Post>(Schema.Posts, id);
 // List records with optional WHERE / ORDER BY clauses
 var posts = await c.Db.ListAsync<Post>(Schema.Posts, "where published = 1 order by created_at desc");
 
-// Insert, Update, and Delete
+// Zero-reflection Insert, Update, and Delete via IReptarEntity.ToDbParameters()
 await c.Db.InsertAsync(Schema.Posts, post);
 await c.Db.UpdateAsync(Schema.Posts, updatedPost, updatedPost.Id);
 await c.Db.DeleteAsync(Schema.Posts, id);
 ```
 
-## 5. Supported Database Drivers
+## 6. Supported Database Drivers
 
 Reptar supports four relational backends through the unified `IDbClient` interface:
 
@@ -134,8 +159,9 @@ var app = ReptarApp.Create(new ReptarConfig
 `SqliteDbClient` is engineered for high-concurrency multi-tenant workloads on a single node:
 
 - **Lock-Free Group-Commit Write Batcher:** Uncontended writes execute immediately without allocation. When concurrent writes arrive while the writer gate is held, `SqliteDbClient` automatically coalesces up to 64 queued statements into a single `BEGIN ... COMMIT` transaction—with automatic rollback and per-statement isolated replay if any single statement violates a constraint.
+- **Synchronous WAL Read Fast-Path:** Local SQLite WAL reads complete synchronously on the calling thread via `TryRentReadConnectionSync` when an idle connection is available in the pool, avoiding `async` state-machine allocations on the hot read path.
 - **Per-SQL Mapper Caching:** `EntityMapper<T>.ResolveForSql` caches the resolved positional or ordinal mapper per SQL string so subsequent queries execute zero `GetName(i)` string lookups.
-- **WAL Read Pool:** Opens an adaptive pool of `Mode=ReadOnly` WAL connections (`Math.Clamp(ProcessorCount * 8, 8, 32)`, configurable via `REPTAR_SQLITE_READ_POOL_SIZE`).
+- **Clamped WAL Read Pool:** Opens a low-contention pool of `Mode=ReadOnly` WAL connections (`Math.Clamp(ProcessorCount * 2, 4, 16)`, configurable via `REPTAR_SQLITE_READ_POOL_SIZE`) to eliminate SQLite WAL shared-memory (`-shm`) lock contention under high concurrency.
 - **Automatic Transient Retry:** Transparently retries `SQLITE_BUSY` (`5`) and `SQLITE_LOCKED` (`6`) with jittered exponential backoff.
 
 ```csharp
@@ -145,7 +171,7 @@ var app = ReptarApp.Create(new ReptarConfig
 });
 ```
 
-> [!TIP] When publishing a SQLite-only Native AOT binary, pass `-p:ReptarSqliteOnly=true` to `dotnet publish` to trim Npgsql and MySqlConnector, reducing the standalone executable from 18.4 MB to **10.9 MB**.
+> [!TIP] When publishing a SQLite-only Native AOT binary, pass `-p:ReptarSqliteOnly=true` to `dotnet publish` to trim Npgsql and MySqlConnector, reducing the standalone executable from 18.4 MB to **10.4 MB** (124 ms cold boot).
 
 ### PostgreSQL & Cloudflare Hyperdrive
 

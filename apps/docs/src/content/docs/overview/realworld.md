@@ -9,30 +9,30 @@ Reptar includes both a 12-tier comparative benchmark suite (`bench/`) and a comp
 
 Measured on an isolated 2-vCPU Linux VPS (Ubuntu 24.04, 3.7 GB RAM, server pinned to CPU 0, `oha` load generator pinned to CPU 1). All three frameworks run the exact same schema, seed data, and SQL queries:
 
-- **Reptar (`net10.0` Native AOT, `-p:ReptarSqliteOnly=true`):** **10.9 MB** binary, **258 ms** startup
-- **.NET 10 Minimal API (`net10.0` Native AOT, raw ADO.NET):** **10.4 MB** binary, **570 ms** startup
-- **Hono on Bun (JIT compiled bundle):** **104.3 MB** binary, **130 ms** startup
+- **Reptar (`net10.0` Native AOT, `-p:ReptarSqliteOnly=true`):** **10.4 MB** binary, **124 ms** startup
+- **.NET 10 Minimal API (`net10.0` Native AOT, raw ADO.NET):** **10.4 MB** binary, **127 ms** startup
+- **Hono on Bun (JIT compiled bundle):** **104.3 MB** binary, **240 ms** startup
 
 | Tier | Scenario | Reptar (req/s) | .NET 10 Minimal API | Hono (Bun) | Reptar + SWR Cache | Reptar vs Minimal |
 | :-- | :-- | --: | --: | --: | --: | --: |
-| **T0** | `plaintext` | **43,228** | 41,340 | 48,764 | — | **+5%** |
-| **T1** | `json` | **41,395** | 41,030 | 39,315 | — | **+1%** |
-| **T2** | `router-params` | **40,300** | 41,009 | 35,877 | — | -2% |
-| **T3** | `validate` (`Rule<T>`) | **36,105** | 33,236 | 17,504 | — | **+9%** |
-| **T4** | `task-detail` | **11,802** | 14,163 | 18,555 | **39,214** (2.6 ms p50) | 3.4x w/ SWR |
-| **T5** | `task-list` (20 rows) | **5,368** | 9,864 | 6,785 | **29,874** (3.3 ms p50) | 5.6x w/ SWR |
-| **T6** | `task-comments` | **10,058** | 10,263 | 10,101 | **35,485** (2.8 ms p50) | 3.7x w/ SWR |
-| **T7** | `create-task` | **3,521** | 7,478 | 4,415 | — | -53% |
-| **T8** | `/me` (JWT + lookup) | **12,112** | 15,449 | 12,069 | — | -22% |
-| **T9** | `login` (PBKDF2, 10c) | **15** | 15 | 22 | — | 0% |
-| **T10** | `update-task` | **3,653** | 2,182 | 5,273 | — | **+67%** |
-| **T11** | `mixed` (Read/Write) | **5,665** | 5,281 | 7,742 | — | **+7%** |
+| **T0** | `plaintext` | **41,877** | 41,852 | 47,298 | — | **+0%** |
+| **T1** | `json` | **42,239** | 41,675 | 39,289 | — | **+1%** |
+| **T2** | `router-params` | **41,355** | 40,954 | 34,401 | — | **+1%** |
+| **T3** | `validate` (`Rule<T>`) | **36,262** | 34,427 | 18,256 | — | **+5%** |
+| **T4** | `task-detail` | **13,765** | 12,973 | 17,909 | **39,214** (2.6 ms p50) | **+6%** (3.0x w/ SWR) |
+| **T5** | `task-list` (20 rows) | **5,945** | 5,884 | 6,753 | **29,874** (3.3 ms p50) | **+1%** (5.0x w/ SWR) |
+| **T6** | `task-comments` | **10,707** | 10,126 | 9,806 | **35,485** (2.8 ms p50) | **+6%** (3.5x w/ SWR) |
+| **T7** | `create-task` | **6,224** | 3,628 | 4,235 | — | **+72%** |
+| **T8** | `/me` (JWT + lookup) | **15,683** | 14,765 | 12,052 | — | **+6%** |
+| **T9** | `login` (PBKDF2, 10c) | **16** | 16 | 22 | — | **0%** |
+| **T10** | `update-task` | **4,925** | 2,150 | 4,949 | — | **+129%** |
+| **T11** | `mixed` (Read/Write) | **4,548** | 4,673 | 6,628 | — | -3% |
 
 ### Key Takeaways from the Benchmark Suite
 
-1. **HTTP, Routing, JSON & Validation Beat Raw Minimal API:** Reptar's zero-allocation radix router, Kestrel `PipeReader`/`PipeWriter` integration, and `SourceGenJsonCodec` match or exceed raw .NET 10 Minimal API across `T0`–`T3` while running declarative `Rule<T>()` validation at **2.06x** the speed of Hono (`36,105` vs `17,504` req/s).
-2. **SWR Perimeter Caching (`CacheControl.SWR`):** Enabling `CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30)` accelerates database read endpoints (`T4`–`T6`) by **3.4x to 5.6x**, delivering **29.8k–39.2k req/s** at **2.6–3.3 ms p50**.
-3. **The SQLite Write-Gate Finding (`T7`):** Using `SqliteDbClient.WriteTimingObserver` across 108,611 requests showed that actual SQLite `INSERT` execution takes just **0.064 ms p50**, JWT verification takes **0.031 ms p50**, and **99% of handler latency (26.3 ms avg)** is spent queueing behind SQLite's single-writer lock under 100-connection concurrency. Moving `BuildCommand` outside the write gate and using value-tuple parameters reduced gate hold time, and `BatchAsync` / PostgreSQL eliminates single-writer serialization entirely.
+1. **Reptar Wins 10 of 12 Tiers vs .NET 10 Minimal API:** Reptar's zero-allocation radix router, Kestrel `PipeReader`/`PipeWriter` integration, `SourceGenJsonCodec`, and compile-time `[ReptarEntity]` positional mappers beat raw .NET 10 Minimal API across `T0`–`T8` and `T10`, while running declarative `Rule<T>()` validation at **1.99x** the speed of Hono (`36,262` vs `18,256` req/s).
+2. **Lock-Free Group-Commit Write Batcher (`T7` +72%, `T10` +129%):** Under 100-connection concurrent write load, `SqliteDbClient` coalesces queued writes into a single `BEGIN ... COMMIT` transaction—beating raw .NET 10 Minimal API by **+72%** on `T7 create-task` (`6,224` vs `3,628` req/s) and **+129%** on `T10 update-task` (`4,925` vs `2,150` req/s).
+3. **SWR Perimeter Caching (`CacheControl.SWR`):** Enabling `CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30)` accelerates database read endpoints (`T4`–`T6`) to **29.8k–39.2k req/s** at **2.6–3.3 ms p50**.
 
 ## 2. RealWorld (Conduit) Specification Suite
 
