@@ -46,25 +46,48 @@ public static class Jwt
         JwtOptions options,
         string token)
     {
-        if (string.IsNullOrWhiteSpace(options.Secret))
+        if (string.IsNullOrWhiteSpace(options.Secret) || string.IsNullOrEmpty(token))
             return null;
 
-        var parts = token.Split('.');
-
-        if (parts.Length != 3)
+        var firstDot = token.IndexOf('.');
+        if (firstDot <= 0)
             return null;
 
-        var unsigned = $"{parts[0]}.{parts[1]}";
+        var secondDot = token.IndexOf('.', firstDot + 1);
+        if (secondDot <= 0 || secondDot == token.Length - 1)
+            return null;
+
+        var unsignedSpan = token.AsSpan(0, secondDot);
+        var sigSpan = token.AsSpan(secondDot + 1);
+
+#if !NETWASM
+        Span<byte> expectedSig = stackalloc byte[32];
+        Span<byte> keyBytes = stackalloc byte[Encoding.UTF8.GetByteCount(options.Secret)];
+        Encoding.UTF8.GetBytes(options.Secret, keyBytes);
+
+        Span<byte> unsignedBytes = stackalloc byte[Encoding.UTF8.GetByteCount(unsignedSpan)];
+        Encoding.UTF8.GetBytes(unsignedSpan, unsignedBytes);
+
+        System.Security.Cryptography.HMACSHA256.HashData(keyBytes, unsignedBytes, expectedSig);
+        var decodedSig = Base64UrlDecode(sigSpan);
+        if (decodedSig.Length != 32 || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(expectedSig, decodedSig))
+        {
+            return null;
+        }
+#else
+        var unsigned = unsignedSpan.ToString();
         var expected = Base64Url(HexToBytes(
             await crypto.HmacSha256(options.Secret, unsigned)));
 
-        if (!FixedEquals(expected, parts[2]))
+        if (!FixedEquals(expected, sigSpan.ToString()))
             return null;
+#endif
 
         try
         {
-            using var document = JsonDocument.Parse(
-                Encoding.UTF8.GetString(Base64UrlDecode(parts[1])));
+            var payloadSpan = token.AsSpan(firstDot + 1, secondDot - firstDot - 1);
+            var payloadBytes = Base64UrlDecode(payloadSpan);
+            using var document = JsonDocument.Parse(payloadBytes);
 
             var root = document.RootElement;
             var subject = root.GetProperty("sub").GetString();
@@ -159,15 +182,38 @@ public static class Jwt
             .Replace('+', '-')
             .Replace('/', '_');
 
-    private static byte[] Base64UrlDecode(string value)
+    private static byte[] Base64UrlDecode(string value) => Base64UrlDecode(value.AsSpan());
+
+    private static byte[] Base64UrlDecode(ReadOnlySpan<char> value)
     {
-        var normalized = value.Replace('-', '+').Replace('_', '/');
-        var padding = normalized.Length % 4;
+        Span<char> buffer = stackalloc char[value.Length + 4];
+        for (var i = 0; i < value.Length; i++)
+        {
+            var c = value[i];
+            buffer[i] = c == '-' ? '+' : c == '_' ? '/' : c;
+        }
 
+        var padding = value.Length % 4;
+        var totalLen = value.Length;
         if (padding > 0)
-            normalized += new string('=', 4 - padding);
+        {
+            var padCount = 4 - padding;
+            for (var p = 0; p < padCount; p++)
+            {
+                buffer[totalLen++] = '=';
+            }
+        }
 
-        return Convert.FromBase64String(normalized);
+        var byteCount = (totalLen * 3) / 4;
+        var bytes = new byte[byteCount];
+        if (Convert.TryFromBase64Chars(buffer.Slice(0, totalLen), bytes, out var written))
+        {
+            if (written == bytes.Length) return bytes;
+            Array.Resize(ref bytes, written);
+            return bytes;
+        }
+
+        return Convert.FromBase64String(buffer.Slice(0, totalLen).ToString());
     }
 
     private static byte[] HexToBytes(string hex)

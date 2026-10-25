@@ -184,16 +184,22 @@ public sealed class DevCrypto : ICrypto
         if (parts.Length != 4 || parts[0] != "pbkdf2-sha256")
             return Task.FromResult(false);
 
-        var iterations = int.Parse(parts[1]);
+        if (!int.TryParse(parts[1], out var iterations))
+            return Task.FromResult(false);
+
         var salt = Convert.FromBase64String(parts[2]);
         var expected = Convert.FromBase64String(parts[3]);
 
-        var actual = System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(
-            System.Text.Encoding.UTF8.GetBytes(password),
+        Span<byte> actual = stackalloc byte[expected.Length];
+        Span<byte> pwdBytes = stackalloc byte[System.Text.Encoding.UTF8.GetByteCount(password)];
+        System.Text.Encoding.UTF8.GetBytes(password, pwdBytes);
+
+        System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(
+            pwdBytes,
             salt,
+            actual,
             iterations,
-            System.Security.Cryptography.HashAlgorithmName.SHA256,
-            expected.Length);
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
 
         return Task.FromResult(
             System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(actual, expected));
@@ -209,9 +215,9 @@ public sealed class DevCrypto : ICrypto
 
     public Task<string> HmacSha256(string key, string message)
     {
-        using var hmac = new System.Security.Cryptography.HMACSHA256(
-            System.Text.Encoding.UTF8.GetBytes(key));
-        var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(message));
+        var keyBytes = System.Text.Encoding.UTF8.GetBytes(key);
+        var msgBytes = System.Text.Encoding.UTF8.GetBytes(message);
+        var hash = System.Security.Cryptography.HMACSHA256.HashData(keyBytes, msgBytes);
         return Task.FromResult(Convert.ToHexString(hash).ToLowerInvariant());
     }
 
