@@ -26,6 +26,21 @@ var app = ReptarApp.Create(new ReptarConfig
 app.Use(RequestId());
 app.Use(Telemetry());
 app.Use(Cors());
+app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30, options =>
+{
+    options.ShouldCache = ctx =>
+        ctx.Req.Path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase);
+
+    // Article writes can change the tag list as well as the article lists.
+    options.OnInvalidate = (_, path) =>
+    {
+        if (path.StartsWith("/api/articles", StringComparison.OrdinalIgnoreCase))
+            CacheControl.Invalidate("/api/tags");
+
+        if (path.StartsWith("/api/user", StringComparison.OrdinalIgnoreCase))
+            CacheControl.Invalidate("/api/profiles");
+    };
+}));
 
 RealWorld.Configure(app);
 

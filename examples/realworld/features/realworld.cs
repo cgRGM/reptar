@@ -46,6 +46,9 @@ public sealed record RwArticleRow(
 public sealed record RwTagRow(string Name);
 
 [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
+public sealed record RwSlugRow(string Slug);
+
+[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
 public sealed record RwTagIdRow(string Id);
 
 [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
@@ -130,6 +133,8 @@ public static class RealWorld
             "create index if not exists rw_favorites_article_user_idx on rw_favorites(article_id, user_id)");
         await app.ExecuteAsync(
             "create index if not exists rw_follows_follower_followed_idx on rw_follows(follower_id, followed_id)");
+        await app.ExecuteAsync(
+            "create index if not exists rw_articles_author_created_idx on rw_articles(author_id, created_at)");
     }
 
     public static ReptarApp Routes() => ReptarApp.Create()
@@ -563,11 +568,7 @@ public static class RealWorld
         }
 
         var now = ctx.Clock.IsoNow();
-        var slug = await Slugs.UniqueAsync(
-            ctx.Db,
-            RealWorldSchema.Articles,
-            "slug",
-            title.Trim());
+        var slug = await UniqueSlug(ctx, title.Trim());
 
         var article = new RwArticleInsert(
             Ids.New("rwa"),
@@ -677,12 +678,7 @@ public static class RealWorld
 
         if (Has(input, "title") && !string.Equals(title, row.Title, StringComparison.Ordinal))
         {
-            slug = await Slugs.UniqueAsync(
-                ctx.Db,
-                RealWorldSchema.Articles,
-                "slug",
-                title!,
-                row.Id);
+            slug = await UniqueSlug(ctx, title!, row.Id);
         }
 
         await ctx.Db.ExecuteAsync(
@@ -844,20 +840,23 @@ public static class RealWorld
             now,
             now);
 
-        await ctx.Db.ExecuteAsync(
-            """
-            insert into rw_comments
-              (id, article_id, author_id, body, created_at, updated_at)
-            values
-              (@id, @article, @author, @body, @createdAt, @updatedAt)
-            """,
-            Args(
-                ("id", comment.Id),
-                ("article", comment.ArticleId),
-                ("author", comment.AuthorId),
-                ("body", comment.Body),
-                ("createdAt", comment.CreatedAt),
-                ("updatedAt", comment.UpdatedAt)));
+        await ctx.Db.BatchAsync(
+            [
+                new DbStatement(
+                    """
+                    insert into rw_comments
+                      (id, article_id, author_id, body, created_at, updated_at)
+                    values
+                      (@id, @article, @author, @body, @createdAt, @updatedAt)
+                    """,
+                    Args(
+                        ("id", comment.Id),
+                        ("article", comment.ArticleId),
+                        ("author", comment.AuthorId),
+                        ("body", comment.Body),
+                        ("createdAt", comment.CreatedAt),
+                        ("updatedAt", comment.UpdatedAt))),
+            ]);
 
         var row = await CommentRow(ctx, comment.Id, user.Id);
         return ReptarResponse.Json(
@@ -1098,6 +1097,45 @@ public static class RealWorld
         }
 
         return result;
+    }
+
+    private static async Task<string> UniqueSlug(
+        Ctx ctx,
+        string source,
+        string? excludeId = null)
+    {
+        var baseSlug = Slugs.From(source);
+        var prefix = $"{baseSlug}-%";
+        var where = excludeId is null
+            ? "(slug = @slug or slug like @prefix)"
+            : "(slug = @slug or slug like @prefix) and id <> @id";
+        var arguments = Args(("slug", baseSlug), ("prefix", prefix));
+
+        if (excludeId is not null)
+            arguments["id"] = excludeId;
+
+        var rows = await Mapped(
+            ctx,
+            $"""select slug as "slug" from rw_articles where {where}""",
+            arguments,
+            row => new RwSlugRow(Text(row, "slug")));
+
+        var used = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var row in rows)
+            used.Add(row.Slug);
+
+        var candidate = baseSlug;
+
+        for (var suffix = 2; suffix <= 1000; suffix++)
+        {
+            if (!used.Contains(candidate))
+                return candidate;
+
+            candidate = $"{baseSlug}-{suffix}";
+        }
+
+        return $"{baseSlug}-{Ids.New("s").ToLowerInvariant()}";
     }
 
     private static async Task<List<TagPlan>> PlanTags(

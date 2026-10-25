@@ -56,6 +56,7 @@ create table if not exists rw_articles (
 
 create index if not exists rw_articles_author_idx on rw_articles(author_id);
 create index if not exists rw_articles_created_idx on rw_articles(created_at);
+create index if not exists rw_articles_author_created_idx on rw_articles(author_id, created_at);
 
 create table if not exists rw_tags (
   id text primary key,

@@ -1,3 +1,4 @@
+#if !NETWASM
 using System.Text;
 using System.Text.Json;
 using System.Threading.Channels;
@@ -135,3 +136,4 @@ public static class SseExtensions
         return res;
     }
 }
+#endif
