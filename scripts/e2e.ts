@@ -223,30 +223,6 @@ const run = async (): Promise<void> => {
       404
     );
 
-    console.log("\nR2");
-    const binary = new Uint8Array([0, 1, 2, 255, 254]);
-    await assertStatus(
-      "POST /upload (binary)",
-      await fetch(`${baseUrl}/upload?key=e2e.bin`, {
-        body: binary,
-        headers: { "content-type": "application/octet-stream" },
-        method: "POST",
-      }),
-      201
-    );
-    const image = await assertStatus(
-      "GET /images/e2e.bin",
-      await fetch(`${baseUrl}/images/e2e.bin`),
-      200
-    );
-    const imageBytes = new Uint8Array(await image.arrayBuffer());
-    if (
-      imageBytes.length !== binary.length ||
-      binary.some((value, index) => imageBytes[index] !== value)
-    ) {
-      fail("binary upload round-trip changed the bytes");
-    }
-
     console.log("\nAuth");
     const anonymous = await assertStatus(
       "POST /auth/anonymous",
@@ -268,6 +244,61 @@ const run = async (): Promise<void> => {
       }),
       200
     );
+
+    console.log("\nR2 (Authenticated Image Upload)");
+    const pngBytes = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    ]);
+    await assertStatus(
+      "POST /upload (unauthenticated rejected)",
+      await fetch(`${baseUrl}/upload`, {
+        body: pngBytes,
+        headers: { "content-type": "image/png" },
+        method: "POST",
+      }),
+      401
+    );
+    await assertStatus(
+      "POST /upload (SVG / invalid magic bytes rejected)",
+      await fetch(`${baseUrl}/upload`, {
+        body: "<svg onload=alert(1)></svg>",
+        headers: {
+          "content-type": "image/svg+xml",
+          cookie: anonymousCookie,
+        },
+        method: "POST",
+      }),
+      415
+    );
+    const uploadRes = await assertStatus(
+      "POST /upload (valid PNG)",
+      await fetch(`${baseUrl}/upload?key=attacker_ignored.svg`, {
+        body: pngBytes,
+        headers: {
+          "content-type": "image/png",
+          cookie: anonymousCookie,
+        },
+        method: "POST",
+      }),
+      201
+    );
+    const uploaded = await json<{ key: string; url: string }>(uploadRes);
+    if (uploaded.key === "attacker_ignored.svg" || !uploaded.key.endsWith(".png")) {
+      fail(`expected server-generated .png key, got ${uploaded.key}`);
+    }
+    const image = await assertStatus(
+      `GET /images/${uploaded.key}`,
+      await fetch(`${baseUrl}/images/${uploaded.key}`),
+      200
+    );
+    const imageBytes = new Uint8Array(await image.arrayBuffer());
+    if (
+      imageBytes.length !== pngBytes.length ||
+      pngBytes.some((value, index) => imageBytes[index] !== value)
+    ) {
+      fail("PNG upload round-trip changed the bytes");
+    }
+
     await assertStatus(
       "POST /auth/signout",
       await fetch(`${baseUrl}/auth/signout`, {

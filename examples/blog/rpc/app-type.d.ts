@@ -2,9 +2,13 @@
 import type { Endpoint } from "@reptar/client";
 
 import type {
+  BuiltInSocialInput,
+  ChangePasswordInput,
+  CreateApiKeyInput,
   CreatePost,
   ErrorBody,
   Post,
+  RevokeSessionInput,
   SessionResponse,
   SessionUser,
   SignInInput,
@@ -20,8 +24,32 @@ export type AppType = {
     anonymous: {
       $post: Endpoint<undefined, SessionUser | ErrorBody, 201 | 404>;
     };
+    "api-keys": {
+      $get: Endpoint<undefined, unknown, 200>;
+      $post: Endpoint<{ json: CreateApiKeyInput }, unknown, 200>;
+      ":id": {
+        $delete: Endpoint<{ param: { id: string } }, unknown, 200>;
+      };
+    };
+    callback: {
+      ":provider": {
+        $get: Endpoint<{ param: { provider: string } }, unknown, 200>;
+      };
+    };
+    "change-password": {
+      $post: Endpoint<{ json: ChangePasswordInput }, unknown, 200>;
+    };
     session: {
       $get: Endpoint<undefined, SessionResponse, 200>;
+    };
+    sessions: {
+      $get: Endpoint<undefined, unknown, 200>;
+      revoke: {
+        $post: Endpoint<{ json: RevokeSessionInput }, unknown, 200>;
+      };
+      "revoke-others": {
+        $post: Endpoint<undefined, unknown, 200>;
+      };
     };
     signin: {
       $post: Endpoint<
@@ -40,13 +68,16 @@ export type AppType = {
         201 | 400 | 409
       >;
     };
+    social: {
+      $post: Endpoint<{ json: BuiltInSocialInput }, unknown, 200>;
+    };
   };
   health: {
     $get: Endpoint<undefined, unknown, 200>;
   };
   images: {
     ":key": {
-      $get: Endpoint<{ param: { key: string } }, ErrorBody, 200 | 404>;
+      $get: Endpoint<{ param: { key: string } }, ErrorBody, 200 | 400 | 404>;
     };
   };
   me: {
@@ -69,6 +100,10 @@ export type AppType = {
     };
   };
   upload: {
-    $post: Endpoint<undefined, UploadResult, 201>;
+    $post: Endpoint<
+      undefined,
+      UploadResult | ErrorBody,
+      201 | 400 | 401 | 413 | 415
+    >;
   };
 };

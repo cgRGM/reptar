@@ -24,4 +24,12 @@
     <ProjectReference Include="..\Reptar.SourceGenerators\Reptar.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="..\..\examples\blog\schema\posts.cs" Link="BlogExample\schema\posts.cs" />
+    <Compile Include="..\..\examples\blog\schema\index.cs" Link="BlogExample\schema\index.cs" />
+    <Compile Include="..\..\examples\blog\features\posts.cs" Link="BlogExample\features\posts.cs" />
+    <Compile Include="..\..\examples\blog\features\blog.cs" Link="BlogExample\features\blog.cs" />
+    <Compile Include="..\..\examples\blog\local-r2.cs" Link="BlogExample\local-r2.cs" />
+  </ItemGroup>
+
 </Project>

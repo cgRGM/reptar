@@ -241,8 +241,10 @@ export default {
         new Response(object.body, {
           headers: {
             "cache-control": "public, max-age=31536000, immutable",
+            "content-security-policy": "default-src 'none'; sandbox",
             "content-type":
               object.httpMetadata?.contentType ?? "application/octet-stream",
+            "x-content-type-options": "nosniff",
           },
         }),
         origin,
