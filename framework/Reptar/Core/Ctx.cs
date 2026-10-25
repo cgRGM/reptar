@@ -58,6 +58,9 @@ public sealed class Ctx
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value, int status = 200) =>
         ReptarResponse.Json(_services.Json.SerializeUtf8(value), status);
 
+    public ReptarResponse JsonRaw(string json, int status = 200) =>
+        Text(json, status, "application/json; charset=utf-8");
+
     public ReptarResponse Text(string text, int status = 200, string contentType = "text/plain; charset=utf-8") => new()
     {
         Status = status,

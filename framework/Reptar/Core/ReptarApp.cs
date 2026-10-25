@@ -10,6 +10,9 @@ public sealed class RouteMeta
     public Type? InputType { get; internal set; }
     public List<(int Status, Type? Type)> Produces { get; } = new();
     public string? Name { get; internal set; }
+    public string? Summary { get; internal set; }
+    public string? Description { get; internal set; }
+    public List<string> Tags { get; } = new();
     public object? Validator { get; internal set; }
 
     internal RouteMeta CloneWithPath(string path)
@@ -20,10 +23,13 @@ public sealed class RouteMeta
             Path = path,
             InputType = InputType,
             Name = Name,
+            Summary = Summary,
+            Description = Description,
             Validator = Validator,
         };
 
         clone.Produces.AddRange(Produces);
+        clone.Tags.AddRange(Tags);
         return clone;
     }
 }
@@ -120,6 +126,9 @@ public sealed class ReptarApp
     }
 
     public void RegisterSchema(params TableDef[] tables) => Tables.AddRange(tables);
+
+    public IDbClient Db => Services.Db;
+    public IDbClient Database => Services.Db;
 
     public Task EnsureCreatedAsync() =>
         Services.Db.EnsureCreatedAsync(Tables.ToArray());
@@ -910,6 +919,30 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
     public RouteBuilder WithName(string name)
     {
         meta.Name = name;
+        return this;
+    }
+
+    public RouteBuilder WithSummary(string summary)
+    {
+        meta.Summary = summary;
+        return this;
+    }
+
+    public RouteBuilder WithDescription(string description)
+    {
+        meta.Description = description;
+        return this;
+    }
+
+    public RouteBuilder WithTags(params string[] tags)
+    {
+        meta.Tags.AddRange(tags);
+        return this;
+    }
+
+    public RouteBuilder WithTag(string tag)
+    {
+        meta.Tags.Add(tag);
         return this;
     }
 

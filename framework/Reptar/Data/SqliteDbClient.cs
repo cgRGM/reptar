@@ -16,6 +16,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     private readonly SemaphoreSlim _readSemaphore;
     private readonly ConcurrentQueue<SqliteConnection> _readConnections = new();
     private readonly List<SqliteConnection> _allConnections = new();
+    private readonly string _readConnectionString;
     private bool _disposed;
 
     public SqliteDbClient(string path, int maxReadConnections = 0)
@@ -26,6 +27,15 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         _connectionString = path.StartsWith("Data Source=", StringComparison.OrdinalIgnoreCase)
             ? path
             : $"Data Source={path}";
+
+        if (!_isMemory && !_connectionString.Contains("Mode=", StringComparison.OrdinalIgnoreCase))
+        {
+            _readConnectionString = _connectionString.TrimEnd(';') + ";Mode=ReadOnly";
+        }
+        else
+        {
+            _readConnectionString = _connectionString;
+        }
 
         _writeConnection = new SqliteConnection(_connectionString);
         _writeConnection.Open();
@@ -69,7 +79,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
                 if (int.TryParse(envPool, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
                     maxReadConnections = parsed;
                 else
-                    maxReadConnections = Math.Clamp(Environment.ProcessorCount * 2, 4, 16);
+                    maxReadConnections = Math.Clamp(Environment.ProcessorCount * 16, 16, 64);
             }
 
             _readSemaphore = new SemaphoreSlim(maxReadConnections, maxReadConnections);
@@ -119,7 +129,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     private SqliteConnection CreateReadConnection()
     {
-        var connection = new SqliteConnection(_connectionString);
+        var connection = new SqliteConnection(_readConnectionString);
         connection.Open();
         ExecutePragma(connection, "PRAGMA foreign_keys = ON");
         ExecutePragma(connection, "PRAGMA busy_timeout = 5000");
