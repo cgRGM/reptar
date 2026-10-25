@@ -129,9 +129,14 @@ var app = ReptarApp.Create(new ReptarConfig
 });
 ```
 
-### Local & VPS SQLite (32-Channel WAL Read Pool)
+### Local & VPS SQLite (Group-Commit Batcher & WAL Read Pool)
 
-`SqliteDbClient` automatically enables `journal_mode=WAL`, configures a single-writer gate (building commands before acquiring the write lock), and opens a pool of `Mode=ReadOnly` WAL read connections (`Math.Clamp(ProcessorCount * 16, 16, 64)`, configurable via `REPTAR_SQLITE_READ_POOL_SIZE`):
+`SqliteDbClient` is engineered for high-concurrency multi-tenant workloads on a single node:
+
+- **Lock-Free Group-Commit Write Batcher:** Uncontended writes execute immediately without allocation. When concurrent writes arrive while the writer gate is held, `SqliteDbClient` automatically coalesces up to 64 queued statements into a single `BEGIN ... COMMIT` transaction—with automatic rollback and per-statement isolated replay if any single statement violates a constraint.
+- **Per-SQL Mapper Caching:** `EntityMapper<T>.ResolveForSql` caches the resolved positional or ordinal mapper per SQL string so subsequent queries execute zero `GetName(i)` string lookups.
+- **WAL Read Pool:** Opens an adaptive pool of `Mode=ReadOnly` WAL connections (`Math.Clamp(ProcessorCount * 8, 8, 32)`, configurable via `REPTAR_SQLITE_READ_POOL_SIZE`).
+- **Automatic Transient Retry:** Transparently retries `SQLITE_BUSY` (`5`) and `SQLITE_LOCKED` (`6`) with jittered exponential backoff.
 
 ```csharp
 var app = ReptarApp.Create(new ReptarConfig
@@ -144,7 +149,7 @@ var app = ReptarApp.Create(new ReptarConfig
 
 ### PostgreSQL & Cloudflare Hyperdrive
 
-Uses `NpgsqlDataSource` connection pooling and transactional `NpgsqlBatch` pipelining:
+Uses `NpgsqlDataSource` connection pooling, transactional `NpgsqlBatch` pipelining, and automatic jittered backoff retries on transient PostgreSQL serialization/deadlock/connection errors (`40001`, `40P01`, `53300`, `08006`):
 
 ```csharp
 var app = ReptarApp.Create(new ReptarConfig

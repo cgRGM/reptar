@@ -29,7 +29,7 @@ app.Get("/posts/:id", async c =>
 | `c.Queues` | Cloudflare Queues | Message queue producer: `SendAsync(queueName, message)` |
 | `c.AI` | Workers AI | Serverless GPU inference: `RunAsync(model, prompt)` |
 | `c.Durable` | Durable Objects | In-process bridge to stateful actor stubs: `FetchAsync(...)` |
-| `c.Cookies` | Host Cookie Jar | Get, set, and delete cookies with `HttpOnly`, `SameSite`, and `Max-Age` |
+| `c.Cookies` | Host Cookie Jar | Get, set, delete, and HMAC-SHA256 sign/verify cookies (`SetSigned`, `GetSigned`) |
 | `c.Clock` | Host Clock | Deterministic time: `IsoNow()`, `IsoIn(duration)` |
 | `c.Crypto` | Host WebCrypto | PBKDF2 password hashing, SHA-256 tokens, and HMAC-SHA256 signatures |
 | `c.Environment` | Worker / OS env | Reads string env vars and secrets: `Get("STRIPE_KEY")` |
@@ -38,6 +38,7 @@ app.Get("/posts/:id", async c =>
 | `c.User` / `c.UserAsync()` | Auth Slice / Better Auth | Authenticated user record populated by session cookie, bearer token, or API key |
 | `c.WebSocket` | Host WebSocket transport | Sends and closes live WebSocket sessions |
 | `c.Sse(...)` | `Channel<byte[]>` / PipeWriter | Streams Server-Sent Events (`text/event-stream`) with zero intermediate string allocations |
+| `c.StreamLlmAsync(...)` | PipeWriter / TransformStream | Zero-copy LLM token streaming with automatic `ctx.CancellationToken` abort propagation |
 | `c.Json()` | `SourceGenJsonCodec` | Serializes typed JSON responses directly to UTF-8 bytes |
 | `c.Status()` | Core Framework | Returns empty status responses (e.g. `c.Status(204)`) |
 | `c.NotFound()` | Core Framework | Standardized 404 response envelope |

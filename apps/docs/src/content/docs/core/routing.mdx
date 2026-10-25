@@ -90,3 +90,21 @@ app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
 // Allow 60 requests per 60-second sliding window per client IP
 app.Use(RateLimit.SlidingWindow(limit: 60, windowSeconds: 60));
 ```
+
+## Production Ergonomics: Health Probes, Security Headers & Static SPA Serving
+
+Reptar ships zero-config helpers for container and edge production deployments:
+
+```csharp
+// 1. Liveness (/health/live) & DB Readiness (/health/ready with SELECT 1 probe)
+app.MapHealth();
+
+// 2. OWASP Security Headers (nosniff, DENY, HSTS, Referrer-Policy, Permissions-Policy, CSP)
+app.UseSecurityHeaders(opts =>
+{
+    opts.ContentSecurityPolicy = "default-src 'self'";
+});
+
+// 3. Static Asset Serving with ETag (304 Not Modified), Immutable Asset Caching & SPA Fallback
+app.UseStaticFiles("wwwroot");
+```
