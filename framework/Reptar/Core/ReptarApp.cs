@@ -186,11 +186,20 @@ public sealed class ReptarApp
     public RouteBuilder Post(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("POST", path, null, handler);
 
+    public RouteBuilder Post(string path, Func<Ctx, ReptarResponse> handler) =>
+        AddRoute("POST", path, null, ctx => Task.FromResult(handler(ctx)));
+
     public RouteBuilder Post(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("POST", path, middleware, handler);
+
+    public RouteBuilder Post(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, ReptarResponse> handler) =>
+        AddRoute("POST", path, middleware, ctx => Task.FromResult(handler(ctx)));
 
     public RouteBuilder Post<
         [DynamicallyAccessedMembers(
@@ -323,11 +332,20 @@ public sealed class ReptarApp
     public RouteBuilder Delete(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("DELETE", path, null, handler);
 
+    public RouteBuilder Delete(string path, Func<Ctx, ReptarResponse> handler) =>
+        AddRoute("DELETE", path, null, ctx => Task.FromResult(handler(ctx)));
+
     public RouteBuilder Delete(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("DELETE", path, middleware, handler);
+
+    public RouteBuilder Delete(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, ReptarResponse> handler) =>
+        AddRoute("DELETE", path, middleware, ctx => Task.FromResult(handler(ctx)));
 
     public ReptarApp Group(string basePath, Action<ReptarApp>? configure = null)
     {
