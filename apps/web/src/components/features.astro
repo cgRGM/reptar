@@ -25,10 +25,10 @@ const features = [
     title: "Sliding-Window Rate Limiting",
   },
   {
-    code: "ctx.Sse(async stream => ...)",
+    code: "app.GetAiTools() + ctx.StreamLlmAsync()",
     description:
-      "Native Server-Sent Events backed by System.Threading.Channels.Channel<byte[]>. Streams AI tokens and real-time events directly into Kestrel's PipeWriter with automatic flushing and proxy-buffering headers.",
-    title: "Zero-Alloc SSE Streaming",
+      "Turn your REST API into an autonomous Agent Harness. Auto-export routes with Validator<T> rules as OpenAI, Claude, and Gemini tools, dispatch tool calls in-process, and stream tokens with client-abort cancellation.",
+    title: "AI Tools & Agent Harness",
   },
   {
     code: "Reptar.Auth + Better Auth",

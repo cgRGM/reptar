@@ -66,6 +66,12 @@ export default defineConfig({
         },
         {
           items: [
+            { label: "AI Tools & Agent Harness", slug: "ai/agent-harness" },
+          ],
+          label: "AI & Agents",
+        },
+        {
+          items: [
             { label: "Typed Client & OpenAPI 3.1", slug: "client/codegen" },
           ],
           label: "Client & OpenAPI",

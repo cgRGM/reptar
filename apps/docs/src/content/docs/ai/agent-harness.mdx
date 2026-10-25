@@ -1,0 +1,145 @@
+---
+title: AI Tools & Agent Harness
+description: Turn any Reptar REST API into an autonomous Agent Harness with auto-derived tool schemas for OpenAI, Claude, and Gemini, in-process tool execution, and zero-copy LLM streaming.
+---
+
+import { Code } from "@astrojs/starlight/components";
+
+Reptar provides first-class primitives to build ChatGPT-style applications, autonomous AI agents (like `pi` and `fx`), and real-time streaming interfaces.
+
+Because Reptar already maintains route metadata and `Rule<T>` validator constraints, your existing backend routes can be invoked directly by AI agents with zero duplicate schema maintenance.
+
+---
+
+## 1. Route Tool Definition (`.AsAiTool()`)
+
+Register your routes normally with typed input validators, and designate them as AI tools using `.AsAiTool()`:
+
+```csharp
+app.Post("/api/projects/:projectId/tasks", TaskValidator, async (ctx, input) =>
+{
+    var projectId = ctx.Req.Param("projectId");
+    var task = new TaskItem(Ids.New("tsk"), projectId, input.Title, input.Priority, "open");
+    await ctx.Db.InsertAsync(Schema.Tasks, task);
+    return ctx.Json(task, 201);
+})
+    .WithSummary("Create a task")
+    .AsAiTool("create_task", "Creates a new task in the specified project");
+```
+
+- **Path Parameters**: Path variables like `:projectId` are automatically extracted and merged into the tool's required JSON schema.
+- **Validation Constraints**: `Rule<T>` constraints (`.Min()`, `.Max()`, `.Email()`) are mapped directly into JSON Schema validation rules.
+
+---
+
+## 2. Generating Tool Schemas (`app.GetAiTools()`)
+
+Export all registered tools in standard schema formats for **OpenAI, Anthropic Claude, or Google Gemini**:
+
+```csharp
+// OpenAI function calling format
+var openAiTools = app.GetAiTools(AiToolFormat.OpenAi);
+
+// Anthropic Claude format
+var claudeTools = app.GetAiTools(AiToolFormat.Anthropic);
+
+// Google Gemini format
+var geminiTools = app.GetAiTools(AiToolFormat.Gemini);
+```
+
+### Auto-Generated Schema Example
+
+When formatted for OpenAI, Reptar outputs:
+
+```json
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "create_task",
+      "description": "Creates a new task in the specified project",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "projectId": { "type": "string", "description": "Route parameter projectId" },
+          "title": { "type": "string", "minLength": 3, "maxLength": 50 },
+          "priority": { "type": "integer", "minimum": 1, "maximum": 5 }
+        },
+        "required": ["projectId", "title", "priority"]
+      }
+    }
+  }
+]
+```
+
+### Expose Tool Definitions Over HTTP
+
+Serve the tool schemas for ChatGPT plugins, Claude tool-use, or external agents in one line:
+
+```csharp
+app.MapAiTools("/api/ai/tools", AiToolFormat.OpenAi);
+```
+
+---
+
+## 3. In-Process Tool Execution (`app.ExecuteAiToolAsync()`)
+
+When an LLM model issues a tool call, execute it **in-process with zero network hops**:
+
+```csharp
+var result = await app.ExecuteAiToolAsync("create_task", toolCall.ArgumentsJson, ctx);
+```
+
+### Self-Healing Agent Validation
+
+If the model hallucinates invalid arguments (e.g. an empty title or an invalid priority number), `result.ToLlmResponse()` automatically returns the exact validation errors so the model can self-correct:
+
+```
+Error (validation_error): Validation failed. Issues: title: Must be at least 3 characters, priority: Must be at most 5
+```
+
+When the LLM receives this string, modern reasoning models (Claude 3.5 Sonnet, GPT-4o, Gemini 1.5 Pro) immediately fix their parameters and retry.
+
+---
+
+## 4. Autonomous ReAct Agent Loop (`AgentHarness.RunAsync()`)
+
+For multi-turn conversational agents that reason and invoke tools iteratively:
+
+```csharp
+var conversation = new List<ChatMessage>
+{
+    new("user", "Create a high-priority task named 'Ship Reptar v1' in project 'alpha'.")
+};
+
+var runResult = await AgentHarness.RunAsync(
+    model: async (history, ct) => await CallLlmModelAsync(history, ct),
+    history: conversation,
+    toolExecutor: (name, args) => app.ExecuteAiToolAsync(name, args, ctx),
+    maxSteps: 10,
+    onStep: step => ctx.Log.Info($"Agent step: {step.Content}")
+);
+
+// Final answer after all tools executed:
+Console.WriteLine(runResult.FinalContent);
+```
+
+---
+
+## 5. Zero-Copy LLM Streaming (`ctx.StreamLlmAsync()`)
+
+For ChatGPT-style web interfaces and mobile apps (React Native / Expo), stream tokens down via Server-Sent Events (SSE) with instant cancellation:
+
+```csharp
+app.Post("/api/chat", async ctx =>
+{
+    var prompt = ctx.Req.Query("message");
+    var tokenStream = OpenAiClient.StreamTokensAsync(prompt, ctx.CancellationToken);
+
+    // Pipes tokens directly through Kestrel's PipeWriter or Cloudflare's TransformStream:
+    return ctx.StreamLlmAsync(tokenStream);
+});
+```
+
+- **Instant Disconnect Cleanup**: If the user clicks "Stop Generating" or closes their app, `ctx.CancellationToken` aborts immediately, stopping upstream LLM billing.
+- **Done Sentinel**: Emits `data: [DONE]\n\n` automatically when the token stream finishes.
