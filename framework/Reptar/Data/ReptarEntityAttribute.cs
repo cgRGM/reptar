@@ -1,5 +1,10 @@
 namespace Reptar;
 
+public interface IReptarEntity
+{
+    (string Name, object? Value)[] ToDbParameters();
+}
+
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false, AllowMultiple = false)]
 public sealed class ReptarEntityAttribute : Attribute
 {

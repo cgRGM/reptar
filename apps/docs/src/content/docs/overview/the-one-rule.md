@@ -30,9 +30,9 @@ Reptar deliberately departs from enterprise .NET conventions in favor of a minim
 3. **Not Desktop .NET on Workers:**
    - Reptar is not a desktop .NET runtime squeezed onto serverless isolates. It is engineered from day one for minimal Wasm size, instant startup, and AOT compilation.
 
-4. **Zero Runtime Reflection:**
-   - Every hot path is source-generated at build time: JSON serialization, database column-to-property mappers, validator runners, and binding glue.
-   - This ensures full compatibility with both `netwasm0.1` and `net10.0` Native AOT.
+4. **Compile-Time Source Generation (Zero Hot-Path Reflection):**
+   - Every hot path uses compile-time source generation: `[JsonSerializable]` contexts for JSON payloads, `[ReptarEntity]` for `IDataRecordMapper<T>` row readers and `IReptarEntity.ToDbParameters()` write binders, and compiled `Rule<T>` expression trees.
+   - Untyped anonymous objects passed to `InsertAsync`/`UpdateAsync`/`QueryAsync` remain supported on `net10.0` via fallback property inspection, while `[ReptarEntity]` records and value-tuple parameters (`("id", id)`) execute with zero runtime reflection across both `netwasm0.1` and `net10.0` Native AOT.
 
 ---
 

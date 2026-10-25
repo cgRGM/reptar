@@ -137,14 +137,32 @@ public sealed class PostgresDbClient : IDbClient
         return QueryAsync<T>(sql.ToString(), param);
     }
 
-    public Task<int> InsertAsync<T>(TableDef table, T values) where T : class
-    {
-        var json = _json.Serialize(values);
-        return InsertFromJsonAsync(table, json);
-    }
+    public Task<int> InsertAsync<T>(TableDef table, T values) where T : class =>
+        InsertAsync(table, (object)values);
 
     public Task<int> InsertAsync(TableDef table, object values)
     {
+        if (values is IReptarEntity entity)
+        {
+            var rawParams = entity.ToDbParameters();
+            var cols = new List<string>(rawParams.Length);
+            var placeholders = new List<string>(rawParams.Length);
+            var paramValues = new List<object?>(rawParams.Length);
+            var index = 1;
+
+            foreach (var (name, val) in rawParams)
+            {
+                var colName = ResolveColumnName(table, name);
+                cols.Add($"\"{colName}\"");
+                placeholders.Add($"${index}");
+                paramValues.Add(val);
+                index += 1;
+            }
+
+            var sql = $"INSERT INTO \"{table.Name}\" ({string.Join(", ", cols)}) VALUES ({string.Join(", ", placeholders)})";
+            return ExecuteAsync(sql, paramValues.ToArray());
+        }
+
         var json = values is string s && s.TrimStart().StartsWith("{")
             ? s
             : _json.Serialize(values);
@@ -172,14 +190,49 @@ public sealed class PostgresDbClient : IDbClient
         return ExecuteAsync(sql, paramValues.ToArray());
     }
 
-    public Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class
-    {
-        var json = _json.Serialize(values);
-        return UpdateFromJsonAsync(table, json, id);
-    }
+    public Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class =>
+        UpdateAsync(table, (object)values, id);
 
     public Task<int> UpdateAsync(TableDef table, object values, object id)
     {
+        if (values is IReptarEntity entity)
+        {
+            var rawParams = entity.ToDbParameters();
+            var pk = table.SinglePrimaryKey ?? "id";
+            var sets = new List<string>(rawParams.Length);
+            var paramValues = new List<object?>(rawParams.Length + 1);
+            var index = 1;
+
+            foreach (var (name, val) in rawParams)
+            {
+                var colName = ResolveColumnName(table, name);
+                if (string.Equals(colName, pk, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(colName, "created_at", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                sets.Add($"\"{colName}\" = ${index}");
+                paramValues.Add(val);
+                index += 1;
+            }
+
+            if (sets.Count == 0)
+            {
+                return Task.FromResult(0);
+            }
+
+            if (table.Columns.Any(c => string.Equals(c.SqlName, "updated_at", StringComparison.OrdinalIgnoreCase)))
+            {
+                sets.Add("\"updated_at\" = CURRENT_TIMESTAMP");
+            }
+
+            var sql = $"UPDATE \"{table.Name}\" SET {string.Join(", ", sets)} WHERE \"{pk}\" = ${index}";
+            paramValues.Add(id);
+
+            return ExecuteAsync(sql, paramValues.ToArray());
+        }
+
         var json = values is string s && s.TrimStart().StartsWith("{")
             ? s
             : _json.Serialize(values);
@@ -316,6 +369,23 @@ public sealed class PostgresDbClient : IDbClient
         if (param is object?[] arr)
         {
             return (rewrittenSql, arr);
+        }
+
+        if (param is IReptarEntity entity)
+        {
+            var entityParams = entity.ToDbParameters();
+            var entityDict = new Dictionary<string, object?>(entityParams.Length, StringComparer.OrdinalIgnoreCase);
+            for (var i = 0; i < entityParams.Length; i++)
+            {
+                entityDict[entityParams[i].Name] = entityParams[i].Value;
+            }
+
+            var bound = new List<object?>(paramNames.Count);
+            foreach (var name in paramNames)
+            {
+                bound.Add(entityDict.TryGetValue(name, out var val) ? val : null);
+            }
+            return (rewrittenSql, bound.ToArray());
         }
 
         if (param is System.Runtime.CompilerServices.ITuple singleTuple && singleTuple.Length == 2)

@@ -225,6 +225,32 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
 
     public Task<int> InsertAsync(TableDef table, object values)
     {
+        if (values is IReptarEntity entity)
+        {
+            var rawParams = entity.ToDbParameters();
+            var cols = new List<string>(rawParams.Length);
+            var placeholders = new List<string>(rawParams.Length);
+            var paramDict = new Dictionary<string, object?>(rawParams.Length, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var col in table.Columns)
+            {
+                for (var i = 0; i < rawParams.Length; i++)
+                {
+                    if (string.Equals(rawParams[i].Name, col.ClrName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(rawParams[i].Name, col.SqlName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        cols.Add($"`{col.SqlName}`");
+                        placeholders.Add($"@{col.ClrName}");
+                        paramDict[col.ClrName] = rawParams[i].Value;
+                        break;
+                    }
+                }
+            }
+
+            var entitySql = $"INSERT INTO `{table.Name}` ({string.Join(", ", cols)}) VALUES ({string.Join(", ", placeholders)})";
+            return ExecuteAsync(entitySql, paramDict);
+        }
+
         if (values is IDictionary dictionary)
         {
             var cols = new List<string>();
@@ -301,6 +327,34 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
     {
         var primaryKey = table.SinglePrimaryKey
             ?? throw new InvalidOperationException($"Table '{table.Name}' has no single primary key.");
+
+        if (values is IReptarEntity entity)
+        {
+            var rawParams = entity.ToDbParameters();
+            var sets = new List<string>(rawParams.Length);
+            var paramDict = new Dictionary<string, object?>(rawParams.Length + 1, StringComparer.OrdinalIgnoreCase);
+
+            foreach (var col in table.Columns)
+            {
+                if (string.Equals(col.SqlName, primaryKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                for (var i = 0; i < rawParams.Length; i++)
+                {
+                    if (string.Equals(rawParams[i].Name, col.ClrName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(rawParams[i].Name, col.SqlName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        sets.Add($"`{col.SqlName}` = @{col.ClrName}");
+                        paramDict[col.ClrName] = rawParams[i].Value;
+                        break;
+                    }
+                }
+            }
+
+            paramDict["__id"] = id;
+            var entityUpdateSql = $"UPDATE `{table.Name}` SET {string.Join(", ", sets)} WHERE `{primaryKey}` = @__id";
+            return ExecuteAsync(entityUpdateSql, paramDict);
+        }
 
         if (values is IDictionary dictionary)
         {
@@ -450,6 +504,18 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
 
         if (param is null)
             return command;
+
+        if (param is IReptarEntity entity)
+        {
+            var entityParams = entity.ToDbParameters();
+            for (var i = 0; i < entityParams.Length; i++)
+            {
+                var pName = entityParams[i].Name;
+                var name = pName.StartsWith('@') ? pName : "@" + pName;
+                command.Parameters.AddWithValue(name, entityParams[i].Value ?? DBNull.Value);
+            }
+            return command;
+        }
 
         if (param is System.Runtime.CompilerServices.ITuple singleTuple && singleTuple.Length == 2)
         {

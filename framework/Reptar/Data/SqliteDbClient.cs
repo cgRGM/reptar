@@ -455,6 +455,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
                     long executeStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
                     using (command)
                     {
+                        command.Transaction = null;
                         var result = ExecuteNonQueryWithRetry(command);
                         if (observer is not null)
                         {
@@ -563,21 +564,29 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         try
         {
             using var transaction = _writeConnection.BeginTransaction();
-            for (var i = 0; i < _batchBuffer.Count; i++)
-            {
-                var cmd = _batchBuffer[i].Command;
-                cmd.Transaction = transaction;
-                results[i] = cmd.ExecuteNonQuery();
-            }
 
-            transaction.Commit();
-            batchSucceeded = true;
+            try
+            {
+                for (var i = 0; i < _batchBuffer.Count; i++)
+                {
+                    var cmd = _batchBuffer[i].Command;
+                    cmd.Transaction = transaction;
+                    results[i] = cmd.ExecuteNonQuery();
+                }
+
+                transaction.Commit();
+                batchSucceeded = true;
+            }
+            catch
+            {
+                // Roll back explicitly so the connection has no active
+                // transaction when the fallback replays statements individually.
+                transaction.Rollback();
+            }
         }
         catch
         {
-            // Batch failed (e.g., constraint violation on one statement).
-            // Rollback is automatic on Dispose of uncommitted transaction.
-            // Fall through to isolated per-statement execution below.
+            // BeginTransaction/rollback failed; fall through to isolated execution.
         }
 
         if (batchSucceeded)
@@ -626,6 +635,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         {
             using (item.Command)
             {
+                item.Command.Transaction = null;
                 var rows = ExecuteNonQueryWithRetry(item.Command);
                 if (observer is not null)
                 {
@@ -801,6 +811,32 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     public Task<int> InsertAsync(TableDef table, object values)
     {
+        if (values is IReptarEntity entity)
+        {
+            var rawParams = entity.ToDbParameters();
+            var cols = new List<string>(rawParams.Length);
+            var pnames = new List<string>(rawParams.Length);
+            var boundParams = new List<(string Name, object? Value)>(rawParams.Length);
+
+            foreach (var column in table.Columns)
+            {
+                for (var i = 0; i < rawParams.Length; i++)
+                {
+                    if (string.Equals(rawParams[i].Name, column.ClrName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(rawParams[i].Name, column.SqlName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        cols.Add($"\"{column.SqlName}\"");
+                        pnames.Add("@" + column.ClrName);
+                        boundParams.Add((column.ClrName, rawParams[i].Value));
+                        break;
+                    }
+                }
+            }
+
+            var entitySql = $"INSERT INTO \"{table.Name}\" ({string.Join(", ", cols)}) VALUES ({string.Join(", ", pnames)})";
+            return ExecuteAsync(entitySql, boundParams.ToArray());
+        }
+
         if (values is IDictionary dictionary)
         {
             var cols = new List<string>();
@@ -877,6 +913,34 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         var primaryKey = table.SinglePrimaryKey
             ?? throw new InvalidOperationException(
                 $"Table '{table.Name}' has no single primary key.");
+
+        if (values is IReptarEntity entity)
+        {
+            var rawParams = entity.ToDbParameters();
+            var sets = new List<string>(rawParams.Length);
+            var boundParams = new List<(string Name, object? Value)>(rawParams.Length + 1);
+
+            foreach (var column in table.Columns)
+            {
+                if (string.Equals(column.SqlName, primaryKey, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                for (var i = 0; i < rawParams.Length; i++)
+                {
+                    if (string.Equals(rawParams[i].Name, column.ClrName, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(rawParams[i].Name, column.SqlName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        sets.Add($"\"{column.SqlName}\" = @{column.ClrName}");
+                        boundParams.Add((column.ClrName, rawParams[i].Value));
+                        break;
+                    }
+                }
+            }
+
+            boundParams.Add(("__id", id));
+            var entityUpdateSql = $"UPDATE \"{table.Name}\" SET {string.Join(", ", sets)} WHERE \"{primaryKey}\" = @__id";
+            return ExecuteAsync(entityUpdateSql, boundParams.ToArray());
+        }
 
         if (values is IDictionary dictionary)
         {
@@ -1111,6 +1175,18 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         if (param is null)
             return command;
+
+        if (param is IReptarEntity entity)
+        {
+            var entityParams = entity.ToDbParameters();
+            for (var i = 0; i < entityParams.Length; i++)
+            {
+                var n = entityParams[i].Name.StartsWith('@') ? entityParams[i].Name : "@" + entityParams[i].Name;
+                command.Parameters.AddWithValue(n, entityParams[i].Value ?? DBNull.Value);
+            }
+
+            return command;
+        }
 
         if (param is System.Runtime.CompilerServices.ITuple singleTuple && singleTuple.Length == 2)
         {

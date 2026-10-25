@@ -156,5 +156,59 @@ public class ReptarEntityTests
         Assert.True(typeof(IDataRecordMapper<OrderEntity>).IsAssignableFrom(typeof(OrderEntity)));
         Assert.True(typeof(IDataRecordMapper<ProductClass>).IsAssignableFrom(typeof(ProductClass)));
         Assert.True(typeof(IDataRecordMapper<MetricStruct>).IsAssignableFrom(typeof(MetricStruct)));
+        Assert.True(typeof(IReptarEntity).IsAssignableFrom(typeof(OrderEntity)));
+        Assert.True(typeof(IReptarEntity).IsAssignableFrom(typeof(ProductClass)));
+        Assert.True(typeof(IReptarEntity).IsAssignableFrom(typeof(MetricStruct)));
+    }
+
+    [Fact]
+    public async Task InsertAsync_and_UpdateAsync_use_generated_IReptarEntity_parameters_without_reflection()
+    {
+        var productsTable = ReptarApi.DefineTable("products", new
+        {
+            Sku = ReptarApi.Col.Text("sku").PrimaryKey(),
+            Title = ReptarApi.Col.Text("title").NotNull(),
+            Price = ReptarApi.Col.Real("price").NotNull(),
+            InStock = ReptarApi.Col.Int("in_stock").NotNull(),
+            CategoryId = ReptarApi.Col.Int("category_id")
+        });
+
+        using var db = new SqliteDbClient(":memory:");
+        await db.EnsureCreatedAsync(productsTable);
+
+        var item = new ProductClass
+        {
+            Sku = "SKU-AOT-1",
+            Title = "Keycap Puller",
+            Price = 12.50,
+            InStock = true,
+            CategoryId = 7
+        };
+
+        var entityParams = ((IReptarEntity)item).ToDbParameters();
+        Assert.Equal(5, entityParams.Length);
+        Assert.Contains(entityParams, p => p.Name == "Sku" && Equals(p.Value, "SKU-AOT-1"));
+
+        var inserted = await db.InsertAsync(productsTable, item);
+        Assert.Equal(1, inserted);
+
+        var updatedItem = new ProductClass
+        {
+            Sku = "SKU-AOT-1",
+            Title = "Pro Keycap Puller",
+            Price = 15.00,
+            InStock = false,
+            CategoryId = 9
+        };
+
+        var updated = await db.UpdateAsync(productsTable, updatedItem, "SKU-AOT-1");
+        Assert.Equal(1, updated);
+
+        var fetched = await db.GetAsync<ProductClass>(productsTable, "SKU-AOT-1");
+        Assert.NotNull(fetched);
+        Assert.Equal("Pro Keycap Puller", fetched!.Title);
+        Assert.Equal(15.00, fetched.Price);
+        Assert.False(fetched.InStock);
+        Assert.Equal(9, fetched.CategoryId);
     }
 }
