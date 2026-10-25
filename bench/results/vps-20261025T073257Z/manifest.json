@@ -1,0 +1,23 @@
+{
+  "stamp": "20261025T073257Z",
+  "hostname": "ip-172-26-11-201",
+  "kernel": "Linux 7.0.0-1012-aws x86_64",
+  "cpu": "CPU(s):                                  2|Model name:                              Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz|Thread(s) per core:                      2|Core(s) per socket:                      1|Socket(s):                               1|",
+  "memory": "Mem:           3.7Gi       728Mi       1.9Gi       2.8Mi       1.5Gi       3.0Gi",
+  "bun": "1.4.4",
+  "dotnet": "10.0.402",
+  "oha": "oha 1.16.0",
+  "gitCommit": "unknown",
+  "binarySizes": {
+    "reptar": 10946088,
+    "minimalApi": 10920632,
+    "hono": 109365424
+  },
+  "config": {
+    "connections": 100,
+    "duration": 10,
+    "warmup": 3,
+    "reps": 3,
+    "only": ""
+  }
+}

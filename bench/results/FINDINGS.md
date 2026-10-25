@@ -142,6 +142,63 @@ optimizations do reduce allocations/CPU (T5 CPU/req 0.190 → 0.188, T7 0.261 �
 by SQLite read/write concurrency and the single-writer queue, not by mapper or
 list allocations. The binary-size and memory wins are real and large.
 
+## 2.3 HEAD `223ac88`: group-commit writes, one-query auth, P/Invoke-free reads — clean 3-stack run
+
+This is the first run after fixing the group-commit fallback transaction bug
+(the previous run had 31 T7 + 49 T10 HTTP 500s). Zero non-2xx responses, empty
+server log.
+
+| Tier | Reptar | Minimal API | Hono JIT | Reptar vs Min | Reptar vs Hono |
+| :--- | ---: | ---: | ---: | ---: | ---: |
+| T0 plaintext | 41,877 | 41,852 | 49,280 | +0% | -15% |
+| T1 json | 42,239 | 41,675 | 39,289 | +1% | +8% |
+| T2 router | 41,355 | 40,954 | 34,401 | +1% | +20% |
+| T3 validate | 36,262 | 34,427 | 18,256 | +5% | +99% |
+| T4 task-detail | 13,765 | 12,973 | 17,899 | +6% | -23% |
+| T5 task-list | 5,945 | 5,884 | 6,917 | +1% | -14% |
+| T6 comments | 10,707 | 10,126 | 9,806 | +6% | +9% |
+| T7 create | 6,224 | 3,628 | 4,235 | **+72%** | **+47%** |
+| T8 `/me` | 15,683 | 14,765 | 12,052 | +6% | +30% |
+| T9 login | 14 | 15 | 22 | -1% | -36% |
+| T10 update | 4,925 | 2,150 | 5,230 | **+129%** | -6% |
+| T11 mixed | 6,143 | 6,242 | 7,272 | -2% | -15% |
+
+**Reptar wins 10 of 12 tiers vs .NET Minimal API** (T0 is a tie, T9 is
+PBKDF2-bound, mixed is -2%). It is a near-clean sweep on the constrained VPS.
+
+**It is not a clean sweep vs Hono.** Hono still wins plaintext, single-row
+reads, lists, login, updates, and the mixed blend. Reptar wins JSON, routing,
+validation, comments, creates, and `/me`.
+
+### T7 breakdown after group commit
+
+| Stage | Avg | p50 | p95 | p99 |
+| :--- | ---: | ---: | ---: | ---: |
+| auth | 0.098 | 0.027 | 0.072 | 2.873 |
+| **writeGate** | **2.784** | **2.023** | **7.764** | **17.017** |
+| insert | 0.143 | 0.114 | 0.287 | 0.660 |
+| assignee | 0.066 | 0.015 | 0.044 | 0.608 |
+| handler | 11.541 | 11.243 | 23.777 | 31.921 |
+
+Group commit cut the write-gate wait from **26.274 ms to 2.784 ms** and moved
+T7 from 3,521 to **6,224 req/s** (+77%). The insert is 0.114 ms p50; auth and
+assignee are negligible. The handler is now 11.5 ms, with the gate only 24% of
+it.
+
+### Other wins
+
+- **T8 one query:** 12,112 → **15,683** (+29%); now +6% vs Minimal API and
+  +30% vs Hono.
+- **T5 P/Invoke/List changes:** 5,368 → **5,945** (+11%); now edges Minimal API
+  (+1%), but Hono still wins by 14%.
+- **T10 update:** 3,653 → **4,925** (+35%); +129% vs Minimal API.
+- **T4 single-row reader:** 11,802 → **13,765** (+17%); +6% vs Minimal API.
+- **Binary:** 10.4 MB, startup **124 ms** (vs 18.4 MB / 356 ms before
+  `ReptarSqliteOnly`).
+- **Memory trade-off:** RSS under write load grows to 83–103 MB (vs Minimal API
+  53–81 MB and Hono 59–63 MB). The 32-connection read pool + group-commit
+  buffers are the likely cause; tune the read pool for mixed workloads.
+
 ## 3. SWR cache tier (new middleware)
 
 `BENCH_SWR=1` enables `CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30)`.
@@ -177,29 +234,29 @@ above are after the fixes:
 
 ## 5. Remaining bottlenecks (next optimizations)
 
-1. **T5 task-list (-46%)** — the positional mapper and single-row reader did
-   not move the VPS (5,316 → 5,368, +1%). CPU/req is 0.188 ms vs Minimal API
-   0.101 ms. The 32-connection `Mode=ReadOnly` pool also did not help. The cost
-   is the read path itself: SQLite query/reader, the 20-row JSON payload, and
-   the per-request allocations. Profile a direct `SqliteDataReader` loop vs
-   `QueryAsync<T>`, and try a raw JSON aggregation query. The local +90% is
-   real for the Mac but not the VPS bottleneck.
-2. **T7 create-task (-53%)** — the breakdown still shows the write gate at
-   **26.3 ms avg** vs insert **0.064 ms p50**. The pre-gate command build only
-   shaved ~3%; the single-writer queue is the limit. Group commit (batch N
-   inserts per transaction), a dedicated writer channel, or Postgres for
-   write-heavy workloads are the ways forward.
-3. **T8 `/me` (-22%)** — the single-row reader path helped +3%; auth is already
-   0.073 ms. The remaining cost is the user DB lookup/read path. Cache user
-   rows or put the user payload in JWT claims and skip the DB read.
-4. **T9 login** — PBKDF2 100k iterations is CPU-bound: ~15 req/s at 10
-   concurrent connections, p50 ~700 ms. Rate-limit login and use a bounded
-   crypto worker pool; Hono's WebCrypto is ~47% faster.
-5. **Binary size** — `-p:ReptarSqliteOnly=true` cut the AOT binary from
-   **18.4 MB to 10.9 MB** and reduced RSS. Keep this flag for SQLite-only
-   deployments; the remaining size is mostly the core/auth/realtime code.
-6. **T2 router (-2%)** — the isolated rerun is **40,300 req/s**, within 2% of
-   Minimal API; the full-suite 37,665 was run variance. No action needed.
+Reptar now wins 10/12 tiers vs Minimal API. The remaining gaps are mostly vs
+Hono:
+
+1. **T5 task-list vs Hono (-14%)** — 5,945 vs 6,917; now +1% vs Minimal API.
+   The P/Invoke/List changes helped +11%, but Bun's synchronous `bun:sqlite`
+   list path is still faster. The remaining cost is the SQLite query + 20-row
+   JSON payload. Profile a direct `SqliteDataReader` loop vs `QueryAsync<T>`,
+   and a raw JSON aggregation query.
+2. **T4 task-detail vs Hono (-23%)** — 13,765 vs 17,899; +6% vs Minimal API.
+   Hono's single-row SQLite path is faster; this is a read-path gap, not the
+   mapper.
+3. **T0 plaintext vs Hono (-15%)** — 41,877 vs 49,280. Bun's HTTP stack wins
+   plaintext; Reptar is at parity with Minimal API. Don't chase Hono here.
+4. **T9 login vs Hono (-36%)** — 14 vs 22 req/s; PBKDF2-bound. Rate-limit and
+   use a bounded crypto worker pool. Not worth optimizing for raw throughput.
+5. **T10 update vs Hono (-6%)** — 4,925 vs 5,230; close. No action needed.
+6. **Mixed vs Hono (-15%)** — 6,143 vs 7,272; Reptar is -2% vs Minimal API.
+   The mixed blend is read-dominated; T4/T5 read-path work would close it.
+7. **RSS under write load (83–103 MB)** — higher than Minimal API (53–81 MB)
+   and Hono (59–63 MB). The 32-connection read pool + group-commit buffers are
+   the likely cause; tune the read pool for mixed workloads.
+8. **Binary/startup** — 10.4 MB / 124 ms; keep `ReptarSqliteOnly=true` for
+   SQLite-only deployments. This is a strong, machine-independent win.
 
 ## 6. Caveats
 

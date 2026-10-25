@@ -164,6 +164,9 @@ const totalFromResult = (result: OhaResult): number => {
 
 const fetchJson = async (requestPath: string, method = "GET"): Promise<unknown> => {
   const response = await fetch(`${baseUrl}${requestPath}`, { method });
+  if (response.status === 404) {
+    return undefined;
+  }
   if (!response.ok) {
     throw new Error(`${method} ${requestPath} -> ${response.status}`);
   }
@@ -172,6 +175,9 @@ const fetchJson = async (requestPath: string, method = "GET"): Promise<unknown> 
 
 const postPath = async (requestPath: string): Promise<void> => {
   const response = await fetch(`${baseUrl}${requestPath}`, { method: "POST" });
+  if (response.status === 404) {
+    return;
+  }
   if (!response.ok) {
     throw new Error(`POST ${requestPath} -> ${response.status}`);
   }
@@ -225,9 +231,14 @@ const runOha = (scenario: Scenario, seconds: number): OhaResult => {
 
 const sample = (result: OhaResult): RunSample => {
   const totalRequests = totalFromResult(result);
-  const errors = Object.entries(result.errorDistribution ?? {})
-    .filter(([name]) => name !== "aborted due to deadline")
+  const non2xx = Object.entries(result.statusCodeDistribution ?? {})
+    .filter(([status]) => !status.startsWith("2"))
     .reduce((sum, [, count]) => sum + count, 0);
+  const errors =
+    non2xx +
+    Object.entries(result.errorDistribution ?? {})
+      .filter(([name]) => name !== "aborted due to deadline")
+      .reduce((sum, [, count]) => sum + count, 0);
 
   return {
     errors,

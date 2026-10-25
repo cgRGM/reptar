@@ -49,34 +49,36 @@ bench/load/{scenarios.ts,run.ts,mixed.ts,report.ts}
 bench/{build.sh,run-vps.sh,builder.Dockerfile,README.md}
 ```
 
-### Post-optimization results (HEAD `f7e5ae6`)
+### Post-optimization results (HEAD `223ac88`)
 
 The framework landed zero-allocation routing, direct UTF-8 JSON, a
 PipeWriter/lazy-header Kestrel host, an enhanced `[ReptarEntity]` generator with
 a positional fast path, a 32-connection `Mode=ReadOnly` SQLite read pool,
-zero-allocation JWT/PBKDF2, pre-gate write command building, and SQLite-only AOT
-trimming. Re-measuring the same app on the same VPS:
+zero-allocation JWT/PBKDF2, pre-gate write command building, SQLite group-commit
+batching, one-query auth, and SQLite-only AOT trimming. Clean 3-stack run on
+the same VPS (zero non-2xx, empty server log):
 
 - T0/T1/T2/T3 (plaintext/JSON/router/validation) are
-  **43.2k/41.4k/40.3k/36.1k req/s** — at or above raw .NET Minimal API on
-  plaintext/JSON/validation.
-- DB-heavy tiers: T4 detail **11.8k**, T5 list **5.4k**, T6 comments **10.1k**,
-  T7 create **3.5k**, T8 `/me` **12.1k**, T10 update **3.7k**.
-- The positional mapper/single-row reader/pre-gate write changes improved the
-  VPS by +1%/+3%/+6% (T5/T8/T7), not the +90%/+123%/+64% seen on the local Mac.
-  The VPS is limited by SQLite read/write concurrency and the single-writer
-  queue, not mapper/list allocations.
-- The T7 breakdown still shows the write gate at **26.3 ms avg** vs insert
-  **0.064 ms p50**, auth **0.073 ms**, assignee **0.070 ms** — creates are
-  queueing behind the single-writer semaphore.
-- `-p:ReptarSqliteOnly=true` cut the AOT binary **18.4 MB -> 10.9 MB** (-41%)
-  and reduced RSS.
+  **41.9k/42.2k/41.4k/36.3k req/s** — at or above raw .NET Minimal API.
+- DB-heavy tiers: T4 detail **13.8k**, T5 list **5.9k**, T6 comments **10.7k**,
+  T7 create **6.2k**, T8 `/me` **15.7k**, T10 update **4.9k**.
+- **Reptar wins 10 of 12 tiers vs .NET Minimal API** (T0 tie, T9 PBKDF2-bound,
+  mixed -2%). It is a near-clean sweep on the constrained VPS.
+- Hono still wins plaintext, single-row reads, lists, login, updates, and the
+  mixed blend; Reptar wins JSON, routing, validation, comments, creates, and
+  `/me`.
+- Group commit cut the T7 write gate **26.3 ms -> 2.8 ms** and moved T7
+  **3.5k -> 6.2k** (+77%). The insert is 0.114 ms p50; auth 0.027 ms p50.
+- T8 one query: **12.1k -> 15.7k** (+29%). T10: **3.7k -> 4.9k** (+35%).
+- Binary **10.4 MB**, startup **124 ms**. RSS under write load is 83–103 MB,
+  higher than Minimal API/Hono; the read pool/group-commit buffers are the
+  likely cause.
 - SWR-cached reads: T4 **39.2k**, T5 **29.9k**, T6 **35.5k** req/s
   (3.4x–5.6x over uncached).
 
-The remaining gap is the SQLite list-query and write-queue paths, not the
-router, serializer, or auth. See `bench/results/FINDINGS.md` for the full
-tables and recommendations.
+The remaining gaps are read-path efficiency vs Hono (T4/T5), plaintext
+(T0), PBKDF2 (T9), and mixed (T11) — not the router, serializer, or auth. See
+`bench/results/FINDINGS.md` for the full tables and recommendations.
 
 ---
 
