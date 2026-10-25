@@ -25,7 +25,7 @@ var app = ReptarApp.Create(new ReptarConfig
 
 app.Use(RequestId());
 app.Use(Telemetry());
-app.Use(Cors());
+app.Use(Cors("http://localhost:4321", "http://localhost:5173", "http://localhost:3000"));
 
 Blog.Configure(app);
 

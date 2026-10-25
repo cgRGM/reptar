@@ -95,6 +95,12 @@ public static class ReptarApi
 
     public static ReptarMiddleware Cors() => Middlewares.Cors();
 
+    public static ReptarMiddleware Cors(params string[] allowedOrigins) =>
+        Middlewares.Cors(allowedOrigins);
+
+    public static ReptarMiddleware Cors(CorsOptions? options) =>
+        Middlewares.Cors(options);
+
     public static ReptarMiddleware Telemetry() => Middlewares.Telemetry();
 
     public static ReptarMiddleware RateLimit(

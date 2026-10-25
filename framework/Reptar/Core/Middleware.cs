@@ -6,6 +6,36 @@ public delegate Task<ReptarResponse> ReptarMiddleware(
     Ctx ctx,
     Func<Task<ReptarResponse>> next);
 
+public sealed class CorsOptions
+{
+    public string[] AllowedOrigins { get; set; } = [];
+
+    public string[] AllowOrigins
+    {
+        get => AllowedOrigins;
+        set => AllowedOrigins = value;
+    }
+
+    public string[] AllowedMethods { get; set; } = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
+
+    public string[] AllowMethods
+    {
+        get => AllowedMethods;
+        set => AllowedMethods = value;
+    }
+
+    public string[] AllowedHeaders { get; set; } = ["Content-Type", "Authorization"];
+
+    public string[] AllowHeaders
+    {
+        get => AllowedHeaders;
+        set => AllowedHeaders = value;
+    }
+
+    public bool AllowCredentials { get; set; } = true;
+    public int MaxAgeSeconds { get; set; } = 86_400;
+}
+
 public static class Middlewares
 {
     public static ReptarMiddleware RequestId() => async (ctx, next) =>
@@ -23,23 +53,104 @@ public static class Middlewares
         return response;
     };
 
-    public static ReptarMiddleware Cors() => async (ctx, next) =>
+    public static ReptarMiddleware Cors() => Cors((CorsOptions?)null);
+
+    public static ReptarMiddleware Cors(params string[] allowedOrigins) =>
+        Cors(new CorsOptions { AllowedOrigins = allowedOrigins });
+
+    public static ReptarMiddleware Cors(CorsOptions? options)
     {
-        var origin = ctx.Req.Header("Origin");
+        var opts = options ?? new CorsOptions();
+        var methodsHeader = string.Join(", ", opts.AllowedMethods);
+        var headersHeader = string.Join(", ", opts.AllowedHeaders);
+        var maxAgeHeader = opts.MaxAgeSeconds > 0 ? opts.MaxAgeSeconds.ToString() : null;
 
-        if (origin is not null)
+        return async (ctx, next) =>
         {
-            ctx.SetHeader("Access-Control-Allow-Origin", origin);
-            ctx.SetHeader("Access-Control-Allow-Credentials", "true");
-            ctx.SetHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-            ctx.SetHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+            var origin = ctx.Req.Header("Origin")?.Trim();
+            if (string.IsNullOrEmpty(origin))
+                return await next();
 
-            if (ctx.Req.Method == "OPTIONS")
+            var isAllowed = IsOriginAllowed(origin, opts.AllowedOrigins, ctx.Environment.Get("CORS_ORIGINS"));
+            var isPreflight = string.Equals(ctx.Req.Method, "OPTIONS", StringComparison.OrdinalIgnoreCase);
+
+            if (!isAllowed)
+            {
+                if (isPreflight)
+                    return ctx.Status(403);
+
+                return await next();
+            }
+
+            var allowWildcard = !opts.AllowCredentials && HasWildcardOrigin(opts.AllowedOrigins, ctx.Environment.Get("CORS_ORIGINS"));
+            var allowOriginValue = allowWildcard ? "*" : origin;
+
+            ctx.SetHeader("Access-Control-Allow-Origin", allowOriginValue);
+            if (!allowWildcard)
+                ctx.SetHeader("Vary", "Origin");
+
+            if (opts.AllowCredentials && !allowWildcard)
+                ctx.SetHeader("Access-Control-Allow-Credentials", "true");
+
+            if (isPreflight)
+            {
+                ctx.SetHeader("Access-Control-Allow-Methods", methodsHeader);
+                ctx.SetHeader("Access-Control-Allow-Headers", headersHeader);
+                if (maxAgeHeader is not null)
+                    ctx.SetHeader("Access-Control-Max-Age", maxAgeHeader);
+
                 return ctx.Status(204);
+            }
+
+            return await next();
+        };
+    }
+
+    private static bool IsOriginAllowed(string origin, string[] configuredOrigins, string? envOrigins)
+    {
+        var normalizedOrigin = origin.TrimEnd('/');
+
+        for (var i = 0; i < configuredOrigins.Length; i++)
+        {
+            var candidate = configuredOrigins[i].Trim().TrimEnd('/');
+            if (candidate.Length == 0)
+                continue;
+            if (candidate == "*" || string.Equals(candidate, normalizedOrigin, StringComparison.OrdinalIgnoreCase))
+                return true;
         }
 
-        return await next();
-    };
+        if (!string.IsNullOrWhiteSpace(envOrigins))
+        {
+            foreach (var part in envOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                var candidate = part.TrimEnd('/');
+                if (candidate == "*" || string.Equals(candidate, normalizedOrigin, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasWildcardOrigin(string[] configuredOrigins, string? envOrigins)
+    {
+        for (var i = 0; i < configuredOrigins.Length; i++)
+        {
+            if (configuredOrigins[i].Trim() == "*")
+                return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(envOrigins))
+        {
+            foreach (var part in envOrigins.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (part == "*")
+                    return true;
+            }
+        }
+
+        return false;
+    }
 
     public static ReptarMiddleware Telemetry() => async (ctx, next) =>
     {
