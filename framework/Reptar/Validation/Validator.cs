@@ -56,9 +56,36 @@ public sealed class Validator<T> : IValidatorMeta
         var rules = PropertyRules.Create(propertyInfo.PropertyType, meta);
         configure(rules);
 
+        Func<T, object?> getter = value => value is null ? null : propertyInfo.GetValue(value);
+
         _properties.Add(new PropertyRule(
             name,
-            property.Compile(),
+            getter,
+            rules));
+
+        _propertyMetas.Add(meta);
+
+        return this;
+    }
+
+    public Validator<T> Prop<TProp>(
+        string name,
+        Func<T, TProp> getter,
+        Action<PropertyRules> configure)
+    {
+        var propName = Camelize(name);
+        var meta = new PropertyRuleMeta
+        {
+            Name = propName,
+            PropertyType = typeof(TProp),
+        };
+
+        var rules = PropertyRules.Create(typeof(TProp), meta);
+        configure(rules);
+
+        _properties.Add(new PropertyRule(
+            propName,
+            value => value is null ? null : getter(value),
             rules));
 
         _propertyMetas.Add(meta);

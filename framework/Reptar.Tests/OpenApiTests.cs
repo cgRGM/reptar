@@ -104,6 +104,17 @@ public class OpenApiTests
     }
 
     [Fact]
+    public void SourceGenJsonCodec_resolves_app_and_internal_error_types()
+    {
+        var codec = new SourceGenJsonCodec();
+        var errBytes = codec.SerializeUtf8(new ErrorBody("not_found", "Missing", "req_1"));
+        var roundTrip = codec.Deserialize<ErrorBody>(errBytes.AsSpan());
+        Assert.NotNull(roundTrip);
+        Assert.Equal("not_found", roundTrip.Code);
+        Assert.Equal("Missing", roundTrip.Message);
+    }
+
+    [Fact]
     public async Task UseScalar_and_UseSwaggerUi_serve_interactive_ui_pages()
     {
         var app = ReptarApp.Create();
