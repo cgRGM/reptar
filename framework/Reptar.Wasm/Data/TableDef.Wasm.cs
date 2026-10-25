@@ -78,6 +78,46 @@ public static class SchemaRegistry
         _tables.Add(table);
         return table;
     }
+
+    public static string ExportJson(IEnumerable<TableDef>? appTables = null)
+    {
+        var tables = new List<TableDef>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        if (appTables is not null)
+        {
+            foreach (var t in appTables)
+            {
+                if (seen.Add(t.Name))
+                    tables.Add(t);
+            }
+        }
+
+        foreach (var t in _tables)
+        {
+            if (seen.Add(t.Name))
+                tables.Add(t);
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("{\"tables\":[");
+        for (var i = 0; i < tables.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            var t = tables[i];
+            sb.Append("{\"name\":\"").Append(t.Name).Append("\",\"columns\":[");
+            for (var c = 0; c < t.Columns.Length; c++)
+            {
+                if (c > 0) sb.Append(',');
+                var col = t.Columns[c];
+                sb.Append("{\"name\":\"").Append(col.SqlName)
+                  .Append("\",\"type\":\"").Append(col.SqlType).Append("\"}");
+            }
+            sb.Append("]}");
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
 }
 
 public sealed class TableDef
