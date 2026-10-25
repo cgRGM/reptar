@@ -147,6 +147,93 @@ public sealed class SecurityAndCacheTests
         Assert.Equal(429, r2.Status);
     }
 
+    [Fact]
+    public async Task SwrCache_IsolatesAppInstances_EnforcesMaxEntriesMaxBodyBytes_AndHonorsVaryHeaders()
+    {
+        CacheControl.PurgeAll();
+
+        // 1. Instance isolation: two apps with same path do not share cached responses
+        var appA = ReptarApp.Create();
+        appA.Use(CacheControl.SWR(ttlSeconds: 30, swrSeconds: 60));
+        appA.Get("/api/info", ctx => ctx.Text("app-a"));
+
+        var appB = ReptarApp.Create();
+        appB.Use(CacheControl.SWR(ttlSeconds: 30, swrSeconds: 60));
+        appB.Get("/api/info", ctx => ctx.Text("app-b"));
+
+        var resA = await appA.HandleAsync(new ReptarRequest { Method = "GET", Path = "/api/info" });
+        var resB = await appB.HandleAsync(new ReptarRequest { Method = "GET", Path = "/api/info" });
+
+        Assert.Equal("MISS", resA.Headers["X-Cache"]);
+        Assert.Equal("MISS", resB.Headers["X-Cache"]);
+        Assert.Equal("app-a", System.Text.Encoding.UTF8.GetString(resA.Body!));
+        Assert.Equal("app-b", System.Text.Encoding.UTF8.GetString(resB.Body!));
+
+        // 2. MaxEntries eviction, MaxBodyBytes bypass, and VaryHeaders partitioning
+        var boundedApp = ReptarApp.Create();
+        boundedApp.Use(CacheControl.SWR(ttlSeconds: 30, swrSeconds: 60, opts =>
+        {
+            opts.MaxEntries = 2;
+            opts.MaxBodyBytes = 64;
+            opts.VaryHeaders = ["Accept-Language"];
+        }));
+
+        boundedApp.Get("/items/:id", ctx =>
+        {
+            var id = ctx.Req.Param("id")!;
+            if (id == "huge")
+                return ctx.Text(new string('x', 128));
+            return ctx.Text($"item:{id}:{ctx.Req.Header("Accept-Language") ?? "en"}");
+        });
+
+        // Response exceeding MaxBodyBytes is bypassed and not stored
+        var hugeRes = await boundedApp.HandleAsync(new ReptarRequest { Method = "GET", Path = "/items/huge" });
+        Assert.Equal("BYPASS", hugeRes.Headers["X-Cache"]);
+
+        // VaryHeaders caches en and fr separately; MaxEntries = 2 evicts oldest when 3rd is added
+        var enRes = await boundedApp.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/items/1",
+            Headers = new Dictionary<string, string> { ["Accept-Language"] = "en" },
+        });
+        Assert.Equal("MISS", enRes.Headers["X-Cache"]);
+
+        var frRes = await boundedApp.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/items/1",
+            Headers = new Dictionary<string, string> { ["Accept-Language"] = "fr" },
+        });
+        Assert.Equal("MISS", frRes.Headers["X-Cache"]);
+
+        // Adding a 3rd entry evicts the oldest entry (en) because MaxEntries = 2
+        var thirdRes = await boundedApp.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/items/2",
+            Headers = new Dictionary<string, string> { ["Accept-Language"] = "en" },
+        });
+        Assert.Equal("MISS", thirdRes.Headers["X-Cache"]);
+
+        // fr is still a HIT, while en was evicted (MISS)
+        var frHit = await boundedApp.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/items/1",
+            Headers = new Dictionary<string, string> { ["Accept-Language"] = "fr" },
+        });
+        Assert.Equal("HIT", frHit.Headers["X-Cache"]);
+
+        var enEvicted = await boundedApp.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/items/1",
+            Headers = new Dictionary<string, string> { ["Accept-Language"] = "en" },
+        });
+        Assert.Equal("MISS", enEvicted.Headers["X-Cache"]);
+    }
+
     private sealed class MemoryKvClient : IKvClient
     {
         private readonly Dictionary<string, string> _store = new(StringComparer.Ordinal);

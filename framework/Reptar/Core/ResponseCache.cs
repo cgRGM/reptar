@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Text;
 
 namespace Reptar;
 
@@ -7,27 +8,34 @@ public sealed class SwrOptions
 {
     public int TtlSeconds { get; set; } = 15;
     public int SwrSeconds { get; set; } = 30;
+    public int MaxEntries { get; set; } = 1024;
+    public int MaxBodyBytes { get; set; } = 1_048_576;
     public bool BypassOnAuth { get; set; } = true;
     public bool InvalidateOnWrites { get; set; } = true;
+    public string[] VaryHeaders { get; set; } = [];
+    public Func<Ctx, string>? KeyBuilder { get; set; }
     public Func<Ctx, bool>? ShouldCache { get; set; }
     public Action<string, string>? OnInvalidate { get; set; }
 }
 
 public static class CacheControl
 {
-    private static readonly ConcurrentDictionary<string, CachedEntry> _cache = new(StringComparer.Ordinal);
+    private static readonly object StoresLock = new();
+    private static readonly List<WeakReference<ConcurrentDictionary<string, CachedEntry>>> Stores = [];
 
     public static ReptarMiddleware SWR(int ttlSeconds = 15, int swrSeconds = 30, Action<SwrOptions>? configure = null)
     {
         var options = new SwrOptions
         {
             TtlSeconds = ttlSeconds,
-            SwrSeconds = swrSeconds
+            SwrSeconds = swrSeconds,
         };
         configure?.Invoke(options);
 
         var ttlTicks = (long)(options.TtlSeconds * (double)Stopwatch.Frequency);
         var swrTicks = (long)(options.SwrSeconds * (double)Stopwatch.Frequency);
+        var cache = new ConcurrentDictionary<string, CachedEntry>(StringComparer.Ordinal);
+        RegisterStore(cache);
 
         return async (ctx, next) =>
         {
@@ -37,7 +45,7 @@ public static class CacheControl
                 var writeRes = await next();
                 if (writeRes.Status is >= 200 and < 400)
                 {
-                    Invalidate(ctx.Req.Path);
+                    InvalidateStore(cache, ctx.Req.Path);
                     options.OnInvalidate?.Invoke(ctx.Req.Method, ctx.Req.Path);
                 }
                 writeRes.Headers["X-Cache"] = "BYPASS";
@@ -72,10 +80,10 @@ public static class CacheControl
                 return skippedRes;
             }
 
-            var cacheKey = BuildCacheKey(ctx);
+            var cacheKey = BuildCacheKey(ctx, options);
             var nowTicks = Stopwatch.GetTimestamp();
 
-            if (_cache.TryGetValue(cacheKey, out var entry))
+            if (cache.TryGetValue(cacheKey, out var entry))
             {
                 var ageTicks = nowTicks - entry.CreatedTimestampTicks;
                 var ageSeconds = (long)(ageTicks / (double)Stopwatch.Frequency);
@@ -97,9 +105,11 @@ public static class CacheControl
                             try
                             {
                                 var fresh = await next();
-                                if (fresh.Status == 200 && fresh.Body is not null)
+                                if (fresh.Status == 200 &&
+                                    fresh.Body is not null &&
+                                    fresh.Body.Length <= options.MaxBodyBytes)
                                 {
-                                    Store(cacheKey, fresh, ttlTicks, swrTicks);
+                                    Store(cache, cacheKey, fresh, ttlTicks, swrTicks, options.MaxEntries);
                                 }
                             }
                             catch
@@ -119,9 +129,11 @@ public static class CacheControl
 
             // 3. Cache miss or expired
             var missRes = await next();
-            if (missRes.Status == 200 && missRes.Body is not null)
+            if (missRes.Status == 200 &&
+                missRes.Body is not null &&
+                missRes.Body.Length <= options.MaxBodyBytes)
             {
-                Store(cacheKey, missRes, ttlTicks, swrTicks);
+                Store(cache, cacheKey, missRes, ttlTicks, swrTicks, options.MaxEntries);
                 missRes.Headers["X-Cache"] = "MISS";
                 missRes.Headers["Age"] = "0";
                 missRes.Headers["Cache-Control"] = $"public, max-age={options.TtlSeconds}, stale-while-revalidate={options.SwrSeconds}";
@@ -137,20 +149,30 @@ public static class CacheControl
 
     public static void Invalidate(string pathOrPrefix)
     {
+        foreach (var store in GetActiveStores())
+        {
+            InvalidateStore(store, pathOrPrefix);
+        }
+    }
+
+    private static void InvalidateStore(ConcurrentDictionary<string, CachedEntry> cache, string pathOrPrefix)
+    {
         var target = pathOrPrefix.TrimEnd('/');
-        foreach (var kvp in _cache)
+        foreach (var kvp in cache)
         {
             var key = kvp.Key;
-            var colonIdx = key.IndexOf(':');
-            var pathPart = colonIdx >= 0 ? key.Substring(colonIdx + 1) : key;
+            var pipeIdx = key.IndexOf('|');
+            var keyWithoutVary = pipeIdx >= 0 ? key[..pipeIdx] : key;
+            var colonIdx = keyWithoutVary.IndexOf(':');
+            var pathPart = colonIdx >= 0 ? keyWithoutVary[(colonIdx + 1)..] : keyWithoutVary;
             var queryIdx = pathPart.IndexOf('?');
-            var pathOnly = (queryIdx >= 0 ? pathPart.Substring(0, queryIdx) : pathPart).TrimEnd('/');
+            var pathOnly = (queryIdx >= 0 ? pathPart[..queryIdx] : pathPart).TrimEnd('/');
 
             if (string.Equals(pathOnly, target, StringComparison.OrdinalIgnoreCase) ||
                 pathOnly.StartsWith(target + "/", StringComparison.OrdinalIgnoreCase) ||
                 target.StartsWith(pathOnly + "/", StringComparison.OrdinalIgnoreCase))
             {
-                _cache.TryRemove(key, out _);
+                cache.TryRemove(key, out _);
             }
         }
     }
@@ -165,25 +187,80 @@ public static class CacheControl
 
     public static void PurgeAll()
     {
-        _cache.Clear();
+        foreach (var store in GetActiveStores())
+        {
+            store.Clear();
+        }
     }
 
-    public static int Count => _cache.Count;
+    public static int Count => GetActiveStores().Sum(s => s.Count);
+
+    private static void RegisterStore(ConcurrentDictionary<string, CachedEntry> store)
+    {
+        lock (StoresLock)
+        {
+            Stores.RemoveAll(wr => !wr.TryGetTarget(out _));
+            Stores.Add(new WeakReference<ConcurrentDictionary<string, CachedEntry>>(store));
+        }
+    }
+
+    private static List<ConcurrentDictionary<string, CachedEntry>> GetActiveStores()
+    {
+        var result = new List<ConcurrentDictionary<string, CachedEntry>>();
+        lock (StoresLock)
+        {
+            for (var i = Stores.Count - 1; i >= 0; i--)
+            {
+                if (Stores[i].TryGetTarget(out var target))
+                    result.Add(target);
+                else
+                    Stores.RemoveAt(i);
+            }
+        }
+        return result;
+    }
 
     private static bool IsWriteMethod(string method) =>
         method is "POST" or "PUT" or "DELETE" or "PATCH";
 
-    private static string BuildCacheKey(Ctx ctx)
+    private static string BuildCacheKey(Ctx ctx, SwrOptions options)
     {
+        if (options.KeyBuilder is not null)
+            return options.KeyBuilder(ctx);
+
         var path = ctx.Req.Path;
         var query = ctx.Req.Query;
-        return string.IsNullOrEmpty(query)
+        var baseKey = string.IsNullOrEmpty(query)
             ? $"{ctx.Req.Method}:{path}"
             : $"{ctx.Req.Method}:{path}?{query}";
+
+        if (options.VaryHeaders.Length == 0)
+            return baseKey;
+
+        var sb = new StringBuilder(baseKey);
+        foreach (var header in options.VaryHeaders)
+        {
+            sb.Append('|').Append(header).Append('=').Append(ctx.Req.Header(header) ?? "");
+        }
+        return sb.ToString();
     }
 
-    private static void Store(string key, ReptarResponse response, long ttlTicks, long swrTicks)
+    private static void Store(
+        ConcurrentDictionary<string, CachedEntry> cache,
+        string key,
+        ReptarResponse response,
+        long ttlTicks,
+        long swrTicks,
+        int maxEntries)
     {
+        var cap = Math.Max(1, maxEntries);
+        var nowTicks = Stopwatch.GetTimestamp();
+
+        if (!cache.ContainsKey(key) && cache.Count >= cap)
+        {
+            EvictToCapacity(cache, cap - 1, nowTicks);
+        }
+
         var headers = response.Headers
             .Where(h => !h.Key.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase) &&
                         !h.Key.Equals("X-Cache", StringComparison.OrdinalIgnoreCase) &&
@@ -192,17 +269,51 @@ public static class CacheControl
 
         var entry = new CachedEntry
         {
-            Body = response.Body ?? Array.Empty<byte>(),
+            Body = response.Body ?? [],
             Status = response.Status,
             ContentType = response.ContentType,
             Headers = headers,
-            CreatedTimestampTicks = Stopwatch.GetTimestamp(),
+            CreatedTimestampTicks = nowTicks,
             TtlTicks = ttlTicks,
             SwrTicks = swrTicks,
-            IsRevalidating = 0
+            IsRevalidating = 0,
         };
 
-        _cache[key] = entry;
+        cache[key] = entry;
+    }
+
+    private static void EvictToCapacity(
+        ConcurrentDictionary<string, CachedEntry> cache,
+        int targetCount,
+        long nowTicks)
+    {
+        // Pass 1: Evict expired entries
+        foreach (var kvp in cache)
+        {
+            if (nowTicks - kvp.Value.CreatedTimestampTicks >= kvp.Value.TtlTicks + kvp.Value.SwrTicks)
+            {
+                cache.TryRemove(kvp.Key, out _);
+            }
+        }
+
+        // Pass 2: Evict oldest entries until count <= targetCount
+        while (cache.Count > targetCount)
+        {
+            string? oldestKey = null;
+            var oldestTicks = long.MaxValue;
+
+            foreach (var kvp in cache)
+            {
+                if (kvp.Value.CreatedTimestampTicks < oldestTicks)
+                {
+                    oldestTicks = kvp.Value.CreatedTimestampTicks;
+                    oldestKey = kvp.Key;
+                }
+            }
+
+            if (oldestKey is null || !cache.TryRemove(oldestKey, out _))
+                break;
+        }
     }
 
     private static ReptarResponse CreateResponse(CachedEntry entry, string cacheStatus, long ageSeconds, SwrOptions options)
