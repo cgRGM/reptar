@@ -5,6 +5,7 @@ namespace Reptar;
 public sealed class ReptarConfig
 {
     public bool Debug { get; set; }
+    public long MaxBodyBytes { get; set; } = 10 * 1024 * 1024;
     public IDbClient? Database { get; set; }
     public IStorage? Storage { get; set; }
     public IAiClient? AI { get; set; }

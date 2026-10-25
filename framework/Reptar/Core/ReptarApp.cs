@@ -20,6 +20,7 @@ public sealed class RouteMeta
     public string? FileFieldName { get; internal set; }
     public string? FileDescription { get; internal set; }
     public bool FileRequired { get; internal set; } = true;
+    public long? MaxBodyBytes { get; internal set; }
 
     internal RouteMeta CloneWithPath(string path)
     {
@@ -38,6 +39,7 @@ public sealed class RouteMeta
             FileFieldName = FileFieldName,
             FileDescription = FileDescription,
             FileRequired = FileRequired,
+            MaxBodyBytes = MaxBodyBytes,
         };
 
         clone.Produces.AddRange(Produces);
@@ -498,10 +500,31 @@ public sealed class ReptarApp
         return new QueueBatchResult(failed.Count == 0, failed.ToArray());
     }
 
+    public long GetMaxBodyBytes(string method, string path) =>
+        Match(method, path)?.Entry.Meta.MaxBodyBytes ?? _config.MaxBodyBytes;
+
+    private static bool IsBodyOverLimit(ReptarRequest request, long maxBodyBytes)
+    {
+        if (request.BodyTooLarge)
+            return true;
+
+        if (maxBodyBytes <= 0)
+            return false;
+
+        if (request.Body is { Length: var len } && len > maxBodyBytes)
+            return true;
+
+        if (long.TryParse(request.Header("Content-Length"), out var contentLength) && contentLength > maxBodyBytes)
+            return true;
+
+        return false;
+    }
+
     public async Task<ReptarResponse> HandleAsync(ReptarRequest request)
     {
         var ctx = new Ctx(request, Services);
         var match = Match(request.Method, request.Path);
+        var maxBodyBytes = match?.Entry.Meta.MaxBodyBytes ?? _config.MaxBodyBytes;
         ReptarResponse response;
 
         if (match is null && _middlewares.Count == 0)
@@ -510,27 +533,44 @@ public sealed class ReptarApp
         }
         else if (match is not null && match.Value.Entry.Middleware is null && _middlewares.Count == 0)
         {
-            request.RouteParams = match.Value.Params;
-            try
+            if (IsBodyOverLimit(request, maxBodyBytes))
             {
-                response = await match.Value.Entry.Handler(ctx);
-            }
-            catch (Exception exception)
-            {
-                ctx.Log.Error(exception.ToString());
                 response = ctx.Error(
-                    500,
-                    "internal_error",
-                    _config.Debug
-                        ? exception.ToString()
-                        : "Something went wrong.");
+                    413,
+                    "payload_too_large",
+                    $"Request body exceeds the maximum allowed size of {maxBodyBytes} bytes.");
+            }
+            else
+            {
+                request.RouteParams = match.Value.Params;
+                try
+                {
+                    response = await match.Value.Entry.Handler(ctx);
+                }
+                catch (Exception exception)
+                {
+                    ctx.Log.Error(exception.ToString());
+                    response = ctx.Error(
+                        500,
+                        "internal_error",
+                        _config.Debug
+                            ? exception.ToString()
+                            : "Something went wrong.");
+                }
             }
         }
         else
         {
             Func<Task<ReptarResponse>> next;
 
-            if (match is not null)
+            if (IsBodyOverLimit(request, maxBodyBytes))
+            {
+                next = () => Task.FromResult(ctx.Error(
+                    413,
+                    "payload_too_large",
+                    $"Request body exceeds the maximum allowed size of {maxBodyBytes} bytes."));
+            }
+            else if (match is not null)
             {
                 request.RouteParams = match.Value.Params;
                 var entry = match.Value.Entry;
@@ -1000,6 +1040,12 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         meta.FileFieldName = fieldName;
         meta.FileDescription = description;
         meta.FileRequired = required;
+        return this;
+    }
+
+    public RouteBuilder WithMaxBody(long maxBytes)
+    {
+        meta.MaxBodyBytes = maxBytes;
         return this;
     }
 

@@ -93,7 +93,8 @@ public static class KestrelHost
                 return;
             }
 
-            var request = await ToReptarRequest(http);
+            var maxBodyBytes = app.GetMaxBodyBytes(http.Request.Method, http.Request.Path.Value ?? "/");
+            var request = await ToReptarRequest(http, maxBodyBytes);
             var response = await app.HandleAsync(request);
             await WriteResponse(http, response);
         });
@@ -233,10 +234,16 @@ public static class KestrelHost
 
     private static readonly Dictionary<string, string> EmptyCookies = new(StringComparer.OrdinalIgnoreCase);
 
-    private static async ValueTask<byte[]?> ReadBodyAsync(PipeReader reader, long? contentLength)
+    private static async ValueTask<(byte[]? Body, bool TooLarge)> ReadBodyAsync(
+        PipeReader reader,
+        long? contentLength,
+        long maxBodyBytes)
     {
         if (contentLength is <= 0)
-            return null;
+            return (null, false);
+
+        if (maxBodyBytes > 0 && contentLength.HasValue && contentLength.Value > maxBodyBytes)
+            return (null, true);
 
         if (contentLength is { } len && len <= 65536)
         {
@@ -253,11 +260,11 @@ public static class KestrelHost
                 if (result.IsCompleted || result.IsCanceled)
                     break;
             }
-            return totalRead == len ? buffer : buffer[..totalRead];
+            return (totalRead == len ? buffer : buffer[..totalRead], false);
         }
 
         using var memory = contentLength.HasValue
-            ? new MemoryStream((int)contentLength.Value)
+            ? new MemoryStream((int)Math.Min(contentLength.Value, 1_048_576))
             : new MemoryStream();
 
         while (true)
@@ -267,6 +274,12 @@ public static class KestrelHost
 
             foreach (var segment in buffer)
             {
+                if (maxBodyBytes > 0 && memory.Length + segment.Length > maxBodyBytes)
+                {
+                    reader.AdvanceTo(buffer.End);
+                    return (null, true);
+                }
+
                 memory.Write(segment.Span);
             }
 
@@ -276,12 +289,15 @@ public static class KestrelHost
                 break;
         }
 
-        return memory.ToArray();
+        return (memory.ToArray(), false);
     }
 
-    private static async Task<ReptarRequest> ToReptarRequest(HttpContext http)
+    private static async Task<ReptarRequest> ToReptarRequest(HttpContext http, long maxBodyBytes)
     {
-        var body = await ReadBodyAsync(http.Request.BodyReader, http.Request.ContentLength);
+        var (body, bodyTooLarge) = await ReadBodyAsync(
+            http.Request.BodyReader,
+            http.Request.ContentLength,
+            maxBodyBytes);
 
         var cookies = EmptyCookies;
 
@@ -321,6 +337,7 @@ public static class KestrelHost
             },
             Cookies = cookies,
             Body = body,
+            BodyTooLarge = bodyTooLarge,
         };
     }
 

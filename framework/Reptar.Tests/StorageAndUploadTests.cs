@@ -135,4 +135,53 @@ public sealed class StorageAndUploadTests
         Assert.Equal("string", avatarProp.GetProperty("type").GetString());
         Assert.Equal("binary", avatarProp.GetProperty("format").GetString());
     }
+
+    [Fact]
+    public async Task MaxBodyBytes_EnforcesGlobalDefault_AndHonorsPerRouteWithMaxBodyOverride()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            MaxBodyBytes = 32,
+        });
+
+        app.Post("/small", ctx => Task.FromResult(ctx.Text("ok")));
+        app.Post("/large-upload", ctx => Task.FromResult(ctx.Text("uploaded")))
+            .WithMaxBody(256);
+
+        // 1. Within global 32-byte limit succeeds
+        var smallOk = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/small",
+            Body = new byte[16],
+        });
+        Assert.Equal(200, smallOk.Status);
+
+        // 2. Exceeding global 32-byte limit returns 413 payload_too_large
+        var smallTooBig = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/small",
+            Body = new byte[64],
+        });
+        Assert.Equal(413, smallTooBig.Status);
+        Assert.Contains("payload_too_large", Encoding.UTF8.GetString(smallTooBig.Body!));
+
+        // 3. Route with .WithMaxBody(256) allows 128-byte payload and rejects 512-byte payload
+        var largeOk = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/large-upload",
+            Body = new byte[128],
+        });
+        Assert.Equal(200, largeOk.Status);
+
+        var largeTooBig = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/large-upload",
+            Body = new byte[512],
+        });
+        Assert.Equal(413, largeTooBig.Status);
+    }
 }

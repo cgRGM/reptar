@@ -28,6 +28,7 @@ public sealed class ReptarRequest
     }
 
     public byte[]? Body { get; init; }
+    public bool BodyTooLarge { get; init; }
     public Dictionary<string, string> RouteParams { get; internal set; } = new(StringComparer.OrdinalIgnoreCase);
 
     private MultipartForm? _form;
