@@ -9,6 +9,8 @@ public interface IDbClient
         QueryAsync<T>(sql, (object)new[] { p1, p2 });
     Task<List<T>> QueryAsync<T>(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3) =>
         QueryAsync<T>(sql, (object)new[] { p1, p2, p3 });
+    Task<List<T>> QueryAsync<T>(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3, (string Name, object? Value) p4) =>
+        QueryAsync<T>(sql, (object)new[] { p1, p2, p3, p4 });
     Task<List<T>> QueryAsync<T>(string sql, params (string Name, object? Value)[] parameters) =>
         QueryAsync<T>(sql, (object)parameters);
 
@@ -19,6 +21,8 @@ public interface IDbClient
         QuerySingleOrDefaultAsync<T>(sql, (object)new[] { p1, p2 });
     Task<T?> QuerySingleOrDefaultAsync<T>(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3) =>
         QuerySingleOrDefaultAsync<T>(sql, (object)new[] { p1, p2, p3 });
+    Task<T?> QuerySingleOrDefaultAsync<T>(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3, (string Name, object? Value) p4) =>
+        QuerySingleOrDefaultAsync<T>(sql, (object)new[] { p1, p2, p3, p4 });
     Task<T?> QuerySingleOrDefaultAsync<T>(string sql, params (string Name, object? Value)[] parameters) =>
         QuerySingleOrDefaultAsync<T>(sql, (object)parameters);
 
@@ -29,6 +33,8 @@ public interface IDbClient
         ExecuteAsync(sql, (object)new[] { p1, p2 });
     Task<int> ExecuteAsync(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3) =>
         ExecuteAsync(sql, (object)new[] { p1, p2, p3 });
+    Task<int> ExecuteAsync(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3, (string Name, object? Value) p4) =>
+        ExecuteAsync(sql, (object)new[] { p1, p2, p3, p4 });
     Task<int> ExecuteAsync(string sql, params (string Name, object? Value)[] parameters) =>
         ExecuteAsync(sql, (object)parameters);
     Task<T?> GetAsync<T>(TableDef table, object id);

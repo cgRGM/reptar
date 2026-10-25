@@ -70,4 +70,45 @@ public class MigrationTests
         Assert.Single(rollback);
         Assert.Equal("20261024_01", rollback[0].Id);
     }
+
+    [Fact]
+    public async Task RunCliAsync_loads_directory_migrations_and_executes_status_migrate_rollback()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"reptar_mig_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(tempDir, "0001_create_items.sql"),
+                """
+                -- +reptar Up
+                CREATE TABLE items (id TEXT PRIMARY KEY, label TEXT NOT NULL);
+                -- +reptar Down
+                DROP TABLE items;
+                """);
+
+            using var db = new SqliteDbClient(":memory:");
+
+            var statusExit = await MigrationRunner.RunCliAsync(db, ["db", "status", "--dir", tempDir]);
+            Assert.Equal(0, statusExit);
+
+            var migrateExit = await MigrationRunner.RunCliAsync(db, ["db", "migrate", "--dir", tempDir]);
+            Assert.Equal(0, migrateExit);
+
+            var applied = await MigrationRunner.GetAppliedMigrationIdsAsync(db);
+            Assert.Contains("0001_create_items", applied);
+
+            var rollbackExit = await MigrationRunner.RunCliAsync(db, ["db", "rollback", "--dir", tempDir]);
+            Assert.Equal(0, rollbackExit);
+
+            var appliedAfter = await MigrationRunner.GetAppliedMigrationIdsAsync(db);
+            Assert.Empty(appliedAfter);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir))
+                Directory.Delete(tempDir, recursive: true);
+        }
+    }
 }

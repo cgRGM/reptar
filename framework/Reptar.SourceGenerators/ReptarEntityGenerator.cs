@@ -67,7 +67,10 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
                 continue;
 
             var source = GenerateSource(typeSymbol);
-            var fileName = $"{typeSymbol.ContainingNamespace.ToDisplayString().Replace('.', '_')}_{typeSymbol.Name}_EntityMapper.g.cs";
+            var nsPrefix = typeSymbol.ContainingNamespace.IsGlobalNamespace
+                ? "Global"
+                : typeSymbol.ContainingNamespace.ToDisplayString().Replace('.', '_');
+            var fileName = $"{nsPrefix}_{typeSymbol.Name}_EntityMapper.g.cs";
             context.AddSource(fileName, SourceText.From(source, Encoding.UTF8));
         }
     }
@@ -146,8 +149,20 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
         }
 
         sb.AppendLine();
+        sb.AppendLine($"    public static readonly global::System.Func<global::System.Data.IDataRecord, {typeName}> PositionalDelegate = MapPositional;");
+        sb.AppendLine();
         sb.AppendLine($"    public {typeName}Ordinals(global::System.Data.IDataRecord record)");
         sb.AppendLine("    {");
+        sb.AppendLine($"        if (IsPositional(record))");
+        sb.AppendLine("        {");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var fieldName = Capitalize(members[i].Name);
+            sb.AppendLine($"            {fieldName} = {i};");
+        }
+        sb.AppendLine("            return;");
+        sb.AppendLine("        }");
+        sb.AppendLine();
 
         foreach (var (name, _) in members)
         {
@@ -156,6 +171,49 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
             sb.AppendLine($"        {fieldName} = ResolveOrdinal(record, \"{name}\", \"{snakeName}\");");
         }
 
+        sb.AppendLine("    }");
+        sb.AppendLine();
+
+        sb.AppendLine($"    public static {typeName} MapPositional(global::System.Data.IDataRecord record)");
+        sb.AppendLine("    {");
+        if (hasConstructorParams)
+        {
+            sb.AppendLine($"        return new {typeName}(");
+            for (var i = 0; i < members.Count; i++)
+            {
+                var (_, type) = members[i];
+                var getter = EmitPositionalReaderCall(i, type);
+                var comma = i < members.Count - 1 ? "," : "";
+                sb.AppendLine($"            {getter}{comma}");
+            }
+            sb.AppendLine("        );");
+        }
+        else
+        {
+            sb.AppendLine($"        return new {typeName}");
+            sb.AppendLine("        {");
+            for (var i = 0; i < members.Count; i++)
+            {
+                var (name, type) = members[i];
+                var getter = EmitPositionalReaderCall(i, type);
+                var comma = i < members.Count - 1 ? "," : "";
+                sb.AppendLine($"            {name} = {getter}{comma}");
+            }
+            sb.AppendLine("        };");
+        }
+        sb.AppendLine("    }");
+        sb.AppendLine();
+
+        sb.AppendLine("    public static bool IsPositional(global::System.Data.IDataRecord record)");
+        sb.AppendLine("    {");
+        sb.AppendLine($"        return record.FieldCount == {members.Count}");
+        for (var i = 0; i < members.Count; i++)
+        {
+            var (name, _) = members[i];
+            var snakeName = ToSnakeCase(name);
+            var end = i == members.Count - 1 ? ";" : "";
+            sb.AppendLine($"            && (string.Equals(record.GetName({i}), \"{snakeName}\", global::System.StringComparison.OrdinalIgnoreCase) || string.Equals(record.GetName({i}), \"{name}\", global::System.StringComparison.OrdinalIgnoreCase)){end}");
+        }
         sb.AppendLine("    }");
         sb.AppendLine();
 
@@ -228,8 +286,11 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
         sb.AppendLine("    [global::System.Runtime.CompilerServices.ModuleInitializer]");
         sb.AppendLine("    internal static void Init()");
         sb.AppendLine("    {");
+        sb.AppendLine($"        global::Reptar.EntityMapper<{typeName}>.DirectMap = {typeName}Ordinals.PositionalDelegate;");
         sb.AppendLine($"        global::Reptar.EntityMapper<{typeName}>.Factory = record =>");
         sb.AppendLine("        {");
+        sb.AppendLine($"            if ({typeName}Ordinals.IsPositional(record))");
+        sb.AppendLine($"                return {typeName}Ordinals.PositionalDelegate;");
         sb.AppendLine($"            var ordinals = new {typeName}Ordinals(record);");
         sb.AppendLine("            return ordinals.Map;");
         sb.AppendLine("        };");
@@ -237,6 +298,75 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
         sb.AppendLine("}");
 
         return sb.ToString();
+    }
+
+    private static string EmitPositionalReaderCall(int index, ITypeSymbol type)
+    {
+        var isNullable = type.NullableAnnotation == NullableAnnotation.Annotated ||
+                         type.Name == "Nullable";
+
+        var unwrappedType = type;
+        if (type is INamedTypeSymbol named && named.IsGenericType && named.ConstructedFrom.SpecialType == SpecialType.System_Nullable_T)
+        {
+            unwrappedType = named.TypeArguments[0];
+            isNullable = true;
+        }
+
+        var specialType = unwrappedType.SpecialType;
+        var display = unwrappedType.ToDisplayString();
+
+        string readExpr;
+        if (unwrappedType.TypeKind == TypeKind.Enum)
+        {
+            readExpr = $"record.GetValue({index}) switch {{ {display} val => val, int i => ({display})i, long l => ({display})l, string s => ({display})global::System.Enum.Parse(typeof({display}), s, true), _ => default }}";
+        }
+        else
+        {
+            readExpr = specialType switch
+            {
+                SpecialType.System_Boolean => $"record.GetBoolean({index})",
+                SpecialType.System_Byte => $"record.GetByte({index})",
+                SpecialType.System_SByte => $"(sbyte)record.GetInt16({index})",
+                SpecialType.System_Int16 => $"record.GetInt16({index})",
+                SpecialType.System_UInt16 => $"(ushort)record.GetInt32({index})",
+                SpecialType.System_Int32 => $"record.GetInt32({index})",
+                SpecialType.System_UInt32 => $"(uint)record.GetInt64({index})",
+                SpecialType.System_Int64 => $"record.GetInt64({index})",
+                SpecialType.System_UInt64 => $"(ulong)record.GetInt64({index})",
+                SpecialType.System_Single => $"record.GetFloat({index})",
+                SpecialType.System_Double => $"record.GetDouble({index})",
+                SpecialType.System_Decimal => $"record.GetDecimal({index})",
+                SpecialType.System_String => $"record.GetString({index})",
+                SpecialType.System_DateTime => $"record.GetDateTime({index})",
+                _ => display switch
+                {
+                    "System.Guid" or "Guid" =>
+                        $"record.GetValue({index}) switch {{ global::System.Guid g => g, string s => global::System.Guid.Parse(s), byte[] b => new global::System.Guid(b), _ => default }}",
+                    "System.DateTimeOffset" or "DateTimeOffset" =>
+                        $"record.GetValue({index}) switch {{ global::System.DateTimeOffset dto => dto, global::System.DateTime dt => new global::System.DateTimeOffset(dt), string s => global::System.DateTimeOffset.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "System.DateOnly" or "DateOnly" =>
+                        $"record.GetValue({index}) switch {{ global::System.DateOnly d => d, global::System.DateTime dt => global::System.DateOnly.FromDateTime(dt), string s => global::System.DateOnly.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "System.TimeOnly" or "TimeOnly" =>
+                        $"record.GetValue({index}) switch {{ global::System.TimeOnly t => t, global::System.TimeSpan ts => global::System.TimeOnly.FromTimeSpan(ts), string s => global::System.TimeOnly.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "System.TimeSpan" or "TimeSpan" =>
+                        $"record.GetValue({index}) switch {{ global::System.TimeSpan ts => ts, long l => global::System.TimeSpan.FromTicks(l), string s => global::System.TimeSpan.Parse(s, global::System.Globalization.CultureInfo.InvariantCulture), _ => default }}",
+                    "byte[]" =>
+                        $"record.GetValue({index}) switch {{ byte[] bytes => bytes, string s => global::System.Convert.FromBase64String(s), _ => default! }}",
+                    _ => $"({type.ToDisplayString()})record.GetValue({index})"
+                }
+            };
+        }
+
+        if (isNullable)
+            return $"record.IsDBNull({index}) ? null : {readExpr}";
+
+        if (unwrappedType.IsValueType)
+            return $"record.IsDBNull({index}) ? default : {readExpr}";
+
+        if (specialType == SpecialType.System_String)
+            return $"record.IsDBNull({index}) ? string.Empty : {readExpr}";
+
+        return $"record.IsDBNull({index}) ? default! : {readExpr}";
     }
 
     private static string EmitReaderCall(string fieldName, ITypeSymbol type)

@@ -190,11 +190,159 @@ public static class MigrationRunner
     }
 
     public sealed record MigrationRow(string Id);
+
+    public sealed record MigrationHistoryRow(string Id, string Name, string AppliedAt);
+
+    public static async Task<IReadOnlyList<IMigration>> LoadFromDirectoryAsync(string directoryPath)
+    {
+        if (!Directory.Exists(directoryPath))
+            return Array.Empty<IMigration>();
+
+        var files = Directory.GetFiles(directoryPath, "*.sql")
+            .OrderBy(Path.GetFileName, StringComparer.Ordinal)
+            .ToArray();
+
+        var migrations = new List<IMigration>(files.Length);
+        foreach (var file in files)
+        {
+            var id = Path.GetFileNameWithoutExtension(file);
+            var content = await File.ReadAllTextAsync(file);
+
+            string upSql = content;
+            string? downSql = null;
+
+            const string downMarker = "-- +reptar Down";
+            const string upMarker = "-- +reptar Up";
+
+            var downIdx = content.IndexOf(downMarker, StringComparison.OrdinalIgnoreCase);
+            if (downIdx >= 0)
+            {
+                upSql = content[..downIdx].Replace(upMarker, "", StringComparison.OrdinalIgnoreCase).Trim();
+                downSql = content[(downIdx + downMarker.Length)..].Trim();
+            }
+            else if (content.Contains(upMarker, StringComparison.OrdinalIgnoreCase))
+            {
+                upSql = content.Replace(upMarker, "", StringComparison.OrdinalIgnoreCase).Trim();
+            }
+
+            migrations.Add(new SqlMigration(id, upSql, downSql, id));
+        }
+
+        return migrations;
+    }
+
+    public static async Task<int> RunCliAsync(
+        IDbClient db,
+        string[] args,
+        IEnumerable<IMigration>? registeredMigrations = null,
+        string? defaultMigrationsDir = null)
+    {
+        var dbIdx = Array.FindIndex(args, a => string.Equals(a, "db", StringComparison.OrdinalIgnoreCase) || string.Equals(a, "--db", StringComparison.OrdinalIgnoreCase));
+        var subCommand = dbIdx >= 0 && dbIdx + 1 < args.Length
+            ? args[dbIdx + 1].ToLowerInvariant()
+            : "migrate";
+
+        var dirIdx = Array.FindIndex(args, a => string.Equals(a, "--dir", StringComparison.OrdinalIgnoreCase));
+        var migrationsDir = dirIdx >= 0 && dirIdx + 1 < args.Length
+            ? args[dirIdx + 1]
+            : defaultMigrationsDir ?? Path.Combine(Directory.GetCurrentDirectory(), "migrations");
+
+        var allMigrations = new Dictionary<string, IMigration>(StringComparer.Ordinal);
+        if (registeredMigrations is not null)
+        {
+            foreach (var m in registeredMigrations)
+                allMigrations[m.Id] = m;
+        }
+
+        if (Directory.Exists(migrationsDir))
+        {
+            var dirMigrations = await LoadFromDirectoryAsync(migrationsDir);
+            foreach (var m in dirMigrations)
+            {
+                allMigrations.TryAdd(m.Id, m);
+            }
+        }
+
+        var ordered = allMigrations.Values.OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
+
+        switch (subCommand)
+        {
+            case "status":
+            {
+                var applied = await GetAppliedMigrationIdsAsync(db);
+                Console.WriteLine($"Migrations status ({applied.Count} applied, {ordered.Count(m => !applied.Contains(m.Id))} pending):");
+                if (ordered.Count == 0 && applied.Count == 0)
+                {
+                    Console.WriteLine("  (no migrations found)");
+                    return 0;
+                }
+
+                foreach (var m in ordered)
+                {
+                    var state = applied.Contains(m.Id) ? "[x] Applied" : "[ ] Pending";
+                    Console.WriteLine($"  {state}  {m.Id} ({m.Name})");
+                }
+
+                foreach (var id in applied.Where(id => !allMigrations.ContainsKey(id)).OrderBy(x => x, StringComparer.Ordinal))
+                {
+                    Console.WriteLine($"  [x] Applied  {id} (database only)");
+                }
+
+                return 0;
+            }
+
+            case "migrate":
+            case "up":
+            {
+                var results = await MigrateAsync(db, ordered);
+                if (results.Count == 0)
+                {
+                    Console.WriteLine("Database is up to date (0 pending migrations).");
+                    return 0;
+                }
+
+                foreach (var r in results)
+                {
+                    Console.WriteLine($"  ✓ Applied {r.Id} ({r.Duration.TotalMilliseconds:0.0}ms)");
+                }
+                Console.WriteLine($"Successfully applied {results.Count} migration(s).");
+                return 0;
+            }
+
+            case "rollback":
+            case "down":
+            {
+                var stepsIdx = Array.FindIndex(args, a => string.Equals(a, "--steps", StringComparison.OrdinalIgnoreCase));
+                var steps = stepsIdx >= 0 && stepsIdx + 1 < args.Length && int.TryParse(args[stepsIdx + 1], out var parsedSteps)
+                    ? parsedSteps
+                    : 1;
+
+                var results = await RollbackAsync(db, ordered, steps);
+                if (results.Count == 0)
+                {
+                    Console.WriteLine("No migrations to roll back.");
+                    return 0;
+                }
+
+                foreach (var r in results)
+                {
+                    Console.WriteLine($"  ✓ Rolled back {r.Id} ({r.Duration.TotalMilliseconds:0.0}ms)");
+                }
+                return 0;
+            }
+
+            default:
+                Console.Error.WriteLine($"Unknown db command '{subCommand}'. Available: status, migrate, rollback");
+                return 1;
+        }
+    }
 }
 
 public static class MigrationAppExtensions
 {
     private static readonly List<IMigration> _registeredMigrations = new();
+
+    public static IReadOnlyList<IMigration> RegisteredMigrations => _registeredMigrations;
 
     public static ReptarApp AddMigration(this ReptarApp app, IMigration migration)
     {
@@ -227,5 +375,10 @@ public static class MigrationAppExtensions
     public static Task<IReadOnlyList<MigrationResult>> RollbackMigrationAsync(this ReptarApp app, int steps = 1)
     {
         return MigrationRunner.RollbackAsync(app.Db, _registeredMigrations, steps);
+    }
+
+    public static Task<int> RunMigrationCliAsync(this ReptarApp app, string[] args, string? defaultMigrationsDir = null)
+    {
+        return MigrationRunner.RunCliAsync(app.Db, args, _registeredMigrations, defaultMigrationsDir);
     }
 }

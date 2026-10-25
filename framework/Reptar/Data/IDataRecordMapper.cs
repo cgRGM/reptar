@@ -10,4 +10,5 @@ public interface IDataRecordMapper<out T>
 public static class EntityMapper<T>
 {
     public static Func<IDataRecord, Func<IDataRecord, T>>? Factory;
+    public static Func<IDataRecord, T>? DirectMap;
 }
