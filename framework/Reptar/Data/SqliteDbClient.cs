@@ -18,9 +18,20 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     private readonly SemaphoreSlim _writeGate = new(1, 1);
     private readonly SemaphoreSlim _readSemaphore;
     private readonly ConcurrentQueue<SqliteConnection> _readConnections = new();
+    private readonly ConcurrentQueue<PendingWrite> _pendingWrites = new();
+    private readonly List<PendingWrite> _batchBuffer = new(64);
     private readonly List<SqliteConnection> _allConnections = new();
     private readonly string _readConnectionString;
+    private int _drainerRunning;
     private bool _disposed;
+
+    private const int MaxBatchSize = 64;
+    private const int MaxTransientRetries = 3;
+
+    private readonly record struct PendingWrite(
+        SqliteCommand Command,
+        TaskCompletionSource<int> Completion,
+        long GateStartedTimestamp);
 
     /// <summary>
     /// Optional write-path observer used by benchmarks/telemetry. Receives the
@@ -89,7 +100,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
                 if (int.TryParse(envPool, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
                     maxReadConnections = parsed;
                 else
-                    maxReadConnections = Math.Clamp(Environment.ProcessorCount * 16, 16, 64);
+                    maxReadConnections = Math.Clamp(Environment.ProcessorCount * 8, 8, 32);
             }
 
             _readSemaphore = new SemaphoreSlim(maxReadConnections, maxReadConnections);
@@ -118,7 +129,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
-        if (_isMemory || (sql != null && sql.Contains("last_insert_rowid", StringComparison.OrdinalIgnoreCase)))
+        if (_isMemory || (sql is not null && sql.Length <= 128 && sql.Contains("last_insert_rowid", StringComparison.OrdinalIgnoreCase)))
         {
             await _writeGate.WaitAsync();
             return new RentedConnection(_writeConnection, isWriter: true, this);
@@ -175,6 +186,9 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
+    public static bool IsTransientSqliteError(SqliteException ex) =>
+        ex.SqliteErrorCode is 5 or 6; // SQLITE_BUSY (5) or SQLITE_LOCKED (6)
+
     private static async Task<List<T>> ExecuteReaderInternalAsync<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
@@ -182,22 +196,31 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         SqliteCommand command)
     {
         await using (command)
-        await using (var reader = await command.ExecuteReaderAsync())
         {
-            if (EntityMapper<T>.Factory is { } factory)
+            for (var attempt = 0; ; attempt++)
             {
-                var map = factory(reader);
-                var results = new List<T>();
-                while (await reader.ReadAsync())
-                    results.Add(map(reader));
-                return results;
-            }
+                try
+                {
+                    using var reader = command.ExecuteReader();
+                    if (EntityMapper<T>.ResolveForSql(command.CommandText, reader) is { } map)
+                    {
+                        var results = new List<T>(24);
+                        while (reader.Read())
+                            results.Add(map(reader));
+                        return results;
+                    }
 
-            var fallbackMap = RowMapper.Resolve<T>(reader);
-            var fallbackResults = new List<T>();
-            while (await reader.ReadAsync())
-                fallbackResults.Add(fallbackMap(reader));
-            return fallbackResults;
+                    var fallbackMap = RowMapper.Resolve<T>(reader);
+                    var fallbackResults = new List<T>(24);
+                    while (reader.Read())
+                        fallbackResults.Add(fallbackMap(reader));
+                    return fallbackResults;
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex) && attempt < MaxTransientRetries)
+                {
+                    await DelayBackoffAsync(attempt).ConfigureAwait(false);
+                }
+            }
         }
     }
 
@@ -314,19 +337,26 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         SqliteCommand command)
     {
         await using (command)
-        await using (var reader = await command.ExecuteReaderAsync())
         {
-            if (!await reader.ReadAsync())
-                return default;
-
-            if (EntityMapper<T>.Factory is { } factory)
+            for (var attempt = 0; ; attempt++)
             {
-                var map = factory(reader);
-                return map(reader);
-            }
+                try
+                {
+                    using var reader = command.ExecuteReader();
+                    if (!reader.Read())
+                        return default;
 
-            var fallbackMap = RowMapper.Resolve<T>(reader);
-            return fallbackMap(reader);
+                    if (EntityMapper<T>.ResolveForSql(command.CommandText, reader) is { } map)
+                        return map(reader);
+
+                    var fallbackMap = RowMapper.Resolve<T>(reader);
+                    return fallbackMap(reader);
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex) && attempt < MaxTransientRetries)
+                {
+                    await DelayBackoffAsync(attempt).ConfigureAwait(false);
+                }
+            }
         }
     }
 
@@ -408,33 +438,233 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return await ExecuteSingleInternalAsync<T>(command);
     }
 
-    private async Task<int> ExecuteCommandAsync(SqliteCommand command)
+    private Task<int> ExecuteCommandAsync(SqliteCommand command)
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
         var observer = WriteTimingObserver;
         long gateStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
-        await _writeGate.WaitAsync();
+
+        // Fast-path: when uncontended and no writes are queued, execute immediately without TCS allocation
+        if (_pendingWrites.IsEmpty && _writeGate.Wait(0))
+        {
+            if (_pendingWrites.IsEmpty)
+            {
+                try
+                {
+                    long executeStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+                    using (command)
+                    {
+                        var result = ExecuteNonQueryWithRetry(command);
+                        if (observer is not null)
+                        {
+                            observer(new DbWriteTiming(
+                                executeStarted - gateStarted,
+                                Stopwatch.GetTimestamp() - executeStarted));
+                        }
+                        return Task.FromResult(result);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    return Task.FromException<int>(ex);
+                }
+                finally
+                {
+                    // If concurrent writers arrived while we executed, hand off to the queue drainer
+                    if (!_pendingWrites.IsEmpty && Interlocked.CompareExchange(ref _drainerRunning, 1, 0) == 0)
+                    {
+                        _ = DrainWriteQueueHoldingGateAsync();
+                    }
+                    else
+                    {
+                        _writeGate.Release();
+                    }
+                }
+            }
+
+            _writeGate.Release();
+        }
+
+        // Contended path: enqueue for group-commit batching
+        var pending = new PendingWrite(
+            command,
+            new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously),
+            gateStarted);
+
+        _pendingWrites.Enqueue(pending);
+
+        if (Interlocked.CompareExchange(ref _drainerRunning, 1, 0) == 0)
+        {
+            _ = DrainWriteQueueAsync();
+        }
+
+        return pending.Completion.Task;
+    }
+
+    private async Task DrainWriteQueueAsync()
+    {
+        await _writeGate.WaitAsync().ConfigureAwait(false);
+        await DrainWriteQueueHoldingGateAsync().ConfigureAwait(false);
+    }
+
+    private Task DrainWriteQueueHoldingGateAsync()
+    {
         try
         {
-            long executeStarted = 0;
-            if (observer is not null)
-                executeStarted = Stopwatch.GetTimestamp();
-
-            await using (command)
+            while (true)
             {
-                var result = await command.ExecuteNonQueryAsync();
+                while (_pendingWrites.TryDequeue(out var first))
+                {
+                    ExecutePendingBatch(first);
+                }
 
-                if (observer is not null)
-                    observer(new DbWriteTiming(
-                        executeStarted - gateStarted,
-                        Stopwatch.GetTimestamp() - executeStarted));
+                Interlocked.Exchange(ref _drainerRunning, 0);
 
-                return result;
+                if (_pendingWrites.IsEmpty)
+                    break;
+
+                if (Interlocked.CompareExchange(ref _drainerRunning, 1, 0) != 0)
+                    break;
             }
         }
         finally
         {
             _writeGate.Release();
         }
+
+        return Task.CompletedTask;
+    }
+
+    private void ExecutePendingBatch(PendingWrite first)
+    {
+        var observer = WriteTimingObserver;
+
+        // Single queued statement: execute directly without transaction wrapper overhead
+        if (_pendingWrites.IsEmpty)
+        {
+            ExecuteSinglePendingWrite(first, observer);
+            return;
+        }
+
+        // Multiple statements queued: coalesce up to MaxBatchSize into a single SQLite transaction
+        _batchBuffer.Clear();
+        _batchBuffer.Add(first);
+
+        while (_batchBuffer.Count < MaxBatchSize && _pendingWrites.TryDequeue(out var next))
+        {
+            _batchBuffer.Add(next);
+        }
+
+        long batchStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+        var results = new int[_batchBuffer.Count];
+        var batchSucceeded = false;
+
+        try
+        {
+            using var transaction = _writeConnection.BeginTransaction();
+            for (var i = 0; i < _batchBuffer.Count; i++)
+            {
+                var cmd = _batchBuffer[i].Command;
+                cmd.Transaction = transaction;
+                results[i] = cmd.ExecuteNonQuery();
+            }
+
+            transaction.Commit();
+            batchSucceeded = true;
+        }
+        catch
+        {
+            // Batch failed (e.g., constraint violation on one statement).
+            // Rollback is automatic on Dispose of uncommitted transaction.
+            // Fall through to isolated per-statement execution below.
+        }
+
+        if (batchSucceeded)
+        {
+            long batchFinished = observer is not null ? Stopwatch.GetTimestamp() : 0;
+            long perItemExecTicks = observer is not null
+                ? Math.Max(1, (batchFinished - batchStarted) / _batchBuffer.Count)
+                : 0;
+
+            for (var i = 0; i < _batchBuffer.Count; i++)
+            {
+                var item = _batchBuffer[i];
+                item.Command.Dispose();
+
+                if (observer is not null)
+                {
+                    observer(new DbWriteTiming(
+                        batchStarted - item.GateStartedTimestamp,
+                        perItemExecTicks));
+                }
+
+                item.Completion.TrySetResult(results[i]);
+            }
+
+            _batchBuffer.Clear();
+            return;
+        }
+
+        // Fallback: replay each statement individually for exact error isolation
+        for (var i = 0; i < _batchBuffer.Count; i++)
+        {
+            var item = _batchBuffer[i];
+            item.Command.Transaction = null;
+            ExecuteSinglePendingWrite(item, observer);
+        }
+
+        _batchBuffer.Clear();
+    }
+
+    private static void ExecuteSinglePendingWrite(
+        PendingWrite item,
+        Action<DbWriteTiming>? observer)
+    {
+        long executeStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+        try
+        {
+            using (item.Command)
+            {
+                var rows = ExecuteNonQueryWithRetry(item.Command);
+                if (observer is not null)
+                {
+                    observer(new DbWriteTiming(
+                        executeStarted - item.GateStartedTimestamp,
+                        Stopwatch.GetTimestamp() - executeStarted));
+                }
+                item.Completion.TrySetResult(rows);
+            }
+        }
+        catch (Exception ex)
+        {
+            item.Completion.TrySetException(ex);
+        }
+    }
+
+    private static int ExecuteNonQueryWithRetry(SqliteCommand command)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return command.ExecuteNonQuery();
+            }
+            catch (SqliteException ex) when (IsTransientSqliteError(ex) && attempt < MaxTransientRetries)
+            {
+                Thread.Sleep(ComputeBackoffMs(attempt));
+            }
+        }
+    }
+
+    private static Task DelayBackoffAsync(int attempt) =>
+        Task.Delay(ComputeBackoffMs(attempt));
+
+    private static int ComputeBackoffMs(int attempt)
+    {
+        var baseDelay = (1 << attempt) * 2; // 2ms, 4ms, 8ms
+        var jitter = Random.Shared.Next(0, 3);
+        return baseDelay + jitter;
     }
 
     public Task<int> ExecuteAsync(string sql, object? param = null)

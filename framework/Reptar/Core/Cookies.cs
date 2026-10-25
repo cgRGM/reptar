@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Reptar;
 
@@ -51,6 +53,119 @@ public sealed class CookieJar
         Pending.Add(string.Join("; ", parts));
     }
 
+    public void SetSigned(
+        string name,
+        string value,
+        string secret,
+        TimeSpan? maxAge = null,
+        string? domain = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(secret);
+
+        var signature = ComputeHmacBase64Url(secret, $"{name}:{value}");
+        var signedValue = $"{value}.{signature}";
+
+        if (maxAge.HasValue)
+        {
+            Set(name, signedValue, maxAge.Value, domain);
+        }
+        else
+        {
+            Set(name, signedValue, expiresIso: null, domain);
+        }
+    }
+
+    public string? GetSigned(string name, string secret)
+    {
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(secret))
+            return null;
+
+        var raw = Get(name);
+        if (string.IsNullOrEmpty(raw))
+            return null;
+
+        var separatorIndex = raw.LastIndexOf('.');
+        if (separatorIndex <= 0 || separatorIndex == raw.Length - 1)
+            return null;
+
+        var value = raw[..separatorIndex];
+        var providedSignature = raw[(separatorIndex + 1)..];
+        var expectedSignature = ComputeHmacBase64Url(secret, $"{name}:{value}");
+
+        var providedBytes = Encoding.ASCII.GetBytes(providedSignature);
+        var expectedBytes = Encoding.ASCII.GetBytes(expectedSignature);
+
+        return CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes)
+            ? value
+            : null;
+    }
+
+    public async Task SetSignedAsync(
+        ICrypto crypto,
+        string name,
+        string value,
+        string secret,
+        TimeSpan? maxAge = null,
+        string? domain = null)
+    {
+        ArgumentNullException.ThrowIfNull(crypto);
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        ArgumentException.ThrowIfNullOrEmpty(secret);
+
+        var signature = await crypto.HmacSha256(secret, $"{name}:{value}");
+        var signedValue = $"{value}.{signature}";
+
+        if (maxAge.HasValue)
+        {
+            Set(name, signedValue, maxAge.Value, domain);
+        }
+        else
+        {
+            Set(name, signedValue, expiresIso: null, domain);
+        }
+    }
+
+    public async Task<string?> GetSignedAsync(ICrypto crypto, string name, string secret)
+    {
+        ArgumentNullException.ThrowIfNull(crypto);
+        if (string.IsNullOrEmpty(name) || string.IsNullOrEmpty(secret))
+            return null;
+
+        var raw = Get(name);
+        if (string.IsNullOrEmpty(raw))
+            return null;
+
+        var separatorIndex = raw.LastIndexOf('.');
+        if (separatorIndex <= 0 || separatorIndex == raw.Length - 1)
+            return null;
+
+        var value = raw[..separatorIndex];
+        var providedSignature = raw[(separatorIndex + 1)..];
+        var expectedSignature = await crypto.HmacSha256(secret, $"{name}:{value}");
+
+        var providedBytes = Encoding.ASCII.GetBytes(providedSignature);
+        var expectedBytes = Encoding.ASCII.GetBytes(expectedSignature);
+
+        return CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes)
+            ? value
+            : null;
+    }
+
     public void Delete(string name, string? domain = null) =>
         Set(name, "", TimeSpan.Zero, domain);
+
+    private static string ComputeHmacBase64Url(string secret, string payload)
+    {
+        var keyBytes = Encoding.UTF8.GetBytes(secret);
+        var dataBytes = Encoding.UTF8.GetBytes(payload);
+        var hash = HMACSHA256.HashData(keyBytes, dataBytes);
+        return ToBase64Url(hash);
+    }
+
+    private static string ToBase64Url(ReadOnlySpan<byte> bytes) =>
+        Convert.ToBase64String(bytes)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
 }

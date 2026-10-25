@@ -498,27 +498,53 @@ public sealed class ReptarApp
         var match = Match(request.Method, request.Path);
         ReptarResponse response;
 
-        if (match is null)
+        if (match is null && _middlewares.Count == 0)
         {
             response = ctx.NotFound("Route not found.");
         }
-        else
+        else if (match is not null && match.Value.Entry.Middleware is null && _middlewares.Count == 0)
         {
             request.RouteParams = match.Value.Params;
-            var entry = match.Value.Entry;
-
-            Func<Task<ReptarResponse>> next = () => entry.Handler(ctx);
-
-            if (entry.Middleware is not null)
+            try
             {
-                var middleware = entry.Middleware;
-                var inner = next;
-                next = () => middleware(ctx, inner);
+                response = await match.Value.Entry.Handler(ctx);
+            }
+            catch (Exception exception)
+            {
+                ctx.Log.Error(exception.ToString());
+                response = ctx.Error(
+                    500,
+                    "internal_error",
+                    _config.Debug
+                        ? exception.ToString()
+                        : "Something went wrong.");
+            }
+        }
+        else
+        {
+            Func<Task<ReptarResponse>> next;
+
+            if (match is not null)
+            {
+                request.RouteParams = match.Value.Params;
+                var entry = match.Value.Entry;
+                next = () => entry.Handler(ctx);
+
+                if (entry.Middleware is not null)
+                {
+                    var middleware = entry.Middleware;
+                    var inner = next;
+                    next = () => middleware(ctx, inner);
+                }
+            }
+            else
+            {
+                next = () => Task.FromResult(ctx.NotFound("Route not found."));
             }
 
-            foreach (var middleware in _middlewares.AsEnumerable().Reverse())
+            for (var i = _middlewares.Count - 1; i >= 0; i--)
             {
-                var current = middleware;
+                var current = _middlewares[i];
                 var inner = next;
                 next = () => current(ctx, inner);
             }

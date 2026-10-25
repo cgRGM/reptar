@@ -89,6 +89,15 @@ public static class Middlewares
         int swrSeconds = 30,
         Action<SwrOptions>? configure = null) =>
         CacheControl.SWR(ttlSeconds, swrSeconds, configure);
+
+    public static ReptarMiddleware SecurityHeaders(
+        SecurityHeadersOptions? options = null) =>
+        ProductionExtensions.SecurityHeadersMiddleware(options);
+
+    public static ReptarMiddleware StaticFiles(
+        string rootDirectory = "wwwroot",
+        StaticFileOptions? options = null) =>
+        ProductionExtensions.StaticFilesMiddleware(rootDirectory, options);
 }
 
 public static class RateLimit

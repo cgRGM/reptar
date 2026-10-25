@@ -360,13 +360,7 @@ public sealed class ReptarEntityGenerator : IIncrementalGenerator
         if (isNullable)
             return $"record.IsDBNull({index}) ? null : {readExpr}";
 
-        if (unwrappedType.IsValueType)
-            return $"record.IsDBNull({index}) ? default : {readExpr}";
-
-        if (specialType == SpecialType.System_String)
-            return $"record.IsDBNull({index}) ? string.Empty : {readExpr}";
-
-        return $"record.IsDBNull({index}) ? default! : {readExpr}";
+        return readExpr;
     }
 
     private static string EmitReaderCall(string fieldName, ITypeSymbol type)

@@ -51,35 +51,43 @@ public sealed class PostgresDbClient : IDbClient
         if (ds is null)
             return statements.Count;
 
-        await using var connection = await ds.OpenConnectionAsync();
-        await using var transaction = await connection.BeginTransactionAsync();
-
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            await using var batch = new Npgsql.NpgsqlBatch(connection, transaction);
+            await using var connection = await ds.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
 
-            foreach (var statement in statements)
+            try
             {
-                var (sql, values) = NormalizeSqlAndParams(
-                    statement.Sql,
-                    statement.Param,
-                    _json);
-                var command = new Npgsql.NpgsqlBatchCommand(sql);
+                await using var batch = new Npgsql.NpgsqlBatch(connection, transaction);
 
-                foreach (var value in values)
-                    command.Parameters.AddWithValue(value ?? DBNull.Value);
+                foreach (var statement in statements)
+                {
+                    var (sql, values) = NormalizeSqlAndParams(
+                        statement.Sql,
+                        statement.Param,
+                        _json);
+                    var command = new Npgsql.NpgsqlBatchCommand(sql);
 
-                batch.BatchCommands.Add(command);
+                    foreach (var value in values)
+                        command.Parameters.AddWithValue(value ?? DBNull.Value);
+
+                    batch.BatchCommands.Add(command);
+                }
+
+                var changes = await batch.ExecuteNonQueryAsync();
+                await transaction.CommitAsync();
+                return changes;
             }
-
-            var changes = await batch.ExecuteNonQueryAsync();
-            await transaction.CommitAsync();
-            return changes;
-        }
-        catch
-        {
-            await transaction.RollbackAsync();
-            throw;
+            catch (Exception ex) when (IsTransientPostgresError(ex) && attempt < MaxTransientRetries)
+            {
+                try { await transaction.RollbackAsync(); } catch { }
+                await DelayBackoffAsync(attempt).ConfigureAwait(false);
+            }
+            catch
+            {
+                await transaction.RollbackAsync();
+                throw;
+            }
         }
 #endif
     }
@@ -600,6 +608,31 @@ public sealed class PostgresDbClient : IDbClient
     private static extern Task<int> PgExecuteAsync(string sql, string paramsJson);
 #endif
 
+    private const int MaxTransientRetries = 3;
+
+    public static bool IsTransientPostgresError(Exception ex)
+    {
+#if !NETWASM && !REPTAR_SQLITE_ONLY
+        if (ex is Npgsql.PostgresException pgEx)
+        {
+            return pgEx.IsTransient || pgEx.SqlState is "40001" or "40P01" or "53300" or "57P03" or "08000" or "08003" or "08006";
+        }
+
+        if (ex is Npgsql.NpgsqlException npgsqlEx)
+        {
+            return npgsqlEx.IsTransient;
+        }
+#endif
+        return false;
+    }
+
+    private static Task DelayBackoffAsync(int attempt)
+    {
+        var baseDelay = (1 << attempt) * 4;
+        var jitter = Random.Shared.Next(0, 4);
+        return Task.Delay(baseDelay + jitter);
+    }
+
     private async Task<List<T>> ExecuteQueryAsync<T>(string sql, object?[] parameters)
     {
         LastExecutedSql = sql;
@@ -609,29 +642,38 @@ public sealed class PostgresDbClient : IDbClient
         var ds = GetDataSource();
         if (ds is not null)
         {
-            await using var cmd = ds.CreateCommand(sql);
-            for (var i = 0; i < parameters.Length; i++)
+            for (var attempt = 0; ; attempt++)
             {
-                cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
+                try
+                {
+                    await using var cmd = ds.CreateCommand(sql);
+                    for (var i = 0; i < parameters.Length; i++)
+                    {
+                        cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
+                    }
+
+                    await using var reader = await cmd.ExecuteReaderAsync();
+
+                    if (EntityMapper<T>.ResolveForSql(sql, reader) is { } map)
+                    {
+                        var results = new List<T>(24);
+                        while (await reader.ReadAsync())
+                            results.Add(map(reader));
+                        return results;
+                    }
+
+                    var fallbackMap = RowMapper.Resolve<T>(reader);
+                    var fallbackResults = new List<T>(24);
+                    while (await reader.ReadAsync())
+                        fallbackResults.Add(fallbackMap(reader));
+
+                    return fallbackResults;
+                }
+                catch (Exception ex) when (IsTransientPostgresError(ex) && attempt < MaxTransientRetries)
+                {
+                    await DelayBackoffAsync(attempt).ConfigureAwait(false);
+                }
             }
-
-            await using var reader = await cmd.ExecuteReaderAsync();
-
-            if (EntityMapper<T>.Factory is { } factory)
-            {
-                var map = factory(reader);
-                var results = new List<T>();
-                while (await reader.ReadAsync())
-                    results.Add(map(reader));
-                return results;
-            }
-
-            var fallbackMap = RowMapper.Resolve<T>(reader);
-            var fallbackResults = new List<T>();
-            while (await reader.ReadAsync())
-                fallbackResults.Add(fallbackMap(reader));
-
-            return fallbackResults;
         }
 #elif NETWASM
         if (!string.IsNullOrEmpty(_connectionString) &&
@@ -664,13 +706,23 @@ public sealed class PostgresDbClient : IDbClient
         var ds = GetDataSource();
         if (ds is not null)
         {
-            await using var cmd = ds.CreateCommand(sql);
-            for (var i = 0; i < parameters.Length; i++)
+            for (var attempt = 0; ; attempt++)
             {
-                cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
-            }
+                try
+                {
+                    await using var cmd = ds.CreateCommand(sql);
+                    for (var i = 0; i < parameters.Length; i++)
+                    {
+                        cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
+                    }
 
-            return await cmd.ExecuteNonQueryAsync();
+                    return await cmd.ExecuteNonQueryAsync();
+                }
+                catch (Exception ex) when (IsTransientPostgresError(ex) && attempt < MaxTransientRetries)
+                {
+                    await DelayBackoffAsync(attempt).ConfigureAwait(false);
+                }
+            }
         }
 #elif NETWASM
         if (!string.IsNullOrEmpty(_connectionString) &&

@@ -343,17 +343,10 @@ app.Put("/api/v1/tasks/:id", requireAuth, async ctx =>
         now));
 });
 
-app.Get("/api/v1/me", requireAuth, async ctx =>
+app.Get("/api/v1/me", requireAuth, ctx =>
 {
     var user = ctx.User!;
-    var row = await ctx.Db.QuerySingleOrDefaultAsync<AuthUserRow>(
-        "select id, email, name, created_at from users where id = @id",
-        ("id", user.Id));
-
-    if (row is null)
-        return Error(ctx, 401, "unauthorized", "User not found.");
-
-    return ctx.Json(new MeResponse(row.Id, row.Email, row.Name, row.CreatedAt));
+    return Task.FromResult(ctx.Json(new MeResponse(user.Id, user.Email, user.Name, user.CreatedAt ?? "")));
 });
 
 app.Post("/api/v1/auth/login", async ctx =>
@@ -407,7 +400,7 @@ async Task<SessionUser?> ResolveUser(Ctx ctx)
     if (row is null)
         return null;
 
-    var user = new SessionUser(row.Id, row.Email, row.Name);
+    var user = new SessionUser(row.Id, row.Email, row.Name, CreatedAt: row.CreatedAt);
     ctx.User = user;
     ctx.Claims = payload;
     return user;
