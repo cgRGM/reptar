@@ -1,5 +1,7 @@
 using System.Globalization;
+#if !NETWASM
 using System.Security.Cryptography;
+#endif
 using System.Text;
 
 namespace Reptar;
@@ -53,6 +55,7 @@ public sealed class CookieJar
         Pending.Add(string.Join("; ", parts));
     }
 
+#if !NETWASM
     public void SetSigned(
         string name,
         string value,
@@ -96,10 +99,11 @@ public sealed class CookieJar
         var providedBytes = Encoding.ASCII.GetBytes(providedSignature);
         var expectedBytes = Encoding.ASCII.GetBytes(expectedSignature);
 
-        return CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes)
+        return FixedTimeEquals(providedBytes, expectedBytes)
             ? value
             : null;
     }
+#endif
 
     public async Task SetSignedAsync(
         ICrypto crypto,
@@ -147,7 +151,7 @@ public sealed class CookieJar
         var providedBytes = Encoding.ASCII.GetBytes(providedSignature);
         var expectedBytes = Encoding.ASCII.GetBytes(expectedSignature);
 
-        return CryptographicOperations.FixedTimeEquals(providedBytes, expectedBytes)
+        return FixedTimeEquals(providedBytes, expectedBytes)
             ? value
             : null;
     }
@@ -155,6 +159,16 @@ public sealed class CookieJar
     public void Delete(string name, string? domain = null) =>
         Set(name, "", TimeSpan.Zero, domain);
 
+    private static bool FixedTimeEquals(byte[] a, byte[] b)
+    {
+        if (a.Length != b.Length) return false;
+        var diff = 0;
+        for (var i = 0; i < a.Length; i++)
+            diff |= a[i] ^ b[i];
+        return diff == 0;
+    }
+
+#if !NETWASM
     private static string ComputeHmacBase64Url(string secret, string payload)
     {
         var keyBytes = Encoding.UTF8.GetBytes(secret);
@@ -162,6 +176,7 @@ public sealed class CookieJar
         var hash = HMACSHA256.HashData(keyBytes, dataBytes);
         return ToBase64Url(hash);
     }
+#endif
 
     private static string ToBase64Url(ReadOnlySpan<byte> bytes) =>
         Convert.ToBase64String(bytes)

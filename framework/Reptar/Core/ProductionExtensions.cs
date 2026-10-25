@@ -1,3 +1,4 @@
+#if !NETWASM
 using System.Globalization;
 
 namespace Reptar;
@@ -292,3 +293,4 @@ public static class ProductionExtensions
         };
     }
 }
+#endif

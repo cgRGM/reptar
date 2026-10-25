@@ -14,6 +14,7 @@
     <Compile Include="../Reptar/Core/**/*.cs" />
     <Compile Include="../Reptar/Validation/**/*.cs" />
     <Compile Include="../Reptar/Data/ReptarEntityAttribute.cs" />
+    <Compile Include="../Reptar/Data/ColumnRef.cs" />
     <Compile Include="../Reptar/Data/Services.cs" />
     <Compile Include="../Reptar/Data/SqlParamParser.cs" />
     <Compile Include="../Reptar/Data/PostgresDbClient.cs" />

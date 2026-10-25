@@ -53,6 +53,41 @@ public interface IDbClient
     Task<int> DeleteWhereAsync(TableDef table, string where, object? param = null);
     Task<bool> ExistsAsync(TableDef table, string where, object? param = null);
 
+    Task<List<T>> ListAsync<T>(
+        TableDef table,
+        SqlFilter filter,
+        SqlOrderBy? orderBy = null,
+        int limit = 0,
+        int offset = 0)
+    {
+        var (clause, param) = filter.ToWhereClause();
+        if (orderBy is not null && !string.IsNullOrWhiteSpace(orderBy.Sql))
+        {
+            clause += " ORDER BY " + orderBy.Sql;
+        }
+        return ListAsync<T>(table, clause, param, limit, offset);
+    }
+
+    TableQuery<T> From<T>(TableDef table) => new(this, table);
+
+    Task<int> DeleteWhereAsync(TableDef table, SqlFilter filter)
+    {
+        var (condition, param) = filter.ToCondition();
+        return DeleteWhereAsync(table, condition, param);
+    }
+
+    Task<bool> ExistsAsync(TableDef table, SqlFilter filter)
+    {
+        var (condition, param) = filter.ToCondition();
+        return ExistsAsync(table, condition, param);
+    }
+
+    Task<int> CountAsync(TableDef table, SqlFilter filter)
+    {
+        var (condition, param) = filter.ToCondition();
+        return CountAsync(table, condition, param);
+    }
+
     Task<List<T>> QueryMappedAsync<T>(
         string sql,
         object? param,

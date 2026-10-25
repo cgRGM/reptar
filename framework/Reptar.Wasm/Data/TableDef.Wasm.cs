@@ -101,6 +101,8 @@ public sealed class TableDef
         return this;
     }
 
+    public ColumnRef<T> Col<T>(string name) => new(Name, name);
+
     public string SinglePrimaryKey =>
         PrimaryKeySql.Length == 1
             ? PrimaryKeySql[0]

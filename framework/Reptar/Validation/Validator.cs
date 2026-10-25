@@ -56,7 +56,11 @@ public sealed class Validator<T> : IValidatorMeta
         var rules = PropertyRules.Create(propertyInfo.PropertyType, meta);
         configure(rules);
 
+#if NETWASM
+        Func<T, object?> getter = property.Compile();
+#else
         Func<T, object?> getter = value => value is null ? null : propertyInfo.GetValue(value);
+#endif
 
         _properties.Add(new PropertyRule(
             name,

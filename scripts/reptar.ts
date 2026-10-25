@@ -15,6 +15,9 @@ import {
 import path from "node:path";
 
 import { patchNetWasmHost } from "../packages/host/src/patch";
+import { planMigrations, generateMigrationFile } from "./diff";
+import { inspectProject, doctorProject } from "./inspect";
+import { runMcpServer } from "./mcp";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const requiredSdk = "10.0.401";
@@ -176,7 +179,10 @@ if (command === "--help" || command === "-h" || command === "help") {
 Commands:
   new          Scaffold a new fullstack Reptar + React + Better Auth project
   dev          Run the example blog API on http://localhost:8787
-  db           Run database migrations (db status, db migrate, db new <name>)
+  inspect      Inspect database tables, routes, migrations, and project state (--json)
+  doctor       Diagnose SDK toolchain, database connectivity, and RPC status (--json)
+  mcp          Run the Model Context Protocol stdio server for AI agents
+  db           Database operations: status, migrate, new <name>, plan (--json), generate
   codegen      Generate packages/rpc contracts from the C# route tree
   test         Run the C# framework tests
   build        Build the framework core
@@ -204,7 +210,7 @@ const handleDbCommand = (args: string[]) => {
   const subCommand = args[0] ?? "status";
   const getFlag = (name: string): string | undefined => {
     const idx = args.indexOf(name);
-    return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
+    return idx !== -1 && idx + 1 < args.length ? args[idx + 1] : undefined;
   };
 
   const migrationsDir =
@@ -238,12 +244,14 @@ const handleDbCommand = (args: string[]) => {
     for (const f of existing) {
       const match = f.match(/^(\d+)_/);
       if (match) {
-        const n = parseInt(match[1], 10);
-        if (n >= nextNum) nextNum = n + 1;
+        const n = Number.parseInt(match[1], 10);
+        if (n >= nextNum) {
+          nextNum = n + 1;
+        }
       }
     }
     const prefix = String(nextNum).padStart(4, "0");
-    const sanitized = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    const sanitized = name.toLowerCase().replaceAll(/[^a-z0-9_]/g, "_");
     const filename = `${prefix}_${sanitized}.sql`;
     const targetPath = path.join(migrationsDir, filename);
     writeFileSync(
@@ -283,7 +291,7 @@ const handleDbCommand = (args: string[]) => {
 
   const appliedRows = db
     .query(`SELECT "id", "name", "applied_at" FROM "__reptar_migrations"`)
-    .all() as Array<{ id: string; name: string; applied_at: string }>;
+    .all() as { id: string; name: string; applied_at: string }[];
 
   const appliedMap = new Map<string, string>();
   for (const row of appliedRows) {
@@ -312,11 +320,15 @@ const handleDbCommand = (args: string[]) => {
       (f) => !appliedMap.has(f.replace(/\.sql$/i, ""))
     );
     if (pending.length === 0) {
-      console.log(`✓ Database is up to date (${migrationFiles.length} applied, 0 pending).`);
+      console.log(
+        `✓ Database is up to date (${migrationFiles.length} applied, 0 pending).`
+      );
       process.exit(0);
     }
 
-    console.log(`Applying ${pending.length} pending migration(s) to ${dbPath}...`);
+    console.log(
+      `Applying ${pending.length} pending migration(s) to ${dbPath}...`
+    );
     for (const file of pending) {
       const id = file.replace(/\.sql$/i, "");
       const filePath = path.join(migrationsDir, file);
@@ -339,12 +351,135 @@ const handleDbCommand = (args: string[]) => {
     process.exit(0);
   }
 
-  console.error(`Unknown db command: '${subCommand}'. Try: db status, db migrate, db new <name>`);
+  if (subCommand === "plan") {
+    const isJson = args.includes("--json");
+    const plan = planMigrations(repoRoot, process.cwd(), {
+      dbPath,
+      migrationsDir,
+    });
+    if (isJson) {
+      console.log(JSON.stringify(plan, null, 2));
+      process.exit(0);
+    }
+
+    console.log(`\nReptar Database Migration Plan`);
+    console.log(`──────────────────────────────────────────`);
+    console.log(`Database:   ${dbPath}`);
+    console.log(
+      `Status:     ${plan.status === "in_sync" ? "✓ Schema is in sync with TableDef" : "⚠ Schema drift detected"}\n`
+    );
+
+    if (plan.changes.length === 0) {
+      console.log(
+        "No pending schema changes. All TableDef tables and columns exist in database."
+      );
+      process.exit(0);
+    }
+
+    console.log(`Planned operations (${plan.changes.length}):`);
+    for (const change of plan.changes) {
+      console.log(`  • [${change.type}] ${change.detail}`);
+    }
+    console.log(`\nPlanned SQL:`);
+    console.log(plan.sql);
+    console.log(
+      `\nRun 'bun reptar db generate' to write these changes to a migration file.`
+    );
+    process.exit(0);
+  }
+
+  if (subCommand === "generate") {
+    const name =
+      getFlag("--name") ?? (args[1]?.startsWith("-") ? undefined : args[1]);
+    const res = generateMigrationFile(repoRoot, process.cwd(), name, {
+      dbPath,
+      migrationsDir,
+    });
+    if (res.created) {
+      console.log(`✓ Created migration: ${res.path}`);
+      console.log(
+        `  Planned ${res.changes} change(s). Run 'bun reptar db migrate' to apply.`
+      );
+    } else {
+      console.log(`✓ ${res.message}`);
+    }
+    process.exit(0);
+  }
+
+  console.error(
+    `Unknown db command: '${subCommand}'. Try: db status, db migrate, db new <name>, db plan, db generate`
+  );
   process.exit(1);
 };
 
 if (command === "db") {
   handleDbCommand(rest);
+}
+
+if (command === "inspect") {
+  const isJson = rest.includes("--json");
+  const inspection = inspectProject(repoRoot, process.cwd());
+  if (isJson) {
+    console.log(JSON.stringify(inspection, null, 2));
+    process.exit(0);
+  }
+
+  console.log(`\nReptar Project Inspection`);
+  console.log(`──────────────────────────────────────────`);
+  console.log(
+    `Name:        ${inspection.project.name} (${inspection.project.version})`
+  );
+  console.log(`Root:        ${inspection.project.root}`);
+  console.log(
+    `Database:    ${inspection.database.driver} (${inspection.database.connected ? "connected" : "unconnected"})`
+  );
+  console.log(`DB Path:     ${inspection.database.path}`);
+  console.log(`Tables:      ${inspection.tables.length} table(s)`);
+  for (const t of inspection.tables) {
+    console.log(
+      `  • ${t.name} (${t.columns.length} columns, ${t.indexes.length} indexes)`
+    );
+  }
+  console.log(`Routes:      ${inspection.routes.length} route(s) registered`);
+  const aiRoutes = inspection.routes.filter((r) => r.isAiTool);
+  if (aiRoutes.length > 0) {
+    console.log(`AI Tools:    ${aiRoutes.length} route(s) exposed as AI tools`);
+  }
+  console.log(
+    `Migrations:  ${inspection.migrations.applied.length} applied, ${inspection.migrations.pending.length} pending`
+  );
+  console.log(
+    `Contracts:   ${inspection.generated.status} (${inspection.generated.openapi})`
+  );
+  process.exit(0);
+}
+
+if (command === "doctor") {
+  const isJson = rest.includes("--json");
+  const report = doctorProject(repoRoot, process.cwd());
+  if (isJson) {
+    console.log(JSON.stringify(report, null, 2));
+    process.exit(report.healthy ? 0 : 1);
+  }
+
+  console.log(`\nReptar Doctor Diagnostics`);
+  console.log(`──────────────────────────────────────────`);
+  for (const check of report.checks) {
+    const symbol = check.passed ? "✓" : "✗";
+    console.log(`${symbol} ${check.title}: ${check.details ?? ""}`);
+    if (!check.passed && check.advice) {
+      console.log(`    ↳ Action: ${check.advice}`);
+    }
+  }
+  console.log(
+    `\nStatus: ${report.healthy ? "All checks passed! Reptar environment is healthy." : "Some checks failed. See actions above."}`
+  );
+  process.exit(report.healthy ? 0 : 1);
+}
+
+if (command === "mcp") {
+  runMcpServer(repoRoot, process.cwd());
+  await new Promise(() => {});
 }
 
 ensureSdk();

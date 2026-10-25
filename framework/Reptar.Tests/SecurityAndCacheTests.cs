@@ -2,6 +2,7 @@ using Xunit;
 
 namespace Reptar.Tests;
 
+[Collection("ResponseCache")]
 public sealed class SecurityAndCacheTests
 {
     [Fact]

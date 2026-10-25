@@ -124,3 +124,26 @@ Oxlint + Oxfmt will catch most mechanical issues automatically. Focus your atten
 ---
 
 Most formatting and common issues are automatically fixed by Oxlint + Oxfmt. Run `bunx ultracite fix` before committing to ensure compliance.
+
+---
+
+# Reptar Framework Guidelines for AI Agents
+
+When working on Reptar C# or TypeScript code, adhere to these architectural rules:
+
+## Machine-Readable Inspection & MCP Tools
+- Query project state using `bun reptar inspect --json` or the stdio MCP server (`bun reptar mcp`) instead of guessing.
+- Use `bun reptar doctor --json` to verify SDK toolchain, database connectivity, and RPC sync.
+- Run `bun reptar db plan --json` to inspect schema drift between `TableDef` and active SQLite database.
+- Use `bun reptar db generate` to create new migrations and `bun reptar db migrate` to apply them.
+- Use `bun reptar codegen` to regenerate `@reptar/client` contracts whenever C# routes change.
+
+## Data Layer & Typed Column Tokens
+- Never use heavy ORM attribute annotations (`[PrimaryKey]`, `[Unique]`, `[DefaultSql]`) on DTO records. Storage schema belongs in `TableDef` (`schema/*.cs`), and projection shapes belong in clean C# records.
+- Use typed `ColumnRef<T>` tokens (`table.Col<T>("col")`) for type-safe query filters (`Posts.Title.Eq(...)`, `Posts.CreatedAt.Desc()`). This prevents typo bugs at compile-time with zero heap overhead.
+- Use `ctx.Db.From<T>(table).Where(...).OrderBy(...).Limit(...).ToListAsync()` for fluent, readable queries.
+- Raw SQL (`ctx.Db.QueryAsync<T>(...)`) is always available and first-class for complex queries or CTEs.
+
+## Reflection & Target Constraints
+- Never rely on runtime reflection in request or database paths. Reptar targets Native AOT and NetWasm (Cloudflare Workers).
+- Use `#if !NETWASM` when writing code that relies on full .NET cryptography or filesystem primitives not present in NetWasm.

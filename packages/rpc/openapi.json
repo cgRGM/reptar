@@ -164,6 +164,134 @@
         }
       }
     },
+    "/auth/social": {
+      "post": {
+        "operationId": "post_auth_social",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuiltInSocialInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/callback/{provider}": {
+      "get": {
+        "operationId": "get_auth_callback_provider",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/auth/sessions": {
+      "get": {
+        "operationId": "get_auth_sessions",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/auth/sessions/revoke": {
+      "post": {
+        "operationId": "post_auth_sessions_revoke",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sessions/revoke-others": {
+      "post": {
+        "operationId": "post_auth_sessions_revoke-others",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/auth/change-password": {
+      "post": {
+        "operationId": "post_auth_change-password",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordInput"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/api-keys": {
+      "post": {
+        "operationId": "post_auth_api-keys",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateApiKeyInput"
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "get_auth_api-keys",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/auth/api-keys/{id}": {
+      "delete": {
+        "operationId": "delete_auth_api-keys_id",
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/posts": {
       "get": {
         "operationId": "get_posts",
@@ -347,6 +475,46 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           }
         }
       }
@@ -358,6 +526,16 @@
           "200": {
             "description": "OK",
             "content": null
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            }
           },
           "404": {
             "description": "Not Found",
@@ -427,6 +605,18 @@
           },
           "name": {
             "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "emailVerified": {
+            "type": "number"
+          },
+          "createdAt": {
+            "type": "string"
           }
         }
       },
@@ -488,6 +678,47 @@
         "properties": {
           "user": {
             "type": "object"
+          }
+        }
+      },
+      "BuiltInSocialInput": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string"
+          },
+          "callbackUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "RevokeSessionInput": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          }
+        }
+      },
+      "ChangePasswordInput": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": "string"
+          },
+          "newPassword": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateApiKeyInput": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "expiresInDays": {
+            "type": "number"
           }
         }
       },

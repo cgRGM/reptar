@@ -1,8 +1,10 @@
 using System.Text;
 using Reptar;
+using Xunit;
 
 namespace Reptar.Tests;
 
+[Collection("ResponseCache")]
 public class ResponseCacheTests
 {
     [Fact]

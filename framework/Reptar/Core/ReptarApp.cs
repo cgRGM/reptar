@@ -158,11 +158,20 @@ public sealed class ReptarApp
     public RouteBuilder Get(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("GET", path, null, handler);
 
+    public RouteBuilder Get(string path, Func<Ctx, ReptarResponse> handler) =>
+        AddRoute("GET", path, null, ctx => Task.FromResult(handler(ctx)));
+
     public RouteBuilder Get(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("GET", path, middleware, handler);
+
+    public RouteBuilder Get(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, ReptarResponse> handler) =>
+        AddRoute("GET", path, middleware, ctx => Task.FromResult(handler(ctx)));
 
     public RouteBuilder Post(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("POST", path, null, handler);
@@ -1076,10 +1085,19 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
     public RouteBuilder Get(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
         app.Get(path, handler);
 
+    public RouteBuilder Get(string path, Func<Ctx, ReptarResponse> handler) =>
+        app.Get(path, handler);
+
     public RouteBuilder Get(
         string path,
         ReptarMiddleware middleware,
         Func<Ctx, Task<ReptarResponse>> handler) =>
+        app.Get(path, middleware, handler);
+
+    public RouteBuilder Get(
+        string path,
+        ReptarMiddleware middleware,
+        Func<Ctx, ReptarResponse> handler) =>
         app.Get(path, middleware, handler);
 
     public RouteBuilder Post(string path, Func<Ctx, Task<ReptarResponse>> handler) =>
