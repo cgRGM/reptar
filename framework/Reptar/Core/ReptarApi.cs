@@ -107,8 +107,12 @@ public static class ReptarApi
         int limit = 60,
         int windowSeconds = 60,
         string category = "api",
-        Func<Ctx, string>? keySelector = null) =>
-        Middlewares.RateLimit(limit, windowSeconds, category, keySelector);
+        Func<Ctx, string>? keySelector = null,
+        bool trustProxyHeaders = false) =>
+        Middlewares.RateLimit(limit, windowSeconds, category, keySelector, trustProxyHeaders);
+
+    public static ReptarMiddleware RateLimit(RateLimitOptions options) =>
+        Middlewares.RateLimit(options);
 }
 
 public static class Db

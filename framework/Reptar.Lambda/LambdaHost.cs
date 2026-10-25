@@ -93,6 +93,8 @@ public static class LambdaHost
             ?? "/";
 
         var query = doc["rawQueryString"]?.GetValue<string>() ?? "";
+        var remoteIp = doc["requestContext"]?["http"]?["sourceIp"]?.GetValue<string>()
+            ?? doc["requestContext"]?["identity"]?["sourceIp"]?.GetValue<string>();
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (doc["headers"] is JsonObject headersObj)
@@ -153,6 +155,7 @@ public static class LambdaHost
             Method = method,
             Path = path,
             Query = query,
+            RemoteIp = remoteIp,
             Headers = headers,
             Cookies = cookies,
             Body = body,

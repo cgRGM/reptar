@@ -10,6 +10,7 @@ public sealed class ReptarRequest
     public required string Method { get; init; }
     public required string Path { get; init; }
     public string Query { get; init; } = "";
+    public string? RemoteIp { get; init; }
 
     public Func<Dictionary<string, string>>? HeadersFactory { get; init; }
     public Func<string, string?>? HeaderLookup { get; init; }

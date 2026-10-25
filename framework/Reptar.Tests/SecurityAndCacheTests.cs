@@ -71,6 +71,102 @@ public sealed class SecurityAndCacheTests
         Assert.False(deniedPreflight.Headers.ContainsKey("Access-Control-Allow-Origin"));
     }
 
+    [Fact]
+    public async Task RateLimit_IgnoresSpoofedForwardedHeadersByDefault_AndUsesRemoteIp()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            RateLimit = new MemoryRateLimiter(defaultLimit: 1, TimeSpan.FromSeconds(60)),
+        });
+        app.Use(ReptarApi.RateLimit(limit: 1, windowSeconds: 60));
+        app.Get("/ping", ctx => ctx.Text("pong"));
+
+        // Request 1 from 203.0.113.10 with spoofed X-Forwarded-For succeeds
+        var first = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ping",
+            RemoteIp = "203.0.113.10",
+            Headers = new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.1" },
+        });
+        Assert.Equal(200, first.Status);
+
+        // Request 2 from same RemoteIp rotating X-Forwarded-For is still rate-limited (429)!
+        var second = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ping",
+            RemoteIp = "203.0.113.10",
+            Headers = new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.2" },
+        });
+        Assert.Equal(429, second.Status);
+
+        // Request from a different RemoteIp has its own independent bucket
+        var otherCaller = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ping",
+            RemoteIp = "203.0.113.11",
+        });
+        Assert.Equal(200, otherCaller.Status);
+    }
+
+    [Fact]
+    public async Task RateLimit_WhenTrustProxyHeadersEnabled_TakesFirstForwardedIpAndKvLimiterWorks()
+    {
+        var kv = new MemoryKvClient();
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            RateLimit = new KvRateLimiter(kv, defaultLimit: 1, TimeSpan.FromSeconds(60)),
+        });
+        app.Use(ReptarApi.RateLimit(new RateLimitOptions
+        {
+            Limit = 1,
+            WindowSeconds = 60,
+            TrustProxyHeaders = true,
+        }));
+        app.Get("/ping", ctx => ctx.Text("pong"));
+
+        var r1 = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ping",
+            RemoteIp = "10.0.0.1",
+            Headers = new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.50, 10.0.0.1" },
+        });
+        Assert.Equal(200, r1.Status);
+
+        // Same first IP in X-Forwarded-For hits the KV rate limit
+        var r2 = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ping",
+            RemoteIp = "10.0.0.2",
+            Headers = new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.50, 10.0.0.2" },
+        });
+        Assert.Equal(429, r2.Status);
+    }
+
+    private sealed class MemoryKvClient : IKvClient
+    {
+        private readonly Dictionary<string, string> _store = new(StringComparer.Ordinal);
+
+        public Task<string?> GetAsync(string key) =>
+            Task.FromResult(_store.TryGetValue(key, out var val) ? val : null);
+
+        public Task PutAsync(string key, string value, int? ttlSeconds = null)
+        {
+            _store[key] = value;
+            return Task.CompletedTask;
+        }
+
+        public Task DeleteAsync(string key)
+        {
+            _store.Remove(key);
+            return Task.CompletedTask;
+        }
+    }
+
     private sealed class DictionaryEnv(IReadOnlyDictionary<string, string> values) : IEnvironment
     {
         public string? Get(string name) =>

@@ -168,32 +168,91 @@ public static class Middlewares
         int limit = 60,
         int windowSeconds = 60,
         string category = "api",
-        Func<Ctx, string>? keySelector = null) => async (ctx, next) =>
-    {
-        var key = keySelector?.Invoke(ctx)
-            ?? ctx.User?.Id
-            ?? ctx.Req.Header("CF-Connecting-IP")
-            ?? ctx.Req.Header("X-Forwarded-For")
-            ?? "anonymous";
-
-        var result = await ctx.RateLimit.CheckAsync(
-            category,
-            key,
-            limit,
-            TimeSpan.FromSeconds(windowSeconds));
-
-        ctx.SetHeader("X-RateLimit-Limit", result.Limit.ToString());
-        ctx.SetHeader("X-RateLimit-Remaining", result.Remaining.ToString());
-        ctx.SetHeader("X-RateLimit-Reset", result.ResetSeconds.ToString());
-
-        if (!result.Allowed)
+        Func<Ctx, string>? keySelector = null,
+        bool trustProxyHeaders = false) =>
+        RateLimit(new RateLimitOptions
         {
-            ctx.SetHeader("Retry-After", windowSeconds.ToString());
-            return ctx.Error(429, "rate_limited", "Rate limit exceeded. Try again later.");
+            Limit = limit,
+            WindowSeconds = windowSeconds,
+            Category = category,
+            KeySelector = keySelector,
+            TrustProxyHeaders = trustProxyHeaders,
+        });
+
+    public static ReptarMiddleware RateLimit(RateLimitOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var window = TimeSpan.FromSeconds(Math.Max(1, options.WindowSeconds));
+
+        return async (ctx, next) =>
+        {
+            var key = ResolveRateLimitKey(ctx, options);
+
+            var result = await ctx.RateLimit.CheckAsync(
+                options.Category,
+                key,
+                options.Limit,
+                window);
+
+            ctx.SetHeader("X-RateLimit-Limit", result.Limit.ToString());
+            ctx.SetHeader("X-RateLimit-Remaining", result.Remaining.ToString());
+            ctx.SetHeader("X-RateLimit-Reset", result.ResetSeconds.ToString());
+
+            if (!result.Allowed)
+            {
+                ctx.SetHeader("Retry-After", options.WindowSeconds.ToString());
+                return ctx.Error(429, "rate_limited", "Rate limit exceeded. Try again later.");
+            }
+
+            return await next();
+        };
+    }
+
+    internal static string ResolveRateLimitKey(Ctx ctx, RateLimitOptions options)
+    {
+        var custom = NonEmpty(options.KeySelector?.Invoke(ctx));
+        if (custom is not null)
+            return custom;
+
+        var userId = NonEmpty(ctx.User?.Id);
+        if (userId is not null)
+            return userId;
+
+        if (options.TrustProxyHeaders)
+        {
+            var cfIp = NonEmpty(ctx.Req.Header("CF-Connecting-IP"));
+            if (cfIp is not null)
+                return cfIp;
+
+            var forwardedIp = FirstForwardedIp(ctx.Req.Header("X-Forwarded-For"));
+            if (forwardedIp is not null)
+                return forwardedIp;
         }
 
-        return await next();
-    };
+        var remoteIp = NonEmpty(ctx.Req.RemoteIp);
+        if (remoteIp is not null)
+            return remoteIp;
+
+        return "loopback";
+    }
+
+    private static string? FirstForwardedIp(string? headerValue)
+    {
+        if (string.IsNullOrWhiteSpace(headerValue))
+            return null;
+
+        var commaIndex = headerValue.IndexOf(',');
+        var first = commaIndex >= 0 ? headerValue[..commaIndex] : headerValue;
+        return NonEmpty(first);
+    }
+
+    private static string? NonEmpty(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return value.Trim();
+    }
 
     public static ReptarMiddleware SWR(
         int ttlSeconds = 15,
@@ -201,6 +260,7 @@ public static class Middlewares
         Action<SwrOptions>? configure = null) =>
         CacheControl.SWR(ttlSeconds, swrSeconds, configure);
 
+#if !NETWASM
     public static ReptarMiddleware SecurityHeaders(
         SecurityHeadersOptions? options = null) =>
         ProductionExtensions.SecurityHeadersMiddleware(options);
@@ -209,6 +269,59 @@ public static class Middlewares
         string rootDirectory = "wwwroot",
         StaticFileOptions? options = null) =>
         ProductionExtensions.StaticFilesMiddleware(rootDirectory, options);
+#endif
+}
+
+public sealed class RateLimitOptions
+{
+    public int Limit { get; set; } = 60;
+    public int WindowSeconds { get; set; } = 60;
+    public string Category { get; set; } = "api";
+    public bool TrustProxyHeaders { get; set; }
+    public Func<Ctx, string>? KeySelector { get; set; }
+}
+
+/// <summary>
+/// Distributed fixed-window rate limiter backed by <see cref="IKvClient"/>.
+/// Use when running across multiple worker isolates or replicas where
+/// per-process <see cref="MemoryRateLimiter"/> state is not shared.
+/// </summary>
+public sealed class KvRateLimiter(
+    IKvClient kv,
+    int defaultLimit = 60,
+    TimeSpan? defaultWindow = null) : IRateLimiter
+{
+    private readonly TimeSpan _defaultWindow = defaultWindow ?? TimeSpan.FromMinutes(1);
+
+    public async Task<bool> LimitAsync(string category, string key) =>
+        (await CheckAsync(category, key, defaultLimit, _defaultWindow)).Allowed;
+
+    public async Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window) =>
+        (await CheckAsync(category, key, limit, window)).Allowed;
+
+    public async Task<RateLimitResult> CheckAsync(
+        string category,
+        string key,
+        int limit,
+        TimeSpan window)
+    {
+        var max = Math.Max(1, limit);
+        var windowSeconds = Math.Max(1, (int)Math.Ceiling(window.TotalSeconds));
+        var nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var bucketIndex = nowSeconds / windowSeconds;
+        var resetSeconds = (int)Math.Max(1, ((bucketIndex + 1) * windowSeconds) - nowSeconds);
+        var storageKey = $"rl:{category}:{key}:{bucketIndex}";
+
+        var raw = await kv.GetAsync(storageKey);
+        var current = int.TryParse(raw, out var parsed) ? parsed : 0;
+
+        if (current >= max)
+            return new RateLimitResult(false, max, 0, resetSeconds, resetSeconds);
+
+        var nextCount = current + 1;
+        await kv.PutAsync(storageKey, nextCount.ToString(), windowSeconds + 5);
+        return new RateLimitResult(true, max, Math.Max(0, max - nextCount), resetSeconds, 0);
+    }
 }
 
 public static class RateLimit
@@ -217,6 +330,10 @@ public static class RateLimit
         int limit = 60,
         int windowSeconds = 60,
         string category = "api",
-        Func<Ctx, string>? keySelector = null) =>
-        Middlewares.RateLimit(limit, windowSeconds, category, keySelector);
+        Func<Ctx, string>? keySelector = null,
+        bool trustProxyHeaders = false) =>
+        Middlewares.RateLimit(limit, windowSeconds, category, keySelector, trustProxyHeaders);
+
+    public static ReptarMiddleware SlidingWindow(RateLimitOptions options) =>
+        Middlewares.RateLimit(options);
 }

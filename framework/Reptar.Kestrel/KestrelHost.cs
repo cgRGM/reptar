@@ -310,6 +310,7 @@ public static class KestrelHost
             Query = http.Request.QueryString.HasValue
                 ? http.Request.QueryString.Value!.TrimStart('?')
                 : "",
+            RemoteIp = http.Connection.RemoteIpAddress?.ToString(),
             HeaderLookup = name => http.Request.Headers.TryGetValue(name, out var v) ? v.ToString() : null,
             HeadersFactory = () =>
             {
