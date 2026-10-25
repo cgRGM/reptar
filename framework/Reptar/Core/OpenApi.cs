@@ -1,3 +1,4 @@
+#if !NETWASM
 using System.Text;
 using System.Text.Json;
 
@@ -182,7 +183,21 @@ internal static class OpenApiGenerator
                 operation["parameters"] = parameters;
 
             // Request body
-            if (route.InputType is not null)
+            if (route.Validator is IValidatorMeta validatorMeta && route.InputType is not null)
+            {
+                operation["requestBody"] = new Dictionary<string, object?>
+                {
+                    ["required"] = true,
+                    ["content"] = new Dictionary<string, object?>
+                    {
+                        ["application/json"] = new Dictionary<string, object?>
+                        {
+                            ["schema"] = GenerateValidatorSchema(validatorMeta, route.InputType)
+                        }
+                    }
+                };
+            }
+            else if (route.InputType is not null)
             {
                 operation["requestBody"] = new Dictionary<string, object?>
                 {
@@ -280,6 +295,60 @@ internal static class OpenApiGenerator
         return (translated.ToString(), paramNames);
     }
 
+    private static Dictionary<string, object?> GenerateValidatorSchema(IValidatorMeta validatorMeta, Type inputType)
+    {
+        var schema = new Dictionary<string, object?>
+        {
+            ["type"] = "object"
+        };
+
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var required = new List<string>();
+
+        foreach (var prop in validatorMeta.Properties)
+        {
+            var propSchema = GenerateTypeSchema(prop.PropertyType);
+
+            if (prop.MinLength.HasValue)
+                propSchema["minLength"] = prop.MinLength.Value;
+
+            if (prop.MaxLength.HasValue)
+                propSchema["maxLength"] = prop.MaxLength.Value;
+
+            if (prop.ExactLength.HasValue)
+            {
+                propSchema["minLength"] = prop.ExactLength.Value;
+                propSchema["maxLength"] = prop.ExactLength.Value;
+            }
+
+            if (prop.MinValue.HasValue)
+                propSchema["minimum"] = prop.MinValue.Value;
+
+            if (prop.MaxValue.HasValue)
+                propSchema["maximum"] = prop.MaxValue.Value;
+
+            if (prop.IsEmail)
+                propSchema["format"] = "email";
+
+            if (prop.IsUrl)
+                propSchema["format"] = "uri";
+
+            if (!string.IsNullOrEmpty(prop.Pattern))
+                propSchema["pattern"] = prop.Pattern;
+
+            properties[prop.Name] = propSchema;
+
+            if (!prop.IsOptional)
+                required.Add(prop.Name);
+        }
+
+        schema["properties"] = properties;
+        if (required.Count > 0)
+            schema["required"] = required;
+
+        return schema;
+    }
+
     private static Dictionary<string, object?> GenerateTypeSchema(Type type)
     {
         var schema = new Dictionary<string, object?>();
@@ -365,3 +434,4 @@ internal static class OpenApiGenerator
         _ => "Response"
     };
 }
+#endif

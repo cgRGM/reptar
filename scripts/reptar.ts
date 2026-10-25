@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 
+import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import {
   copyFileSync,
@@ -7,6 +8,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -174,6 +176,7 @@ if (command === "--help" || command === "-h" || command === "help") {
 Commands:
   new          Scaffold a new fullstack Reptar + React + Better Auth project
   dev          Run the example blog API on http://localhost:8787
+  db           Run database migrations (db status, db migrate, db new <name>)
   codegen      Generate packages/rpc contracts from the C# route tree
   test         Run the C# framework tests
   build        Build the framework core
@@ -195,6 +198,153 @@ if (command === "new" || command === "create") {
     stdio: "inherit",
   });
   process.exit(result.status ?? 0);
+}
+
+const handleDbCommand = (args: string[]) => {
+  const subCommand = args[0] ?? "status";
+  const getFlag = (name: string): string | undefined => {
+    const idx = args.indexOf(name);
+    return idx >= 0 && idx + 1 < args.length ? args[idx + 1] : undefined;
+  };
+
+  const migrationsDir =
+    getFlag("--dir") ??
+    [
+      path.join(process.cwd(), "migrations"),
+      path.join(repoRoot, "migrations"),
+      path.join(repoRoot, "spikes/netwasm-worker/migrations"),
+    ].find((d) => existsSync(d)) ??
+    path.join(process.cwd(), "migrations");
+
+  const dbPath =
+    getFlag("--db") ??
+    process.env.DATABASE_URL?.replace(/^sqlite:/i, "").replace(
+      /^Data Source=/i,
+      ""
+    ) ??
+    path.join(process.cwd(), ".reptar/reptar.db");
+
+  if (subCommand === "new") {
+    const name = args[1]?.replace(/\.sql$/i, "");
+    if (!name || name.startsWith("-")) {
+      console.error("Usage: bun reptar db new <migration_name>");
+      process.exit(1);
+    }
+    mkdirSync(migrationsDir, { recursive: true });
+    const existing = existsSync(migrationsDir)
+      ? readdirSync(migrationsDir).filter((f) => f.endsWith(".sql"))
+      : [];
+    let nextNum = 1;
+    for (const f of existing) {
+      const match = f.match(/^(\d+)_/);
+      if (match) {
+        const n = parseInt(match[1], 10);
+        if (n >= nextNum) nextNum = n + 1;
+      }
+    }
+    const prefix = String(nextNum).padStart(4, "0");
+    const sanitized = name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+    const filename = `${prefix}_${sanitized}.sql`;
+    const targetPath = path.join(migrationsDir, filename);
+    writeFileSync(
+      targetPath,
+      `-- Migration: ${filename}\n-- Created: ${new Date().toISOString()}\n\n`
+    );
+    console.log(`✓ Created migration: ${targetPath}`);
+    process.exit(0);
+  }
+
+  if (!existsSync(migrationsDir)) {
+    console.log(
+      `No migrations directory found at ${migrationsDir}. Run 'bun reptar db new <name>' to create your first migration.`
+    );
+    process.exit(0);
+  }
+
+  const migrationFiles = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
+
+  if (migrationFiles.length === 0) {
+    console.log(`No .sql migration files found in ${migrationsDir}.`);
+    process.exit(0);
+  }
+
+  mkdirSync(path.dirname(dbPath), { recursive: true });
+  const db = new Database(dbPath);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS "__reptar_migrations" (
+      "id" TEXT PRIMARY KEY,
+      "name" TEXT NOT NULL,
+      "applied_at" TEXT NOT NULL
+    );
+  `);
+
+  const appliedRows = db
+    .query(`SELECT "id", "name", "applied_at" FROM "__reptar_migrations"`)
+    .all() as Array<{ id: string; name: string; applied_at: string }>;
+
+  const appliedMap = new Map<string, string>();
+  for (const row of appliedRows) {
+    appliedMap.set(row.id, row.applied_at);
+  }
+
+  if (subCommand === "status") {
+    console.log(`Database: ${dbPath}`);
+    console.log(`Migrations directory: ${migrationsDir}\n`);
+    console.log(`Status        Migration`);
+    console.log(`────────────  ──────────────────────────────────────────`);
+    for (const file of migrationFiles) {
+      const id = file.replace(/\.sql$/i, "");
+      const appliedAt = appliedMap.get(id);
+      if (appliedAt) {
+        console.log(`✓ Applied     ${file} (${appliedAt})`);
+      } else {
+        console.log(`○ Pending     ${file}`);
+      }
+    }
+    process.exit(0);
+  }
+
+  if (subCommand === "migrate") {
+    const pending = migrationFiles.filter(
+      (f) => !appliedMap.has(f.replace(/\.sql$/i, ""))
+    );
+    if (pending.length === 0) {
+      console.log(`✓ Database is up to date (${migrationFiles.length} applied, 0 pending).`);
+      process.exit(0);
+    }
+
+    console.log(`Applying ${pending.length} pending migration(s) to ${dbPath}...`);
+    for (const file of pending) {
+      const id = file.replace(/\.sql$/i, "");
+      const filePath = path.join(migrationsDir, file);
+      const sql = readFileSync(filePath, "utf-8");
+      const start = performance.now();
+
+      db.transaction(() => {
+        db.run(sql);
+        db.run(
+          `INSERT INTO "__reptar_migrations" ("id", "name", "applied_at") VALUES (?, ?, ?)`,
+          [id, file, new Date().toISOString()]
+        );
+      })();
+
+      const duration = (performance.now() - start).toFixed(1);
+      console.log(`✓ Applied ${file} (${duration}ms)`);
+    }
+
+    console.log(`\nAll ${pending.length} migration(s) applied successfully.`);
+    process.exit(0);
+  }
+
+  console.error(`Unknown db command: '${subCommand}'. Try: db status, db migrate, db new <name>`);
+  process.exit(1);
+};
+
+if (command === "db") {
+  handleDbCommand(rest);
 }
 
 ensureSdk();

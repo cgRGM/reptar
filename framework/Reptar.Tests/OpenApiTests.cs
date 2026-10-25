@@ -67,6 +67,43 @@ public class OpenApiTests
     }
 
     [Fact]
+    public void OpenApi_generates_schema_from_typed_validators()
+    {
+        var app = ReptarApp.Create();
+
+        var validator = ReptarApi.Rule<CreateArticleDto>()
+            .Prop(x => x.Title, p => p.Min(5).Max(100))
+            .Prop(x => x.Body, p => p.Min(10));
+
+        app.Post("/api/articles", validator, (ctx, input) => Task.FromResult(ctx.Json(input, 201)));
+
+        var json = app.GetOpenApiJson();
+        using var doc = JsonDocument.Parse(json);
+        var schema = doc.RootElement
+            .GetProperty("paths")
+            .GetProperty("/api/articles")
+            .GetProperty("post")
+            .GetProperty("requestBody")
+            .GetProperty("content")
+            .GetProperty("application/json")
+            .GetProperty("schema");
+
+        Assert.Equal("object", schema.GetProperty("type").GetString());
+        var props = schema.GetProperty("properties");
+        Assert.True(props.TryGetProperty("title", out var titleProp));
+        Assert.Equal("string", titleProp.GetProperty("type").GetString());
+        Assert.Equal(5, titleProp.GetProperty("minLength").GetInt32());
+        Assert.Equal(100, titleProp.GetProperty("maxLength").GetInt32());
+
+        Assert.True(props.TryGetProperty("body", out var bodyProp));
+        Assert.Equal("string", bodyProp.GetProperty("type").GetString());
+        Assert.Equal(10, bodyProp.GetProperty("minLength").GetInt32());
+
+        var required = schema.GetProperty("required");
+        Assert.Equal(2, required.GetArrayLength());
+    }
+
+    [Fact]
     public async Task UseScalar_and_UseSwaggerUi_serve_interactive_ui_pages()
     {
         var app = ReptarApp.Create();

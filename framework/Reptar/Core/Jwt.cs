@@ -69,17 +69,18 @@ public static class Jwt
         Encoding.UTF8.GetBytes(unsignedSpan, unsignedBytes);
 
         System.Security.Cryptography.HMACSHA256.HashData(keyBytes, unsignedBytes, expectedSig);
-        var decodedSig = Base64UrlDecode(sigSpan);
-        if (decodedSig.Length != 32 || !System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(expectedSig, decodedSig))
+        var expectedBase64 = Base64Url(expectedSig.ToArray());
+        if (!FixedEquals(expectedBase64, sigSpan.ToString()))
         {
             return null;
         }
 #else
         var unsigned = unsignedSpan.ToString();
+        var signature = sigSpan.ToString();
         var expected = Base64Url(HexToBytes(
             await crypto.HmacSha256(options.Secret, unsigned)));
 
-        if (!FixedEquals(expected, sigSpan.ToString()))
+        if (!FixedEquals(expected, signature))
             return null;
 #endif
 

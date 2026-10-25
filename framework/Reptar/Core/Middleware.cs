@@ -65,13 +65,17 @@ public static class Middlewares
             ?? ctx.Req.Header("X-Forwarded-For")
             ?? "anonymous";
 
-        var allowed = await ctx.RateLimit.LimitAsync(
+        var result = await ctx.RateLimit.CheckAsync(
             category,
             key,
             limit,
             TimeSpan.FromSeconds(windowSeconds));
 
-        if (!allowed)
+        ctx.SetHeader("X-RateLimit-Limit", result.Limit.ToString());
+        ctx.SetHeader("X-RateLimit-Remaining", result.Remaining.ToString());
+        ctx.SetHeader("X-RateLimit-Reset", result.ResetSeconds.ToString());
+
+        if (!result.Allowed)
         {
             ctx.SetHeader("Retry-After", windowSeconds.ToString());
             return ctx.Error(429, "rate_limited", "Rate limit exceeded. Try again later.");
@@ -85,4 +89,14 @@ public static class Middlewares
         int swrSeconds = 30,
         Action<SwrOptions>? configure = null) =>
         CacheControl.SWR(ttlSeconds, swrSeconds, configure);
+}
+
+public static class RateLimit
+{
+    public static ReptarMiddleware SlidingWindow(
+        int limit = 60,
+        int windowSeconds = 60,
+        string category = "api",
+        Func<Ctx, string>? keySelector = null) =>
+        Middlewares.RateLimit(limit, windowSeconds, category, keySelector);
 }

@@ -293,26 +293,45 @@ public sealed class NoopAiClient : IAiClient
         throw new PlatformNotSupportedException("Workers AI is provided by the Workers shim.");
 }
 
+public readonly record struct RateLimitResult(
+    bool Allowed,
+    int Limit,
+    int Remaining,
+    long ResetSeconds,
+    int RetryAfterSeconds);
+
 public interface IRateLimiter
 {
     Task<bool> LimitAsync(string category, string key);
     Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window);
+    Task<RateLimitResult> CheckAsync(string category, string key, int limit, TimeSpan window) =>
+        Task.FromResult(new RateLimitResult(true, limit, limit, 0, 0));
 }
 
 public sealed class NoopRateLimiter : IRateLimiter
 {
     public Task<bool> LimitAsync(string category, string key) => Task.FromResult(true);
     public Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window) => Task.FromResult(true);
+    public Task<RateLimitResult> CheckAsync(string category, string key, int limit, TimeSpan window) =>
+        Task.FromResult(new RateLimitResult(true, limit, limit, 0, 0));
 }
 
 public sealed class MemoryRateLimiter : IRateLimiter
 {
+    private sealed class WindowBucket
+    {
+        public long CurrentWindowStart;
+        public int CurrentCount;
+        public int PreviousCount;
+        public readonly object Lock = new();
+    }
+
     private readonly int _defaultLimit;
     private readonly TimeSpan _defaultWindow;
     private readonly Dictionary<string, (int Limit, TimeSpan Window)> _rules = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, List<long>> _buckets = new(StringComparer.Ordinal);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, WindowBucket> _buckets = new(StringComparer.Ordinal);
     private readonly object _sync = new();
-    private long _lastCleanup;
+    private long _lastCleanupSeconds;
 
     public MemoryRateLimiter(int defaultLimit = 60, TimeSpan? defaultWindow = null)
     {
@@ -340,60 +359,67 @@ public sealed class MemoryRateLimiter : IRateLimiter
         return LimitAsync(category, key, rule.Limit, rule.Window);
     }
 
-    public Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window)
+    public async Task<bool> LimitAsync(string category, string key, int limit, TimeSpan window)
     {
-        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var windowMs = (long)window.TotalMilliseconds;
+        var result = await CheckAsync(category, key, limit, window);
+        return result.Allowed;
+    }
+
+    public Task<RateLimitResult> CheckAsync(string category, string key, int limit, TimeSpan window)
+    {
+        var windowSec = Math.Max(1, (long)window.TotalSeconds);
+        var nowSec = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        var windowStart = (nowSec / windowSec) * windowSec;
+        var resetSec = windowStart + windowSec;
+        var elapsedInWindow = nowSec - windowStart;
+        var previousWeight = Math.Max(0.0, (double)(windowSec - elapsedInWindow) / windowSec);
+
         var bucketKey = $"{category}:{key}";
+        var bucket = _buckets.GetOrAdd(bucketKey, _ => new WindowBucket { CurrentWindowStart = windowStart });
 
-        lock (_sync)
+        if (nowSec - Volatile.Read(ref _lastCleanupSeconds) > 300)
         {
-            if (now - _lastCleanup > 60_000)
+            CleanupStaleBuckets(nowSec);
+            Volatile.Write(ref _lastCleanupSeconds, nowSec);
+        }
+
+        lock (bucket.Lock)
+        {
+            if (windowStart > bucket.CurrentWindowStart)
             {
-                CleanupStaleBuckets(now);
-                _lastCleanup = now;
+                if (windowStart == bucket.CurrentWindowStart + windowSec)
+                {
+                    bucket.PreviousCount = bucket.CurrentCount;
+                }
+                else
+                {
+                    bucket.PreviousCount = 0;
+                }
+                bucket.CurrentCount = 0;
+                bucket.CurrentWindowStart = windowStart;
             }
 
-            if (!_buckets.TryGetValue(bucketKey, out var timestamps))
+            var estimated = (int)(bucket.PreviousCount * previousWeight) + bucket.CurrentCount;
+            if (estimated >= limit)
             {
-                timestamps = new List<long>();
-                _buckets[bucketKey] = timestamps;
+                var retryAfter = Math.Max(1, (int)(resetSec - nowSec));
+                return Task.FromResult(new RateLimitResult(false, limit, 0, resetSec, retryAfter));
             }
 
-            var cutoff = now - windowMs;
-            var removeCount = 0;
-            while (removeCount < timestamps.Count && timestamps[removeCount] <= cutoff)
-            {
-                removeCount++;
-            }
-            if (removeCount > 0)
-            {
-                timestamps.RemoveRange(0, removeCount);
-            }
-
-            if (timestamps.Count >= limit)
-            {
-                return Task.FromResult(false);
-            }
-
-            timestamps.Add(now);
-            return Task.FromResult(true);
+            bucket.CurrentCount++;
+            var remaining = Math.Max(0, limit - (estimated + 1));
+            return Task.FromResult(new RateLimitResult(true, limit, remaining, resetSec, 0));
         }
     }
 
-    private void CleanupStaleBuckets(long now)
+    private void CleanupStaleBuckets(long nowSec)
     {
-        var staleKeys = new List<string>();
-        foreach (var (k, list) in _buckets)
+        foreach (var (k, b) in _buckets)
         {
-            if (list.Count == 0 || now - list[^1] > 300_000)
+            if (nowSec - b.CurrentWindowStart > 600)
             {
-                staleKeys.Add(k);
+                _buckets.TryRemove(k, out _);
             }
-        }
-        foreach (var k in staleKeys)
-        {
-            _buckets.Remove(k);
         }
     }
 }

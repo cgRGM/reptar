@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.IO.Pipelines;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
@@ -9,6 +11,15 @@ public static class KestrelHost
 {
     public static async Task RunAsync(this ReptarApp app, string[]? args = null)
     {
+        if (args is { Length: > 0 } &&
+            (string.Equals(args[0], "db", StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(args[0], "--db", StringComparison.OrdinalIgnoreCase)))
+        {
+            var exitCode = await app.RunMigrationCliAsync(args);
+            Environment.ExitCode = exitCode;
+            return;
+        }
+
         var builder = WebApplication.CreateSlimBuilder(args ?? []);
         if (Environment.GetEnvironmentVariable("BENCH_MIDDLEWARE") != "1")
         {
@@ -222,17 +233,55 @@ public static class KestrelHost
 
     private static readonly Dictionary<string, string> EmptyCookies = new(StringComparer.OrdinalIgnoreCase);
 
+    private static async ValueTask<byte[]?> ReadBodyAsync(PipeReader reader, long? contentLength)
+    {
+        if (contentLength is <= 0)
+            return null;
+
+        if (contentLength is { } len && len <= 65536)
+        {
+            var buffer = GC.AllocateUninitializedArray<byte>((int)len);
+            var totalRead = 0;
+            while (totalRead < len)
+            {
+                var result = await reader.ReadAsync();
+                var readOnlySequence = result.Buffer;
+                var toCopy = (int)Math.Min(readOnlySequence.Length, len - totalRead);
+                readOnlySequence.Slice(0, toCopy).CopyTo(buffer.AsSpan(totalRead));
+                totalRead += toCopy;
+                reader.AdvanceTo(readOnlySequence.GetPosition(toCopy));
+                if (result.IsCompleted || result.IsCanceled)
+                    break;
+            }
+            return totalRead == len ? buffer : buffer[..totalRead];
+        }
+
+        using var memory = contentLength.HasValue
+            ? new MemoryStream((int)contentLength.Value)
+            : new MemoryStream();
+
+        while (true)
+        {
+            var result = await reader.ReadAsync();
+            var buffer = result.Buffer;
+
+            foreach (var segment in buffer)
+            {
+                memory.Write(segment.Span);
+            }
+
+            reader.AdvanceTo(buffer.End);
+
+            if (result.IsCompleted || result.IsCanceled)
+                break;
+        }
+
+        return memory.ToArray();
+    }
+
     private static async Task<ReptarRequest> ToReptarRequest(HttpContext http)
     {
-        byte[]? body = null;
-
-        if (http.Request.ContentLength is > 0)
-        {
-            var len = (int)http.Request.ContentLength.Value;
-            using var memory = new MemoryStream(len);
-            await http.Request.Body.CopyToAsync(memory);
-            body = memory.ToArray();
-        }
+        var body = await ReadBodyAsync(http.Request.BodyReader, http.Request.ContentLength);
 
         var cookies = EmptyCookies;
 

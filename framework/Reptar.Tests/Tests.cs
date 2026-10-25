@@ -741,14 +741,42 @@ public class RateLimiterTests
 
         var res1 = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/ping" });
         Assert.Equal(200, res1.Status);
+        Assert.Equal("2", res1.Headers["X-RateLimit-Limit"]);
+        Assert.Equal("1", res1.Headers["X-RateLimit-Remaining"]);
+        Assert.True(res1.Headers.ContainsKey("X-RateLimit-Reset"));
 
         var res2 = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/ping" });
         Assert.Equal(200, res2.Status);
+        Assert.Equal("2", res2.Headers["X-RateLimit-Limit"]);
+        Assert.Equal("0", res2.Headers["X-RateLimit-Remaining"]);
 
         var res3 = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/ping" });
         Assert.Equal(429, res3.Status);
         Assert.Equal("30", res3.Headers["Retry-After"]);
+        Assert.Equal("2", res3.Headers["X-RateLimit-Limit"]);
+        Assert.Equal("0", res3.Headers["X-RateLimit-Remaining"]);
         Assert.Contains("rate_limited", Encoding.UTF8.GetString(res3.Body!));
+    }
+
+    [Fact]
+    public async Task RateLimit_SlidingWindow_alias_enforces_limits()
+    {
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            RateLimit = new MemoryRateLimiter(defaultLimit: 1, TimeSpan.FromSeconds(60)),
+        });
+
+        app.Post("/login", RateLimit.SlidingWindow(limit: 1, windowSeconds: 60, keySelector: ctx => "login-ip"), ctx => Task.FromResult(ctx.Text("ok")));
+
+        var r1 = await app.HandleAsync(new ReptarRequest { Method = "POST", Path = "/login" });
+        Assert.Equal(200, r1.Status);
+        Assert.Equal("1", r1.Headers["X-RateLimit-Limit"]);
+        Assert.Equal("0", r1.Headers["X-RateLimit-Remaining"]);
+
+        var r2 = await app.HandleAsync(new ReptarRequest { Method = "POST", Path = "/login" });
+        Assert.Equal(429, r2.Status);
+        Assert.Equal("60", r2.Headers["Retry-After"]);
     }
 }
 
