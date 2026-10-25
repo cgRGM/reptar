@@ -81,6 +81,12 @@ public sealed class SseStream
         var bytes = Encoding.UTF8.GetBytes($": {comment}\n\n");
         await _writer.WriteAsync(bytes, cancellationToken);
     }
+
+    public ValueTask SendTokenAsync(string token, CancellationToken cancellationToken = default) =>
+        SendAsync(token, cancellationToken: cancellationToken);
+
+    public ValueTask SendDoneAsync(CancellationToken cancellationToken = default) =>
+        SendAsync("[DONE]", cancellationToken: cancellationToken);
 }
 
 public static class SseExtensions
@@ -134,6 +140,58 @@ public static class SseExtensions
         res.Headers["X-Accel-Buffering"] = "no";
 
         return res;
+    }
+
+    public static ReptarResponse StreamLlmAsync(
+        this Ctx ctx,
+        IAsyncEnumerable<string> tokenStream,
+        CancellationToken cancellationToken = default)
+    {
+        return ctx.Sse(async (stream, ct) =>
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
+            var token = linkedCts.Token;
+
+            try
+            {
+                await foreach (var chunk in tokenStream.WithCancellation(token))
+                {
+                    await stream.SendAsync(chunk, cancellationToken: token);
+                }
+
+                await stream.SendAsync("[DONE]", cancellationToken: token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Disconnect or cancellation
+            }
+        });
+    }
+
+    public static ReptarResponse StreamLlmJsonAsync<T>(
+        this Ctx ctx,
+        IAsyncEnumerable<T> eventStream,
+        CancellationToken cancellationToken = default)
+    {
+        return ctx.Sse(async (stream, ct) =>
+        {
+            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken);
+            var token = linkedCts.Token;
+
+            try
+            {
+                await foreach (var item in eventStream.WithCancellation(token))
+                {
+                    await stream.SendJsonAsync(item, cancellationToken: token);
+                }
+
+                await stream.SendAsync("[DONE]", cancellationToken: token);
+            }
+            catch (OperationCanceledException)
+            {
+                // Disconnect or cancellation
+            }
+        });
     }
 }
 #endif

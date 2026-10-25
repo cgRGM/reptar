@@ -269,7 +269,7 @@ internal static class OpenApiGenerator
         });
     }
 
-    private static (string Path, List<string> Params) TranslatePath(string reptarPath)
+    internal static (string Path, List<string> Params) TranslatePath(string reptarPath)
     {
         var segments = reptarPath.Split('/');
         var translated = new StringBuilder();
@@ -295,7 +295,7 @@ internal static class OpenApiGenerator
         return (translated.ToString(), paramNames);
     }
 
-    private static Dictionary<string, object?> GenerateValidatorSchema(IValidatorMeta validatorMeta, Type inputType)
+    internal static Dictionary<string, object?> GenerateValidatorSchema(IValidatorMeta validatorMeta, Type inputType)
     {
         var schema = new Dictionary<string, object?>
         {
@@ -349,7 +349,7 @@ internal static class OpenApiGenerator
         return schema;
     }
 
-    private static Dictionary<string, object?> GenerateTypeSchema(Type type)
+    internal static Dictionary<string, object?> GenerateTypeSchema(Type type)
     {
         var schema = new Dictionary<string, object?>();
         var unwrapped = Nullable.GetUnderlyingType(type) ?? type;

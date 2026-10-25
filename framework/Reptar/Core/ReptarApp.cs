@@ -14,6 +14,9 @@ public sealed class RouteMeta
     public string? Description { get; internal set; }
     public List<string> Tags { get; } = new();
     public object? Validator { get; internal set; }
+    public bool IsAiTool { get; internal set; }
+    public string? AiToolName { get; internal set; }
+    public string? AiToolDescription { get; internal set; }
 
     internal RouteMeta CloneWithPath(string path)
     {
@@ -26,6 +29,9 @@ public sealed class RouteMeta
             Summary = Summary,
             Description = Description,
             Validator = Validator,
+            IsAiTool = IsAiTool,
+            AiToolName = AiToolName,
+            AiToolDescription = AiToolDescription,
         };
 
         clone.Produces.AddRange(Produces);
@@ -943,6 +949,14 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
     public RouteBuilder WithTag(string tag)
     {
         meta.Tags.Add(tag);
+        return this;
+    }
+
+    public RouteBuilder AsAiTool(string? name = null, string? description = null)
+    {
+        meta.IsAiTool = true;
+        meta.AiToolName = name;
+        meta.AiToolDescription = description;
         return this;
     }
 

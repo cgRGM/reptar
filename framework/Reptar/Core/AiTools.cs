@@ -1,0 +1,567 @@
+#if !NETWASM
+using System.Diagnostics.CodeAnalysis;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+
+namespace Reptar;
+
+public enum AiToolFormat
+{
+    OpenAi,
+    Anthropic,
+    Gemini,
+    JsonSchema
+}
+
+public sealed class AiToolDefinition
+{
+    public required string Name { get; init; }
+    public required string Description { get; init; }
+    public required Dictionary<string, object?> Parameters { get; init; }
+    public required string Method { get; init; }
+    public required string Path { get; init; }
+
+    public Dictionary<string, object?> ToDictionary(AiToolFormat format = AiToolFormat.OpenAi)
+    {
+        return format switch
+        {
+            AiToolFormat.Anthropic => new Dictionary<string, object?>
+            {
+                ["name"] = Name,
+                ["description"] = Description,
+                ["input_schema"] = Parameters
+            },
+            AiToolFormat.Gemini => new Dictionary<string, object?>
+            {
+                ["name"] = Name,
+                ["description"] = Description,
+                ["parameters"] = Parameters
+            },
+            AiToolFormat.JsonSchema => Parameters,
+            _ => new Dictionary<string, object?>
+            {
+                ["type"] = "function",
+                ["function"] = new Dictionary<string, object?>
+                {
+                    ["name"] = Name,
+                    ["description"] = Description,
+                    ["parameters"] = Parameters
+                }
+            }
+        };
+    }
+
+    public string ToJson(AiToolFormat format = AiToolFormat.OpenAi, bool indented = false)
+    {
+        var dict = ToDictionary(format);
+        return JsonSerializer.Serialize(dict, new JsonSerializerOptions
+        {
+            WriteIndented = indented,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        });
+    }
+}
+
+public sealed class AiToolResult
+{
+    public required bool Success { get; init; }
+    public required int StatusCode { get; init; }
+    public string? Content { get; init; }
+    public string? ErrorCode { get; init; }
+    public string? ErrorMessage { get; init; }
+    public IReadOnlyList<ValidationIssue>? ValidationErrors { get; init; }
+
+    public static AiToolResult Ok(int statusCode, string content) => new()
+    {
+        Success = true,
+        StatusCode = statusCode,
+        Content = content
+    };
+
+    public static AiToolResult Failure(
+        int statusCode,
+        string errorCode,
+        string message,
+        IReadOnlyList<ValidationIssue>? validationErrors = null) => new()
+    {
+        Success = false,
+        StatusCode = statusCode,
+        ErrorCode = errorCode,
+        ErrorMessage = message,
+        ValidationErrors = validationErrors,
+        Content = message
+    };
+
+    /// <summary>
+    /// Formats the tool result into a string suitable for passing directly into an LLM tool response role.
+    /// If validation failed, includes the exact field constraints so the model can self-correct.
+    /// </summary>
+    public string ToLlmResponse()
+    {
+        if (Success)
+            return string.IsNullOrEmpty(Content) ? "{}" : Content;
+
+        if (ValidationErrors is { Count: > 0 } errors)
+        {
+            var sb = new StringBuilder();
+            sb.Append("Error (").Append(ErrorCode ?? "validation_error").Append("): ");
+            sb.Append(ErrorMessage ?? "Validation failed.").Append(". Issues: ");
+            for (var i = 0; i < errors.Count; i++)
+            {
+                if (i > 0) sb.Append(", ");
+                var pathStr = errors[i].Path is { Length: > 0 } p ? string.Join(".", p) : "field";
+                sb.Append(pathStr).Append(": ").Append(errors[i].Message);
+            }
+            return sb.ToString();
+        }
+
+        return $"Error ({StatusCode} {ErrorCode ?? "error"}): {ErrorMessage ?? Content ?? "Operation failed."}";
+    }
+}
+
+public readonly record struct AiToolCall(string Id, string Name, string Arguments);
+
+public sealed record ChatMessage(
+    string Role,
+    string Content,
+    string? Name = null,
+    string? ToolCallId = null,
+    IReadOnlyList<AiToolCall>? ToolCalls = null);
+
+public sealed record AgentStep(
+    string? Content,
+    IReadOnlyList<AiToolCall>? ToolCalls = null,
+    bool IsComplete = false);
+
+public sealed record AgentRunResult(
+    bool Success,
+    string FinalContent,
+    int StepsTaken,
+    IReadOnlyList<ChatMessage> History);
+
+public static class AgentHarness
+{
+    /// <summary>
+    /// Executes an autonomous multi-turn ReAct agent loop. Dispatches tool calls directly into Reptar routes
+    /// and loops until the model produces a completion or reaches maxSteps.
+    /// </summary>
+    public static async Task<AgentRunResult> RunAsync(
+        Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<AgentStep>> model,
+        List<ChatMessage> history,
+        Func<string, string, Task<AiToolResult>> toolExecutor,
+        int maxSteps = 10,
+        Action<AgentStep>? onStep = null,
+        CancellationToken cancellationToken = default)
+    {
+        var steps = 0;
+        while (steps < maxSteps && !cancellationToken.IsCancellationRequested)
+        {
+            steps++;
+            var step = await model(history, cancellationToken);
+            onStep?.Invoke(step);
+
+            if (step.IsComplete || step.ToolCalls is null || step.ToolCalls.Count == 0)
+            {
+                if (!string.IsNullOrEmpty(step.Content))
+                {
+                    history.Add(new ChatMessage("assistant", step.Content));
+                }
+                return new AgentRunResult(true, step.Content ?? "", steps, history);
+            }
+
+            history.Add(new ChatMessage("assistant", step.Content ?? "", ToolCalls: step.ToolCalls));
+
+            foreach (var toolCall in step.ToolCalls)
+            {
+                var result = await toolExecutor(toolCall.Name, toolCall.Arguments);
+                history.Add(new ChatMessage(
+                    "tool",
+                    result.ToLlmResponse(),
+                    Name: toolCall.Name,
+                    ToolCallId: toolCall.Id));
+            }
+        }
+
+        return new AgentRunResult(false, "Maximum agent steps reached.", steps, history);
+    }
+}
+
+public static class AiToolExtensions
+{
+    /// <summary>
+    /// Exports registered API routes as AI agent tool definitions compatible with OpenAI, Claude, or Gemini.
+    /// </summary>
+    public static List<AiToolDefinition> GetAiTools(
+        this ReptarApp app,
+        AiToolFormat format = AiToolFormat.OpenAi,
+        bool onlyExplicit = false)
+    {
+        var tools = new List<AiToolDefinition>();
+
+        foreach (var route in app.RouteMetadata)
+        {
+            if (onlyExplicit && !route.IsAiTool)
+                continue;
+
+            // Skip internal/docs/framework routes
+            if (route.Path.StartsWith("/openapi") ||
+                route.Path.StartsWith("/reference") ||
+                route.Path.StartsWith("/swagger") ||
+                route.Path.StartsWith("/__bench") ||
+                route.Path.StartsWith("/api/ai/tools") ||
+                route.Path == "/health")
+            {
+                continue;
+            }
+
+            var toolName = GetToolName(route);
+            var description = route.AiToolDescription ??
+                              route.Description ??
+                              route.Summary ??
+                              $"{route.Method.ToUpperInvariant()} {route.Path}";
+
+            var (translatedPath, pathParams) = OpenApiGenerator.TranslatePath(route.Path);
+            var parameters = BuildParametersSchema(route, pathParams);
+
+            tools.Add(new AiToolDefinition
+            {
+                Name = toolName,
+                Description = description,
+                Parameters = parameters,
+                Method = route.Method.ToUpperInvariant(),
+                Path = route.Path
+            });
+        }
+
+        return tools;
+    }
+
+    /// <summary>
+    /// Serializes the AI agent tools as a JSON string in the specified LLM format.
+    /// </summary>
+    public static string GetAiToolsJson(
+        this ReptarApp app,
+        AiToolFormat format = AiToolFormat.OpenAi,
+        bool onlyExplicit = false,
+        bool indented = true)
+    {
+        var tools = app.GetAiTools(format, onlyExplicit);
+        var formatted = tools.Select(t => t.ToDictionary(format)).ToList();
+        return JsonSerializer.Serialize(formatted, new JsonSerializerOptions
+        {
+            WriteIndented = indented,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        });
+    }
+
+    /// <summary>
+    /// Registers an HTTP endpoint (e.g. GET /api/ai/tools) that serves the tool definitions JSON.
+    /// </summary>
+    public static ReptarApp MapAiTools(
+        this ReptarApp app,
+        string path = "/api/ai/tools",
+        AiToolFormat format = AiToolFormat.OpenAi,
+        bool onlyExplicit = false)
+    {
+        app.Get(path, ctx =>
+        {
+            var json = app.GetAiToolsJson(format, onlyExplicit, indented: false);
+            return Task.FromResult(ctx.JsonRaw(json));
+        });
+
+        return app;
+    }
+
+    /// <summary>
+    /// Executes an AI tool call in-process against the matching Reptar route, running all middleware,
+    /// route validation, and database operations without an external HTTP hop.
+    /// </summary>
+    public static async Task<AiToolResult> ExecuteAiToolAsync(
+        this ReptarApp app,
+        string toolName,
+        string argumentsJson,
+        Ctx? parentCtx = null,
+        string? authorization = null)
+    {
+        var tools = app.GetAiTools(AiToolFormat.OpenAi, onlyExplicit: false);
+        var tool = tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+
+        if (tool is null)
+        {
+            return AiToolResult.Failure(404, "tool_not_found", $"AI tool '{toolName}' was not found.");
+        }
+
+        // Parse arguments JSON to extract path/query/body parameters
+        JsonNode? rootNode = null;
+        if (!string.IsNullOrWhiteSpace(argumentsJson))
+        {
+            try
+            {
+                rootNode = JsonNode.Parse(argumentsJson);
+            }
+            catch (JsonException ex)
+            {
+                return AiToolResult.Failure(400, "invalid_json", $"Arguments JSON is invalid: {ex.Message}");
+            }
+        }
+
+        var (_, pathParams) = OpenApiGenerator.TranslatePath(tool.Path);
+        var resolvedPath = tool.Path;
+        var queryParams = new List<string>();
+        var rootObj = rootNode as JsonObject;
+
+        // Replace route path parameters with values from arguments
+        foreach (var param in pathParams)
+        {
+            var placeholder = ":" + param;
+            string? paramValue = null;
+
+            if (rootObj is not null && rootObj.TryGetPropertyValue(param, out var nodeVal) && nodeVal is not null)
+            {
+                paramValue = nodeVal.ToString();
+                rootObj.Remove(param); // Remove path param from request body
+            }
+
+            if (!string.IsNullOrEmpty(paramValue))
+            {
+                resolvedPath = resolvedPath.Replace(placeholder, Uri.EscapeDataString(paramValue));
+            }
+        }
+
+        byte[]? bodyBytes = null;
+        if (tool.Method is "GET" or "HEAD")
+        {
+            // For GET requests, convert remaining arguments to query parameters
+            if (rootObj is not null)
+            {
+                foreach (var kvp in rootObj)
+                {
+                    if (kvp.Value is not null)
+                    {
+                        queryParams.Add($"{Uri.EscapeDataString(kvp.Key)}={Uri.EscapeDataString(kvp.Value.ToString())}");
+                    }
+                }
+            }
+        }
+        else
+        {
+            // For POST/PUT/PATCH/DELETE, pass remaining arguments as JSON body
+            if (rootObj is not null && rootObj.Count > 0)
+            {
+                bodyBytes = Encoding.UTF8.GetBytes(rootObj.ToJsonString());
+            }
+            else if (rootNode is not null && rootNode is not JsonObject)
+            {
+                bodyBytes = Encoding.UTF8.GetBytes(rootNode.ToJsonString());
+            }
+        }
+
+        var queryString = queryParams.Count > 0 ? "?" + string.Join("&", queryParams) : "";
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["content-type"] = "application/json"
+        };
+
+        if (parentCtx is not null)
+        {
+            foreach (var (k, v) in parentCtx.Req.Headers)
+            {
+                headers[k] = v;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(authorization))
+        {
+            headers["authorization"] = authorization.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                ? authorization
+                : "Bearer " + authorization;
+        }
+
+        var request = new ReptarRequest
+        {
+            Method = tool.Method,
+            Path = resolvedPath,
+            Query = queryString,
+            Headers = headers,
+            Body = bodyBytes
+        };
+
+        var response = await app.HandleAsync(request);
+        var bodyString = response.Body is not null
+            ? Encoding.UTF8.GetString(response.Body)
+            : string.Empty;
+
+        var isSuccess = response.Status is >= 200 and < 300;
+        if (isSuccess)
+        {
+            return AiToolResult.Ok(response.Status, bodyString);
+        }
+
+        // Try parsing structured validation errors if returned
+        string errorCode = "error";
+        string errorMessage = bodyString;
+        List<ValidationIssue>? issues = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(bodyString);
+            if (doc.RootElement.TryGetProperty("code", out var codeEl))
+                errorCode = codeEl.GetString() ?? errorCode;
+            if (doc.RootElement.TryGetProperty("message", out var msgEl))
+                errorMessage = msgEl.GetString() ?? errorMessage;
+
+            if (doc.RootElement.TryGetProperty("issues", out var issuesEl) && issuesEl.ValueKind == JsonValueKind.Array)
+            {
+                issues = new List<ValidationIssue>();
+                foreach (var item in issuesEl.EnumerateArray())
+                {
+                    string[]? pathArray = null;
+                    if (item.TryGetProperty("path", out var pe))
+                    {
+                        if (pe.ValueKind == JsonValueKind.Array)
+                        {
+                            pathArray = pe.EnumerateArray()
+                                .Select(x => x.GetString() ?? "")
+                                .Where(x => !string.IsNullOrEmpty(x))
+                                .ToArray();
+                        }
+                        else if (pe.ValueKind == JsonValueKind.String)
+                        {
+                            pathArray = [pe.GetString() ?? ""];
+                        }
+                    }
+
+                    var m = item.TryGetProperty("message", out var me) ? me.GetString() ?? "" : "";
+                    issues.Add(new ValidationIssue(m, pathArray));
+                }
+            }
+        }
+        catch
+        {
+            // Non-JSON error body fallback
+        }
+
+        return AiToolResult.Failure(response.Status, errorCode, errorMessage, issues);
+    }
+
+    private static string GetToolName(RouteMeta route)
+    {
+        if (!string.IsNullOrWhiteSpace(route.AiToolName))
+            return route.AiToolName!;
+
+        if (!string.IsNullOrWhiteSpace(route.Name))
+            return ToSnakeCase(route.Name!);
+
+        // Derive semantic snake_case tool name from method + path
+        // e.g. POST /api/tasks -> create_task
+        //      GET  /api/tasks/:id -> get_task
+        //      PUT  /api/tasks/:id -> update_task
+        //      DELETE /api/tasks/:id -> delete_task
+        var segments = route.Path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var cleanSegments = segments
+            .Where(s => !s.StartsWith(':') && !s.Equals("api", StringComparison.OrdinalIgnoreCase) && !s.Equals("v1", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var entity = cleanSegments.Count > 0 ? cleanSegments[^1] : "item";
+        // singularize simple plurals
+        if (entity.EndsWith("s", StringComparison.OrdinalIgnoreCase) && entity.Length > 1)
+            entity = entity[..^1];
+
+        var action = route.Method.ToUpperInvariant() switch
+        {
+            "POST" => "create",
+            "GET" => segments.Any(s => s.StartsWith(':')) ? "get" : "list",
+            "PUT" => "update",
+            "PATCH" => "patch",
+            "DELETE" => "delete",
+            _ => route.Method.ToLowerInvariant()
+        };
+
+        return $"{action}_{entity}";
+    }
+
+    private static Dictionary<string, object?> BuildParametersSchema(RouteMeta route, List<string> pathParams)
+    {
+        var schema = new Dictionary<string, object?>
+        {
+            ["type"] = "object"
+        };
+
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var required = new List<string>();
+
+        // Add path parameters
+        foreach (var p in pathParams)
+        {
+            properties[p] = new Dictionary<string, object?>
+            {
+                ["type"] = "string",
+                ["description"] = $"Route parameter {p}"
+            };
+            required.Add(p);
+        }
+
+        // Add validator / input type schema
+        if (route.Validator is IValidatorMeta validatorMeta && route.InputType is not null)
+        {
+            var bodySchema = OpenApiGenerator.GenerateValidatorSchema(validatorMeta, route.InputType);
+            if (bodySchema.TryGetValue("properties", out var propsObj) && propsObj is Dictionary<string, object?> bodyProps)
+            {
+                foreach (var (k, v) in bodyProps)
+                {
+                    properties[k] = v;
+                }
+            }
+
+            if (bodySchema.TryGetValue("required", out var reqObj) && reqObj is List<string> bodyReq)
+            {
+                foreach (var r in bodyReq)
+                {
+                    if (!required.Contains(r))
+                        required.Add(r);
+                }
+            }
+        }
+        else if (route.InputType is not null)
+        {
+            var bodySchema = OpenApiGenerator.GenerateTypeSchema(route.InputType);
+            if (bodySchema.TryGetValue("properties", out var propsObj) && propsObj is Dictionary<string, object?> bodyProps)
+            {
+                foreach (var (k, v) in bodyProps)
+                {
+                    properties[k] = v;
+                }
+            }
+        }
+
+        schema["properties"] = properties;
+        if (required.Count > 0)
+            schema["required"] = required;
+
+        return schema;
+    }
+
+    private static string ToSnakeCase(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return text;
+
+        var sb = new StringBuilder();
+        for (var i = 0; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (char.IsUpper(c))
+            {
+                if (i > 0) sb.Append('_');
+                sb.Append(char.ToLowerInvariant(c));
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
+    }
+}
+#endif
