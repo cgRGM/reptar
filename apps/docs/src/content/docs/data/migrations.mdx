@@ -1,77 +1,103 @@
 ---
 title: Migrations Engine
-description: Autonomous SQL DDL generation, local SQLite push, and Cloudflare D1 deployment.
+description: Built-in CLI migration runner, programmatic C# migrations, and TableDef DDL generation.
 ---
 
-import { Tabs, TabItem } from "@astrojs/starlight/components";
+import { Code, Tabs, TabItem } from "@astrojs/starlight/components";
 
 ## Overview
 
-Because your `TableDef` declarations contain comprehensive schema information, Reptar generates pure SQL DDL migrations directly. There is no external ORM or Drizzle Kit dependency required in the standard workflow.
+Reptar provides two complementary ways to manage database schemas across SQLite, Cloudflare D1, PostgreSQL, and MySQL—with zero external ORM dependencies:
 
----
+1. **CLI SQL Migration Runner (`bun scripts/reptar.ts db`)**: Scaffolds, inspects, and transactionally executes `.sql` migration files in `<1 ms` using Bun's native SQLite engine or D1.
+2. **Programmatic C# `MigrationRunner`**: Tracks applied migrations in the `__reptar_migrations` table across SQLite, PostgreSQL, and MySQL with up/down rollback support.
 
-## Migration Workflow
+## 1. CLI Migration Workflow
 
-### 1. Generate Migrations
+### Check Migration Status
 
-When you create or update tables in `apps/api/schema/`, run:
+View applied and pending `.sql` migrations in `migrations/`:
 
-<Tabs syncKey="pkg">
-  <TabItem label="npm">```bash npx reptar db generate ```</TabItem>
-  <TabItem label="pnpm">```bash pnpm dlx reptar db generate ```</TabItem>
-  <TabItem label="yarn">```bash yarn dlx reptar db generate ```</TabItem>
-  <TabItem label="bun">```bash bun reptar db generate ```</TabItem>
-</Tabs>
-
-This diffs your current `TableDef` instances against `migrations/meta/_journal.json` and emits a sequential SQL file:
-
-```sql
--- apps/api/migrations/0000_init.sql
-CREATE TABLE IF NOT EXISTS posts (
-  id TEXT PRIMARY KEY,
-  author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  slug TEXT NOT NULL UNIQUE,
-  title TEXT NOT NULL,
-  content TEXT NOT NULL,
-  published INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
+```bash
+bun scripts/reptar.ts db status
 ```
 
-### 2. Push to Local SQLite
+### Scaffold a New Migration
 
-During local development, apply pending schema changes to your local SQLite file without touching production:
+Create the next sequential timestamped `.sql` migration file:
+
+```bash
+bun scripts/reptar.ts db new add_tasks_index
+```
+
+### Apply Pending Migrations
+
+Run all unapplied migrations inside a single atomic transaction:
+
+```bash
+bun scripts/reptar.ts db migrate
+```
+
+## 2. Programmatic C# Migrations (`Migrations.cs`)
+
+You can register migrations directly on `ReptarApp` in C# or load `.sql` files from a directory at startup:
+
+```csharp
+var app = ReptarApp.Create(new ReptarConfig
+{
+    Database = Db.Sqlite("app.db"), // Works identically on Postgres & MySQL
+});
+
+app.AddMigration(
+    id: "001_initial_schema",
+    upSql: """
+        CREATE TABLE posts (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        """,
+    downSql: "DROP TABLE posts;");
+
+// Apply all pending migrations idempotently
+await app.MigrateAsync();
+
+// Or roll back the most recent migration in tests/staging
+await app.RollbackMigrationAsync(steps: 1);
+```
+
+### Loading `.sql` Files into `MigrationRunner`
+
+You can also run directory-based migrations directly from your compiled Native AOT binary:
+
+```csharp
+var runner = await MigrationRunner.LoadFromDirectoryAsync(app.Db, "./migrations");
+await MigrationRunner.RunCliAsync(runner, args); // Supports "migrate", "rollback", "status"
+```
+
+## 3. Schema-Driven DDL Generation
+
+When defining tables with `TableDef` in `schema/`, you can generate and apply DDL directly:
 
 <Tabs syncKey="pkg">
-  <TabItem label="npm">```bash npx reptar db push ```</TabItem>
-  <TabItem label="pnpm">```bash pnpm dlx reptar db push ```</TabItem>
-  <TabItem label="yarn">```bash yarn dlx reptar db push ```</TabItem>
-  <TabItem label="bun">```bash bun reptar db push ```</TabItem>
+  <TabItem label="bun">
+    <Code
+      code={"bun reptar db generate\nbun reptar db push\nbun reptar db apply"}
+      lang="bash"
+    />
+  </TabItem>
+  <TabItem label="npm">
+    <Code
+      code={"npx reptar db generate\nnpx reptar db push\nnpx reptar db apply"}
+      lang="bash"
+    />
+  </TabItem>
+  <TabItem label="pnpm">
+    <Code
+      code={
+        "pnpm dlx reptar db generate\npnpm dlx reptar db push\npnpm dlx reptar db apply"
+      }
+      lang="bash"
+    />
+  </TabItem>
 </Tabs>
-
-### 3. Apply to Cloudflare D1
-
-To apply pending migrations to your remote Cloudflare D1 database:
-
-<Tabs syncKey="pkg">
-  <TabItem label="npm">```bash npx reptar db apply ```</TabItem>
-  <TabItem label="pnpm">```bash pnpm dlx reptar db apply ```</TabItem>
-  <TabItem label="yarn">```bash yarn dlx reptar db apply ```</TabItem>
-  <TabItem label="bun">```bash bun reptar db apply ```</TabItem>
-</Tabs>
-
-In automated CI/CD pipelines, Alchemy reads the `apps/api/migrations/` directory directly and applies migrations atomically.
-
----
-
-## Scope & Custom SQL
-
-Reptar’s automated migration engine covers:
-
-- `CREATE TABLE IF NOT EXISTS`
-- `ADD COLUMN`
-- `ADD INDEX`
-- `ADD FOREIGN KEY`
-
-For complex schema migrations, table renames, or data backfills, write custom SQL files in `apps/api/migrations/` to be applied in order.

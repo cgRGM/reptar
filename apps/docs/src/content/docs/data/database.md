@@ -1,164 +1,165 @@
 ---
 title: Database Client (c.Db)
-description: Reflection-free CRUD, TableDef schemas, and Dapper-like data access on Cloudflare D1.
+description: Zero-reflection [ReptarEntity] row mapping, stack-allocated tuple parameters, pipelined batching, and D1 / SQLite / PostgreSQL / MySQL drivers.
 ---
 
 ## Philosophy
 
-Reptar intentionally rejects heavyweight ORM abstractions in favor of a clean, reflection-free data access model tailored for ahead-of-time (AOT) WebAssembly:
+Reptar replaces heavyweight reflection-based ORMs with a compile-time data access layer engineered for WebAssembly (`netwasm0.1`) and Native AOT (`net10.0`):
 
-- **Explicit Schemas:** Tables are defined with fluent `TableDef` builders.
-- **Reflection-Free Execution:** Inserts and updates serialize through source-generated JSON and `JsonDocument` DOM traversal, avoiding runtime reflection entirely.
-- **Transparent Snake Case Mapping:** Columns in SQLite (`created_at`, `image_key`, `user_id`) automatically map to C# record properties (`CreatedAt`, `ImageKey`, `UserId`) and TypeScript types (`createdAt`, `imageKey`, `userId`).
-- **Zero ORM Overhead:** No hidden lazy-loading cascades or query generation magic.
+- **Compile-Time `[ReptarEntity]` Mappers:** A Roslyn incremental source generator implements `IDataRecordMapper<T>` for your C# records, emitting both a zero-allocation positional fast-path (`MapPositional`) and an ordinal-lookup fallback.
+- **Zero-Allocation Tuple Parameters:** Pass SQL parameters as C# value tuples `("id", id)` instead of allocating anonymous objects or dictionaries on the heap.
+- **Pipelined Transactional Batching:** `c.Db.BatchAsync(...)` executes multi-statement writes in a single network round-trip via `NpgsqlBatch` on PostgreSQL, atomic batching on Cloudflare D1, and single-transaction execution on SQLite and MySQL.
+- **Transparent `snake_case` Mapping:** Columns in SQL (`created_at`, `image_key`, `author_id`) automatically map to `PascalCase` C# record properties (`CreatedAt`, `ImageKey`, `AuthorId`).
 
----
+## 1. Zero-Reflection `[ReptarEntity]` Mapping
 
-## 1. Table Definitions (`TableDef`)
-
-Define schemas using fluent column builders:
+Decorate any C# record or class with `[ReptarEntity]`:
 
 ```csharp
 using Reptar;
-using static Reptar.ReptarApi;
 
-public static readonly TableDef PostsTable = DefineTable("posts",
-    Col.Text("id").PrimaryKey(),
-    Col.Text("title").NotNull(),
-    Col.Text("content").NotNull(),
-    Col.Text("image_key"),
-    Col.Text("created_at").NotNull()
+[ReptarEntity]
+public sealed record TaskSummary(
+    string Id,
+    string Title,
+    string Status,
+    int Priority,
+    string? AssigneeName,
+    string CreatedAt);
+```
+
+At compile time, `Reptar.SourceGenerators` generates:
+
+1. **`PositionalDelegate` (`MapPositional`)**: When your `SELECT` column order matches the record constructor (`SELECT id, title, status, priority, assignee_name, created_at FROM ...`), Reptar reads columns using constant indices (`0, 1, 2...`) with zero per-query string comparisons or closure allocations.
+2. **Ordinal Resolution Fallback**: If columns are selected in a different order, the generated mapper resolves column ordinals once per query and maps every row without reflection.
+
+## 2. Direct SQL with Value-Tuple Parameters
+
+`c.Db` provides dedicated overloads for 1, 2, 3, 4, and `params (string Name, object? Value)[]` value tuples—completely avoiding anonymous-type reflection and dictionary allocations:
+
+```csharp
+// 1. Single-row query (direct reader without intermediate List<T> allocation)
+var task = await c.Db.QuerySingleOrDefaultAsync<TaskSummary>(
+    "SELECT id, title, status, priority, assignee_name, created_at FROM tasks WHERE id = @id",
+    ("id", taskId));
+
+// 2. Multi-row query with 2-tuple parameters
+var tasks = await c.Db.QueryAsync<TaskSummary>(
+    """
+    SELECT id, title, status, priority, assignee_name, created_at
+    FROM tasks
+    WHERE org_id = @orgId AND status = @status
+    ORDER BY created_at DESC
+    LIMIT @limit
+    """,
+    ("orgId", orgId),
+    ("status", "open"),
+    ("limit", 20));
+
+// 3. Non-query command execution
+int affected = await c.Db.ExecuteAsync(
+    "UPDATE tasks SET status = @status WHERE id = @id",
+    ("status", "done"),
+    ("id", taskId));
+```
+
+## 3. Transactional Pipelining (`BatchAsync` & `TransactionAsync`)
+
+When inserting related records (such as an article, its tags, and junction rows), use `c.Db.BatchAsync(...)` to execute all statements atomically in a single round-trip:
+
+```csharp
+await c.Db.BatchAsync(
+    ("INSERT INTO articles (id, slug, title, author_id) VALUES (@id, @slug, @title, @author)",
+        new object?[] { ("id", articleId), ("slug", slug), ("title", title), ("author", userId) }),
+    ("INSERT INTO article_tags (article_id, tag) VALUES (@id, @tag)",
+        new object?[] { ("id", articleId), ("tag", "csharp") }),
+    ("INSERT INTO article_tags (article_id, tag) VALUES (@id, @tag)",
+        new object?[] { ("id", articleId), ("tag", "cloudflare") })
 );
 ```
 
-Available column types include `Col.Text()`, `Col.Int()`, `Col.Real()`, and `Col.Blob()`, with modifiers `.PrimaryKey()`, `.NotNull()`, `.Unique()`, and `.Default(...)`.
-
----
-
-## 2. Reflection-Free CRUD Operations
-
-For standard operations, `c.Db` exposes strongly-typed CRUD helpers:
-
-### Fetching Records
+For interactive multi-step transactions with conditional logic, use `c.Db.TransactionAsync`:
 
 ```csharp
-// Get single record by primary key (returns null if not found)
-var post = await c.Db.GetAsync<Post>(PostsTable, id);
+await c.Db.TransactionAsync(async tx =>
+{
+    var balance = await tx.QuerySingleOrDefaultAsync<int>(
+        "SELECT credits FROM accounts WHERE id = @id",
+        ("id", accountId));
+
+    if (balance < 10)
+    {
+        throw new InvalidOperationException("Insufficient credits.");
+    }
+
+    await tx.ExecuteAsync(
+        "UPDATE accounts SET credits = credits - 10 WHERE id = @id",
+        ("id", accountId));
+});
+```
+
+## 4. TableDef CRUD Helpers
+
+For standard table operations, `c.Db` also exposes schema-driven CRUD helpers backed by `TableDef`:
+
+```csharp
+// Get single record by primary key
+var post = await c.Db.GetAsync<Post>(Schema.Posts, id);
 
 // List records with optional WHERE / ORDER BY clauses
-var posts = await c.Db.ListAsync<Post>(PostsTable, "where published = 1 order by created_at desc");
+var posts = await c.Db.ListAsync<Post>(Schema.Posts, "where published = 1 order by created_at desc");
 
-// Check if a record exists
-bool exists = await c.Db.ExistsAsync(PostsTable, "slug = ?", slug);
+// Insert, Update, and Delete
+await c.Db.InsertAsync(Schema.Posts, post);
+await c.Db.UpdateAsync(Schema.Posts, updatedPost, updatedPost.Id);
+await c.Db.DeleteAsync(Schema.Posts, id);
 ```
 
-### Inserting Records
+## 5. Supported Database Drivers
+
+Reptar supports four relational backends through the unified `IDbClient` interface:
+
+### Cloudflare D1 (Edge SQLite)
 
 ```csharp
-var post = new Post(
-    Id: Ids.New("post"),
-    Title: input.Title.Trim(),
-    Content: input.Content,
-    ImageKey: input.ImageKey,
-    CreatedAt: c.Clock.IsoNow()
-);
-
-// Inserts all columns matching the TableDef schema
-await c.Db.InsertAsync(PostsTable, post);
-```
-
-### Updating Records
-
-```csharp
-var updated = post with
+var app = ReptarApp.Create(new ReptarConfig
 {
-    Title = input.Title.Trim(),
-    Content = input.Content,
-    ImageKey = input.ImageKey ?? post.ImageKey
-};
-
-// Updates all columns except primary key and created_at
-await c.Db.UpdateAsync(PostsTable, updated, updated.Id);
-```
-
-### Deleting Records
-
-```csharp
-// Delete by primary key
-await c.Db.DeleteAsync(PostsTable, id);
-
-// Delete matching WHERE clause
-await c.Db.DeleteWhereAsync(PostsTable, "user_id = ?", userId);
-```
-
----
-
-## 3. Direct SQL Queries
-
-Direct parameterized SQL is always supported when you need joins, aggregations, or complex queries:
-
-```csharp
-// 1. Parameterized query
-var activeUsers = await c.Db.QueryAsync<User>(
-    "select * from users where is_active = ? and role = ?",
-    "1", "admin"
-);
-
-// 2. Query single scalar / row
-var user = await c.Db.QuerySingleOrDefaultAsync<User>(
-    "select * from users where email = ?",
-    email
-);
-
-// 3. Execute statement
-int affectedRows = await c.Db.ExecuteAsync(
-    "update posts set view_count = view_count + 1 where id = ?",
-    postId
-);
-```
-
----
-
-## 4. Supported Database Drivers
-
-Reptar abstracts database access through the `IDbClient` interface, allowing you to run against local embedded SQLite during development and scale to distributed databases in production:
-
-### Cloudflare D1 (Edge Relational SQLite)
-
-The default relational database on Cloudflare Workers. Zero setup, replicated at the edge, and queried without external connection pools.
-
-```csharp
-var app = Reptar(new ReptarConfig
-{
-    Database = D1()
+    Database = Db.D1(),
 });
 ```
 
-### Local SQLite
+### Local & VPS SQLite (32-Channel WAL Read Pool)
 
-Embedded zero-dependency SQLite for local testing, CI pipelines, and standalone CLI utilities:
+`SqliteDbClient` automatically enables `journal_mode=WAL`, configures a single-writer gate (building commands before acquiring the write lock), and opens a pool of `Mode=ReadOnly` WAL read connections (`Math.Clamp(ProcessorCount * 16, 16, 64)`, configurable via `REPTAR_SQLITE_READ_POOL_SIZE`):
 
 ```csharp
-var app = Reptar(new ReptarConfig
+var app = ReptarApp.Create(new ReptarConfig
 {
-    Database = Db.Sqlite("blog.db")
+    Database = Db.Sqlite("app.db"),
 });
 ```
+
+> [!TIP] When publishing a SQLite-only Native AOT binary, pass `-p:ReptarSqliteOnly=true` to `dotnet publish` to trim Npgsql and MySqlConnector, reducing the standalone executable from 18.4 MB to **10.9 MB**.
 
 ### PostgreSQL & Cloudflare Hyperdrive
 
-To connect your edge backend to central PostgreSQL databases (Supabase, Neon, AWS RDS, Tembo), Reptar supports **Cloudflare Hyperdrive**:
-
-- **Edge Connection Pooling:** Reuses established TCP connections from Cloudflare's nearest point of presence to your database.
-- **Query Acceleration:** Automatically caches read queries across the edge network.
-- **Dialect Adaptation:** `SqlParamParser` automatically translates SQLite positional parameters (`?`) or named parameters (`@id`) to PostgreSQL positional parameters (`$1, $2`).
+Uses `NpgsqlDataSource` connection pooling and transactional `NpgsqlBatch` pipelining:
 
 ```csharp
-var app = Reptar(new ReptarConfig
+var app = ReptarApp.Create(new ReptarConfig
 {
-    // Connects via Cloudflare Hyperdrive connection pool
-    Database = Db.Postgres(env.Get("HYPERDRIVE_URL"))
+    Database = Db.Postgres(Environment.GetEnvironmentVariable("DATABASE_URL")!),
 });
 ```
 
-When running under **.NET Native AOT** on AWS Lambda or Docker, Reptar utilizes native `Npgsql` for direct high-performance connection pooling.
+### MySQL / MariaDB
+
+Uses `MySqlConnector` with automatic parameter translation and connection pooling:
+
+```csharp
+var app = ReptarApp.Create(new ReptarConfig
+{
+    Database = Db.MySql(Environment.GetEnvironmentVariable("MYSQL_URL")!),
+});
+```

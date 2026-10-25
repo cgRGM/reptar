@@ -1,36 +1,62 @@
 ---
-title: Typed Client & Codegen
-description: End-to-end type safety, Standard Schema generation, and OpenAPI contracts.
+title: Typed Client & OpenAPI 3.1
+description: End-to-end TypeScript RPC client generation, auto-derived OpenAPI 3.1 schemas, and interactive Scalar & Swagger UIs.
 ---
 
 import { Code, Tabs, TabItem } from "@astrojs/starlight/components";
 import appTypeCode from "../../../../../../examples/blog/rpc/app-type.d.ts?raw";
 import smokeCode from "../../../../../../examples/blog/rpc/smoke.ts?raw";
 
-## Codegen Command
+## Native OpenAPI 3.1 & Interactive Scalar UI
 
-The Reptar CLI runs automatic contract generation during development and builds:
+Reptar includes a zero-reflection OpenAPI 3.1.0 generator (`OpenApi.cs`) that inspects registered `RouteMeta` and `Validator<T>` rules at runtime without reflection:
+
+- **Automatic Path Parameter Translation:** Converts Reptar route patterns (`/api/tasks/:id`) into typed OpenAPI path parameters (`/api/tasks/{id}`).
+- **Validator-Derived JSON Schemas:** Routes registered with `Rule<T>()` constraints (`.NotEmpty()`, `.Min()`, `.Max()`, `.Email()`, `.Regex()`) automatically populate `required`, `minLength`, `maxLength`, `minimum`, `maximum`, `pattern`, and `format` in the OpenAPI 3.1 request body schema.
+- **One-Line Interactive Documentation:**
+
+```csharp
+// Serves /openapi.json and renders interactive Scalar UI at /reference
+app.UseScalar(title: "Reptar API", version: "1.0.0");
+
+// Or render Swagger UI at /swagger
+app.UseSwaggerUi(title: "Reptar API");
+```
+
+Annotate individual endpoints with fluent metadata:
+
+```csharp
+app.Post("/api/tasks", CreateTaskSchema, async (ctx, input) =>
+{
+    // ...
+    return ctx.Json(task, 201);
+})
+    .WithSummary("Create a new task")
+    .WithDescription("Validates payload constraints and persists a task row.")
+    .WithTags("Tasks")
+    .Produces<TaskItem>(201)
+    .Produces<ValidationError>(400);
+```
+
+## TypeScript RPC Codegen Command
+
+The Reptar CLI generates static TypeScript RPC contracts and OpenAPI files during development and CI builds:
 
 <Tabs syncKey="pkg">
+  <TabItem label="bun">
+    <Code code="bun run api:codegen" lang="bash" />
+  </TabItem>
   <TabItem label="npm">
-    ```bash npx reptar codegen # or via script npm run api:codegen ```
+    <Code code="npm run api:codegen" lang="bash" />
   </TabItem>
   <TabItem label="pnpm">
-    ```bash pnpm dlx reptar codegen # or via script pnpm api:codegen ```
-  </TabItem>
-  <TabItem label="yarn">
-    ```bash yarn dlx reptar codegen # or via script yarn api:codegen ```
-  </TabItem>
-  <TabItem label="bun">
-    ```bash bun reptar codegen # or via script bun run api:codegen ```
+    <Code code="pnpm api:codegen" lang="bash" />
   </TabItem>
 </Tabs>
 
----
+### Generated Artifacts
 
-## Generated Artifacts
-
-`bun reptar codegen` inspects the shared C# feature slices and outputs:
+`bun run api:codegen` inspects the shared C# feature slices and outputs:
 
 ```text
 examples/blog/rpc/
@@ -46,13 +72,9 @@ packages/rpc/
   openapi.json            # Synced OpenAPI document
 ```
 
-The same `examples/blog` route/schema files compile into both the `net10.0` portable app and the `netwasm0.1` Worker, so the generated contract is based on the same routes that run on the edge.
-
----
-
 ## Living Contract: Generated `AppType`
 
-The route tree below is **sourced directly from the real generated output** (`examples/blog/rpc/app-type.d.ts`), demonstrating the exact contract generated from C# routes:
+The route tree below is sourced directly from `examples/blog/rpc/app-type.d.ts`:
 
 <Code
   code={appTypeCode}
@@ -60,11 +82,9 @@ The route tree below is **sourced directly from the real generated output** (`ex
   title="examples/blog/rpc/app-type.d.ts"
 />
 
----
-
 ## Consuming the Typed Client
 
-The `@reptar/client` package provides a minimal (~100 lines), zero-dependency proxy client that provides full type inference for route segments, URL parameters, query strings, and request/response bodies:
+The `@reptar/client` package provides a minimal (~100 lines), zero-dependency proxy client with full type inference for route segments, URL parameters, query strings, and request/response bodies:
 
 ```typescript
 import { createClient } from "@reptar/client";
@@ -78,13 +98,12 @@ export const api = createClient<AppType>(
   }
 );
 
-// Calling endpoints with full autocomplete:
 const postsResponse = await api.posts.$get();
 if (postsResponse.ok) {
   const posts = await postsResponse.json(); // Typed as Post[]
 }
 
-// 2. Server-Side Rendering via Cloudflare Worker Service Binding (Zero Network Overhead)
+// 2. SSR via Cloudflare Worker Service Binding (Zero Network Overhead)
 export const ssrApi = createClient<AppType>("http://internal", {
   fetch: env.API.fetch.bind(env.API),
 });
@@ -93,9 +112,3 @@ export const ssrApi = createClient<AppType>("http://internal", {
 Here is the real TypeScript consumer (`examples/blog/rpc/smoke.ts`) verifying the client against the generated types:
 
 <Code code={smokeCode} lang="typescript" title="examples/blog/rpc/smoke.ts" />
-
----
-
-## Standard Schema (planned)
-
-The current codegen emits `AppType`, DTO interfaces, and OpenAPI. Emitting `~standard` validators directly from `Rule<T>` is the next codegen milestone; until then, use the C# validators on the server and share the generated TypeScript types with your form library.

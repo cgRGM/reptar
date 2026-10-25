@@ -3,69 +3,49 @@ title: Quick Start
 description: Get up and running with a Reptar fullstack project in minutes.
 ---
 
-import { Tabs, TabItem } from "@astrojs/starlight/components";
+import { Code, Tabs, TabItem } from "@astrojs/starlight/components";
 
 ## Prerequisites
 
 Before starting, ensure you have the following installed:
 
-- **.NET SDK 10.0+** (used as a background build tool, never shipped to runtime)
-- **Node.js 22+** or **Bun 1.3+**
-- Your preferred package manager: **bun**, **pnpm**, or **npm**
-- **Cloudflare CLI (`cf`)** or Wrangler
-
----
+- **.NET SDK 10.0+** (used as a compiler/build toolchain; never required at runtime in production)
+- **Bun 1.3+** or **Node.js 22+**
+- **Cloudflare CLI (`cf`)** (or Wrangler for existing Wrangler projects)
 
 ## 1. Scaffold a New Project
 
-Initialize a fullstack monorepo with React 19, Tailwind CSS v4, shadcn/ui, Better Auth, and an end-to-end type-safe C# backend:
+Initialize a fullstack monorepo with a C# Reptar backend, generated TypeScript RPC client, and your frontend of choice:
 
 <Tabs syncKey="pkg">
   <TabItem label="bun">
-```bash
-# Interactive scaffolding
-bun create reptar my-app
-
-# Or scaffold with sensible defaults in 1 second
-
-bun create reptar my-app -y cd my-app
-
-````
+    <Code code={"bun create reptar@latest my-app\ncd my-app"} lang="bash" />
   </TabItem>
   <TabItem label="npm">
-```bash
-npm create reptar my-app
-cd my-app
-````
-
+    <Code code={"npm create reptar@latest my-app\ncd my-app"} lang="bash" />
   </TabItem>
   <TabItem label="pnpm">
-```bash
-pnpm create reptar my-app
-cd my-app
-```
+    <Code code={"pnpm create reptar@latest my-app\ncd my-app"} lang="bash" />
   </TabItem>
 </Tabs>
 
-### What's Inside the Scaffolding
+### Workspace Structure
 
-```
+```text
 my-app/
 ├── apps/
-│   ├── web/               # React 19 + Tailwind v4 + shadcn/ui + Better Auth
-│   └── api/               # Reptar C# Native AOT / Cloudflare Workers backend
+│   ├── web/               # Frontend app (React 19 / Astro / TanStack Start)
+│   └── api/               # Reptar C# backend (Cloudflare Workers Wasm & Native AOT)
 ├── packages/
-│   ├── client/            # Type-safe RPC client generated from C# routes
-│   └── ui/                # Shared shadcn/ui components (Button, Input, Card, etc.)
+│   ├── client/            # Zero-dependency typed RPC client (@reptar/client)
+│   └── rpc/               # Generated AppType, DTO interfaces, and OpenAPI 3.1 spec
 └── scripts/
-    └── reptar.ts          # Dev and code generation runner
+    └── reptar.ts          # Dev runner, contract codegen, and CLI migration engine
 ```
 
----
+## 2. Application Composition (`apps/api/app.cs`)
 
-## 2. Project Composition (`apps/api/app.cs`)
-
-Your entire application entry point is configured in `app.cs`:
+Your backend entry point configures database drivers, middleware, interactive OpenAPI documentation, and route slices:
 
 ```csharp
 var authOptions = new AuthOptions
@@ -73,40 +53,51 @@ var authOptions = new AuthOptions
     CookieName = "better-auth.session_token",
 };
 
-// Wire optional OAuth providers
-var googleClientId = Environment.GetEnvironmentVariable("GOOGLE_CLIENT_ID");
-var googleClientSecret = Environment.GetEnvironmentVariable("GOOGLE_CLIENT_SECRET");
-if (!string.IsNullOrEmpty(googleClientId))
-{
-    authOptions.WithGoogle(googleClientId, googleClientSecret!);
-}
-
 var app = ReptarApp.Create(new ReptarConfig
 {
     Auth = authOptions,
-    Database = Db.D1(), // or Db.Sqlite() / Db.Postgres() / Db.MySql()
+    Database = Db.D1(), // or Db.Sqlite("app.db") / Db.Postgres(url) / Db.MySql(url)
 });
 
+// Core observability, caching, and rate-limiting middleware
 app.Use(RequestId());
 app.Use(Telemetry());
 app.Use(Cors());
+app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
+app.Use(RateLimit.SlidingWindow(limit: 120, windowSeconds: 60));
+
+// Serve OpenAPI 3.1 at /openapi.json and interactive Scalar docs at /reference
+app.UseScalar(title: "My Reptar API", version: "1.0.0");
 
 // Mount Better Auth endpoints under /api/auth
 var authGroup = app.Group("/api/auth");
 BetterAuthProtocol.Routes(authGroup, authOptions);
 
-// Mount business features
+// Mount domain feature slices
 ItemsFeature.Configure(app);
 
 await app.EnsureCreatedAsync();
 await app.RunAsync(args);
 ```
 
----
+## 3. Run Database Migrations
 
-## 3. Local Development
+Create and apply sequential SQL migrations using the built-in CLI runner:
 
-Run the fullstack development environment:
+```bash
+# Check applied and pending migrations
+bun scripts/reptar.ts db status
+
+# Scaffold a new sequential SQL migration file
+bun scripts/reptar.ts db new add_items_index
+
+# Apply pending migrations transactionally
+bun scripts/reptar.ts db migrate
+```
+
+## 4. Start Local Development
+
+Run the fullstack development server:
 
 ```bash
 bun run dev
@@ -114,40 +105,30 @@ bun run dev
 
 This starts:
 
-- The React 19 frontend at `http://localhost:5173`
 - The Reptar C# API backend at `http://localhost:8787`
-- The Better Auth protocol endpoints at `http://localhost:8787/api/auth`
+- Interactive Scalar API Reference at `http://localhost:8787/reference`
+- The frontend application at `http://localhost:5173` (or `http://localhost:4321`)
 
----
+## 5. Generate & Consume Typed Contracts
 
-## 4. End-to-End Type Safety & Codegen
-
-When you add or update routes in C#, generate updated TypeScript contracts:
+Whenever you add or modify C# routes, regenerate the TypeScript RPC contracts:
 
 ```bash
 bun run api:codegen
 ```
 
-This compiles your C# route tree and updates `packages/client/src/` with strongly-typed interfaces, endpoint contracts, and Zod schemas.
-
----
-
-## 5. Consume from the Frontend
-
-Your frontend is already wired with the generated typed client and Better Auth:
+Consume your backend from any TypeScript frontend with full autocomplete:
 
 ```tsx
-import { client } from "@/lib/client";
-import { authClient, useSession } from "@/lib/auth-client";
+import { createClient } from "@reptar/client";
+import type { AppType } from "@reptar/rpc";
 
-export function Dashboard() {
-  const { data: session } = useSession();
+export const api = createClient<AppType>("http://localhost:8787", {
+  credentials: "include",
+});
 
-  // 100% type-safe RPC call generated from C#
-  const res = await client.api.items.get();
-  if (res.ok) {
-    const items = await res.json();
-    console.log("Items:", items);
-  }
+const response = await api.items.$get();
+if (response.ok) {
+  const items = await response.json();
 }
 ```

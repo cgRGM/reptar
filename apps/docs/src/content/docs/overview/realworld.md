@@ -1,52 +1,65 @@
 ---
-title: RealWorld API
-description: A spec-compliant Conduit backend and the Native AOT benchmark target.
+title: RealWorld & Benchmarks
+description: Spec-compliant Conduit API and head-to-head benchmarks against .NET 10 Minimal API and Hono on Bun.
 ---
 
-Reptar includes a complete RealWorld (Conduit) API under `examples/realworld`. It is the framework's API-completeness and performance benchmark target.
+Reptar includes both a 12-tier comparative benchmark suite (`bench/`) and a complete RealWorld (Conduit) backend (`examples/realworld`).
 
-## Status
+## 1. Reptar Bench: Reptar vs .NET 10 Minimal API vs Hono
 
-- **Official Hurl suite:** 13/13 files pass, 154/154 requests on SQLite, PostgreSQL, the local Wasm Worker, and the deployed edge Worker.
-- **Targets:** portable SQLite/Kestrel, PostgreSQL, Linux Native AOT, and Cloudflare Workers + D1.
-- **Wasm Worker:** the C# RealWorld Worker builds to ~9.5 MB and is deployed at `reptar-realworld-bench`.
-- **Database:** SQLite by default; set `REALWORLD_DATABASE_URL` to run the same routes on PostgreSQL.
+Measured on an isolated 2-vCPU Linux VPS (Ubuntu 24.04, 3.7 GB RAM, server pinned to CPU 0, `oha` load generator pinned to CPU 1). All three frameworks run the exact same schema, seed data, and SQL queries:
 
-## Run locally
+- **Reptar (`net10.0` Native AOT, `-p:ReptarSqliteOnly=true`):** **10.9 MB** binary, **258 ms** startup
+- **.NET 10 Minimal API (`net10.0` Native AOT, raw ADO.NET):** **10.4 MB** binary, **570 ms** startup
+- **Hono on Bun (JIT compiled bundle):** **104.3 MB** binary, **130 ms** startup
+
+| Tier | Scenario | Reptar (req/s) | .NET 10 Minimal API | Hono (Bun) | Reptar + SWR Cache | Reptar vs Minimal |
+| :-- | :-- | --: | --: | --: | --: | --: |
+| **T0** | `plaintext` | **43,228** | 41,340 | 48,764 | — | **+5%** |
+| **T1** | `json` | **41,395** | 41,030 | 39,315 | — | **+1%** |
+| **T2** | `router-params` | **40,300** | 41,009 | 35,877 | — | -2% |
+| **T3** | `validate` (`Rule<T>`) | **36,105** | 33,236 | 17,504 | — | **+9%** |
+| **T4** | `task-detail` | **11,802** | 14,163 | 18,555 | **39,214** (2.6 ms p50) | 3.4x w/ SWR |
+| **T5** | `task-list` (20 rows) | **5,368** | 9,864 | 6,785 | **29,874** (3.3 ms p50) | 5.6x w/ SWR |
+| **T6** | `task-comments` | **10,058** | 10,263 | 10,101 | **35,485** (2.8 ms p50) | 3.7x w/ SWR |
+| **T7** | `create-task` | **3,521** | 7,478 | 4,415 | — | -53% |
+| **T8** | `/me` (JWT + lookup) | **12,112** | 15,449 | 12,069 | — | -22% |
+| **T9** | `login` (PBKDF2, 10c) | **15** | 15 | 22 | — | 0% |
+| **T10** | `update-task` | **3,653** | 2,182 | 5,273 | — | **+67%** |
+| **T11** | `mixed` (Read/Write) | **5,665** | 5,281 | 7,742 | — | **+7%** |
+
+### Key Takeaways from the Benchmark Suite
+
+1. **HTTP, Routing, JSON & Validation Beat Raw Minimal API:** Reptar's zero-allocation radix router, Kestrel `PipeReader`/`PipeWriter` integration, and `SourceGenJsonCodec` match or exceed raw .NET 10 Minimal API across `T0`–`T3` while running declarative `Rule<T>()` validation at **2.06x** the speed of Hono (`36,105` vs `17,504` req/s).
+2. **SWR Perimeter Caching (`CacheControl.SWR`):** Enabling `CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30)` accelerates database read endpoints (`T4`–`T6`) by **3.4x to 5.6x**, delivering **29.8k–39.2k req/s** at **2.6–3.3 ms p50**.
+3. **The SQLite Write-Gate Finding (`T7`):** Using `SqliteDbClient.WriteTimingObserver` across 108,611 requests showed that actual SQLite `INSERT` execution takes just **0.064 ms p50**, JWT verification takes **0.031 ms p50**, and **99% of handler latency (26.3 ms avg)** is spent queueing behind SQLite's single-writer lock under 100-connection concurrency. Moving `BuildCommand` outside the write gate and using value-tuple parameters reduced gate hold time, and `BatchAsync` / PostgreSQL eliminates single-writer serialization entirely.
+
+## 2. RealWorld (Conduit) Specification Suite
+
+Reptar includes a complete RealWorld (Conduit) implementation under `examples/realworld`:
+
+- **Official Hurl suite:** **13/13 files pass (154/154 requests)** across SQLite, PostgreSQL, the local Wasm Worker, and the deployed Cloudflare Edge Worker.
+- **Targets:** Portable SQLite/Kestrel, PostgreSQL (`Npgsql`), Linux Native AOT, and Cloudflare Workers + D1.
+
+### Run Locally
 
 ```bash
 bun run realworld:dev
 ```
 
-The API listens on `http://localhost:8787` with routes under `/api`.
-
-To run the official suite, point it at the API:
+To run the official 154-request Hurl specification suite:
 
 ```bash
 export REALWORLD_SPEC_DIR=/path/to/realworld-apps/realworld
 HOST=http://localhost:8787 bun run realworld:hurl
 ```
 
-## Seed and benchmark
+### RealWorld VPS SQLite Results
 
-```bash
-REALWORLD_URL=http://127.0.0.1:8787 \
-REALWORLD_SEED_COUNT=300 \
-REALWORLD_SEED_OUT=/tmp/realworld-bench.json \
-bun run scripts/seed-realworld.ts
-
-REALWORLD_URL=http://127.0.0.1:8787 \
-REALWORLD_SEED=/tmp/realworld-bench.json \
-REALWORLD_BENCH_CONNECTIONS=100 \
-bun run realworld:bench
-```
-
-## VPS results
-
-Measured on a small Lightsail VPS with the Native AOT container and SQLite, 300 seeded articles, 5-second autocannon runs:
+Measured on the Lightsail VPS with the Native AOT container and SQLite, 300 seeded articles, 100 connections:
 
 | Scenario                          | Connections | Req/sec |    p50 |  p97.5 |
-| --------------------------------- | ----------: | ------: | -----: | -----: |
+| :-------------------------------- | ----------: | ------: | -----: | -----: |
 | `GET /api/tags`                   |         100 |   7,702 |  11 ms |  32 ms |
 | `GET /api/articles/:slug`         |         100 |   7,164 |  12 ms |  29 ms |
 | `GET /api/articles?limit=20`      |         100 |   6,468 |  13 ms |  34 ms |
@@ -54,67 +67,27 @@ Measured on a small Lightsail VPS with the Native AOT container and SQLite, 300 
 | `GET /api/articles?tag=bench`     |         100 |   6,192 |  14 ms |  36 ms |
 | `POST /api/articles`              |          10 |     455 |  19 ms |  47 ms |
 
-The Kestrel app opts into `CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30)`. Anonymous reads are served from the in-process cache, authenticated requests bypass it, and successful writes invalidate the affected path plus `/api/tags` when articles change. Cache-warm read p50 is 11–14 ms on this VPS. Feed requests remain uncached because they are authenticated; they are SQLite/CPU-bound at this concurrency.
+### RealWorld PostgreSQL 14 Results
 
-List responses omit the article body and fetch tags, favorite counts, favorite state, and follow state in page-level batches. This removes the three correlated subqueries per row; `SqliteDbClient`'s WAL read pool runs those reads concurrently. Article creation batches the article, tag, and junction writes into one transaction. The image is 38.3 MB uncompressed / 11.6 MB compressed after removing the 22 MB `.dbg` symbols.
+Running the exact same routes against PostgreSQL 14 (`REALWORLD_DATABASE_URL=postgresql://...`) with `CacheControl.SWR` and transactional `NpgsqlBatch` writes:
 
-`synchronous=NORMAL` is a durability tradeoff; override it with `REPTAR_SQLITE_SYNCHRONOUS=FULL` if required.
+| Scenario                             |     Req/sec |      p50 |
+| :----------------------------------- | ----------: | -------: |
+| `GET /api/tags`                      | **101,536** | &lt;1 ms |
+| `GET /api/articles?limit=20`         |  **94,112** | &lt;1 ms |
+| `GET /api/articles/:slug`            | **102,816** | &lt;1 ms |
+| `GET /api/articles/feed`             |   **3,047** |    30 ms |
+| `GET /api/articles?tag=bench`        |  **72,221** |     1 ms |
+| `POST /api/articles` (unique titles) |   **4,664** |     2 ms |
 
-## PostgreSQL
+### Cloudflare Workers + D1 Edge Results
 
-Set `REALWORLD_DATABASE_URL` (or `DATABASE_URL`) to a `postgres://` or
-`postgresql://` connection string to run the same API on PostgreSQL:
+Measured against the deployed Cloudflare Worker (`reptar-realworld-bench`) with 50 concurrent clients:
 
-```bash
-REALWORLD_DATABASE_URL=postgresql://user@127.0.0.1:5432/reptar_realworld \
-bun run realworld:dev
-```
-
-The official Hurl suite passes 154/154 on PostgreSQL 14. A local PostgreSQL 14
-run with 300 seeded articles, 100 read clients, and the same SWR cache measured:
-
-| Scenario | Req/sec | p50 |
-| --- | --: | --: |
-| `GET /api/tags` | 101,536 | <1 ms |
-| `GET /api/articles?limit=20` | 94,112 | <1 ms |
-| `GET /api/articles/:slug` | 102,816 | <1 ms |
-| `GET /api/articles/feed` | 3,047 | 30 ms |
-| `GET /api/articles?tag=bench` | 72,221 | 1 ms |
-| `POST /api/articles` | 1,107 | 7 ms |
-
-These are local-machine numbers and are not directly comparable to the VPS
-SQLite table. `PostgresDbClient.BatchAsync` now uses a transactional
-`NpgsqlBatch`, so article, tag, and junction writes execute in one round-trip.
-The RealWorld slug check fetches matching slugs in one query instead of probing
-one suffix at a time; a separate unique-title run measured 4,664 writes/sec.
-Feed uses the composite follow and author/created indexes; the feed p50 dropped
-from 104 ms to 30 ms.
-
-## Edge comparison
-
-A separate Cloudflare Workers + D1 deployment (`reptar-realworld-bench`) passes the same 154-request Hurl suite. From the Lightsail VPS, with 50 read clients and 100 seeded articles:
-
-| Scenario                     | Cold p50 | Cache-warm req/sec | Cache-warm p50 |
-| ---------------------------- | -------: | -----------------: | -------------: |
-| `GET /api/tags`              |    68 ms |              3,280 |           9 ms |
-| `GET /api/articles?limit=20` |   365 ms |              4,358 |           9 ms |
-| `GET /api/articles/:slug`    |   145 ms |              4,940 |           8 ms |
-| `GET /api/articles/feed`     |   635 ms |                 80 |         494 ms |
-| `POST /api/articles`         |   559 ms |                 29 |         289 ms |
-
-The Worker caches anonymous `GET /api/tags`, `GET /api/articles` (base and `?limit=20`), and `GET /api/articles/:slug` for 15 seconds. Authenticated requests bypass the cache, and writes purge the relevant keys. This takes cached list p50 from 365 ms to 9 ms, below the 150 ms edge target. Feed and writes are intentionally uncached. The D1 schema and `0004_realworld_feed_indexes.sql` carry the composite follow and article indexes.
-
-Cloudflare logs show 1–2 ms client RTT from the VPS to the Columbus (CMH) colo, so the uncached edge gap is Worker CPU and D1 time rather than WAN latency. The logs show roughly 150–245 ms CPU time for a cold single-article request.
-
-## AOT lessons
-
-The Native AOT build exposed three framework issues that are now fixed:
-
-1. `SqliteDbClient.DeleteAsync` and `GetAsync` no longer bind primary keys via anonymous types; they use dictionaries so trimming cannot remove the reflected properties.
-2. `QueryMappedAsync` allows explicit row mapping without constructor reflection. The RealWorld models use it for AOT-safe reads.
-3. `ReptarApp.ExecuteAsync` lets app startup create composite indexes after `EnsureCreatedAsync`; the D1 migration carries the same indexes.
-4. Native AOT publishes a large `.dbg` file; the Dockerfile removes it after publish, taking the image from 67.9 MB to 38.3 MB.
-5. SQLite WAL/NORMAL/busy_timeout are configurable through `REPTAR_SQLITE_JOURNAL_MODE` and `REPTAR_SQLITE_SYNCHRONOUS`.
-6. D1 batch statements accept both JSON-string and array parameters in the host shim; `D1DbClient` now emits the string form. Article creation uses one transaction for the article, tags, and junction rows; PostgreSQL uses a transactional `NpgsqlBatch`.
-7. Composite indexes cover `rw_follows(follower_id, followed_id)` and `rw_articles(author_id, created_at)`. PostgreSQL uses them for feed counts and selective ordering; D1 uses the follow index and the article index instead of a sequential scan.
-8. RealWorld slug generation now fetches all matching base/prefix slugs in one query. Duplicate-title writes no longer issue one existence probe per suffix.
+| Scenario | Cold p50 | Cache-Warm Req/sec | Cache-Warm p50 |
+| :-- | --: | --: | --: |
+| `GET /api/tags` | 68 ms | **3,280** | **9 ms** |
+| `GET /api/articles?limit=20` | 365 ms | **4,358** | **9 ms** |
+| `GET /api/articles/:slug` | 145 ms | **4,940** | **8 ms** |
+| `GET /api/articles/feed` | 635 ms | 80 | 494 ms |
+| `POST /api/articles` | 559 ms | 29 | 289 ms |

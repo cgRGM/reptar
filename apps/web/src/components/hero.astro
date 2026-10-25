@@ -1,71 +1,99 @@
 ---
 ---
 
-<section class="border-b border-[#232730] bg-[#090a0c] py-20 lg:py-28" id="overview">
-  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-    <div class="max-w-4xl">
-      <h1 class="text-4xl sm:text-6xl font-bold tracking-tight text-white leading-[1.1]">
-        Reptar is the backend.
-      </h1>
-      <p class="mt-6 text-lg sm:text-xl text-zinc-400 leading-relaxed max-w-3xl">
-        A C# web framework compiled to WebAssembly for Cloudflare Workers and Native AOT for AWS Lambda.
-        Hono-like routing, Drizzle-like schemas, sub-2ms isolate execution, and auto-generated TypeScript contracts for any frontend.
-      </p>
+<section class="border-b border-[#222630] bg-[#0a0b0e]" id="overview">
+  <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 pt-20 pb-16 lg:pt-28 lg:pb-24">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-12 items-start">
+      <div class="lg:col-span-7">
+        <h1 class="text-4xl sm:text-6xl font-bold tracking-tight text-white leading-[1.06]">
+          Reptar is the backend.
+        </h1>
+        <p class="mt-6 text-lg sm:text-xl text-zinc-400 leading-relaxed max-w-2xl">
+          A non-.NET-ceremony C# web framework that compiles to WebAssembly for Cloudflare Workers and 10.9 MB Native AOT binaries for Linux containers and AWS Lambda. Zero reflection, source-generated SQL mappers, OpenAPI 3.1, and end-to-end TypeScript contracts.
+        </p>
 
-      <div class="mt-8 flex flex-wrap items-center gap-4">
-        <a
-          href="https://reptar-docs.rocktown-labs.workers.dev"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="inline-flex items-center justify-center px-5 py-2.5 text-sm font-semibold text-zinc-950 bg-emerald-500 hover:bg-emerald-400 transition-colors rounded"
-        >
-          Read the Documentation
-        </a>
-
-        <a
-          href="https://github.com/RocktownLabs/reptar"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="inline-flex items-center justify-center px-5 py-2.5 text-sm font-medium text-zinc-300 bg-[#111317] border border-[#232730] hover:bg-[#15181e] hover:text-white transition-colors rounded"
-        >
-          View Source on GitHub
-        </a>
-
-        <div class="flex items-center rounded border border-[#232730] bg-[#111317] px-3.5 py-2 font-mono text-xs text-zinc-300">
-          <span class="text-zinc-500 select-none mr-2">$</span>
-          <span id="install-cmd">bun create reptar@latest</span>
-          <button
-            type="button"
-            id="copy-btn"
-            class="ml-3 text-zinc-400 hover:text-emerald-400 focus:outline-none transition-colors"
-            title="Copy command to clipboard"
-            aria-label="Copy command"
+        <div class="mt-9 flex flex-wrap items-center gap-3">
+          <a
+            href="https://reptar-docs.rocktown-labs.workers.dev"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center justify-center px-5 py-2.5 text-sm font-semibold text-zinc-950 bg-emerald-500 hover:bg-emerald-400 transition-colors"
           >
-            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-            </svg>
-          </button>
+            Read the Documentation
+          </a>
+
+          <a
+            href="https://github.com/RocktownLabs/reptar"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex items-center justify-center px-5 py-2.5 text-sm font-medium text-zinc-200 bg-[#0f1116] border border-[#222630] hover:bg-[#161920] hover:text-white transition-colors"
+          >
+            View Source on GitHub
+          </a>
+
+          <div class="flex items-center border border-[#222630] bg-[#0f1116] px-3.5 py-2.5 font-mono text-xs text-zinc-200">
+            <span class="text-zinc-500 select-none mr-2">$</span>
+            <span id="install-cmd">bun create reptar@latest</span>
+            <button
+              type="button"
+              id="copy-btn"
+              class="ml-3 text-zinc-400 hover:text-white focus:outline-none transition-colors"
+              title="Copy command to clipboard"
+              aria-label="Copy command"
+            >
+              <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </button>
+          </div>
         </div>
       </div>
 
-      <!-- Technical specifications row -->
-      <div class="mt-14 pt-8 border-t border-[#1a1d24] grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <div class="border-l border-[#232730] pl-4">
-          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Deploy Targets</div>
-          <div class="mt-1 font-mono text-sm font-medium text-white">Workers / Lambda / VPS</div>
+      <!-- Right: Minimalist Terminal / Live Telemetry Snapshot -->
+      <div class="lg:col-span-5 border border-[#222630] bg-[#0f1116]">
+        <div class="flex items-center justify-between border-b border-[#222630] px-4 py-2.5 bg-[#13161c]">
+          <span class="font-mono text-xs text-zinc-300">Program.cs</span>
+          <span class="font-mono text-xs text-zinc-500">netwasm0.1 / net10.0</span>
         </div>
-        <div class="border-l border-[#232730] pl-4">
-          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Isolate Speed</div>
-          <div class="mt-1 font-mono text-sm font-medium text-white">&lt; 2ms (Server-Timing)</div>
-        </div>
-        <div class="border-l border-[#232730] pl-4">
-          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Reflection</div>
-          <div class="mt-1 font-mono text-sm font-medium text-white">Zero (Source Gen)</div>
-        </div>
-        <div class="border-l border-[#232730] pl-4">
-          <div class="text-xs uppercase tracking-wider font-mono text-zinc-500">Database Drivers</div>
-          <div class="mt-1 font-mono text-sm font-medium text-white">D1, SQLite, PostgreSQL</div>
-        </div>
+        <pre class="p-4 font-mono text-xs leading-relaxed text-zinc-300 overflow-x-auto"><code>var app = ReptarApp.Create(new ReptarConfig
+&#123;
+    Database = Db.D1(), // or Sqlite, Postgres, MySql
+&#125;);
+
+app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
+app.Use(RateLimit.SlidingWindow(limit: 120, windowSeconds: 60));
+app.UseScalar(); // OpenAPI 3.1 + Scalar UI at /reference
+
+app.Get("/tasks/:id", async c =&gt;
+&#123;
+    var id = c.Req.Param("id");
+    var task = await c.Db.QuerySingleOrDefaultAsync&lt;TaskItem&gt;(
+        "SELECT id, title, status FROM tasks WHERE id = @id",
+        ("id", id));
+    return task is null ? c.NotFound() : c.Json(task);
+&#125;).Produces&lt;TaskItem&gt;(200);
+
+await app.RunAsync(args);</code></pre>
+      </div>
+    </div>
+
+    <!-- Clean Structural Specification Grid (No Eyebrows) -->
+    <div class="mt-16 grid grid-cols-2 lg:grid-cols-4 border border-[#222630] bg-[#0f1116] divide-y lg:divide-y-0 lg:divide-x divide-[#222630]">
+      <div class="p-5">
+        <div class="font-mono text-2xl font-bold text-white tracking-tight">43,228 req/s</div>
+        <div class="mt-1 text-xs text-zinc-400">HTTP core throughput (+5% vs .NET 10 Minimal API)</div>
+      </div>
+      <div class="p-5">
+        <div class="font-mono text-2xl font-bold text-white tracking-tight">10.9 MB</div>
+        <div class="mt-1 text-xs text-zinc-400">Self-contained Linux Native AOT binary (258 ms boot)</div>
+      </div>
+      <div class="p-5">
+        <div class="font-mono text-2xl font-bold text-white tracking-tight">&lt; 2 ms</div>
+        <div class="mt-1 text-xs text-zinc-400">Warm Cloudflare Worker Wasm isolate execution</div>
+      </div>
+      <div class="p-5">
+        <div class="font-mono text-2xl font-bold text-white tracking-tight">D1 · SQLite · PG · MySQL</div>
+        <div class="mt-1 text-xs text-zinc-400">Unified zero-reflection data client &amp; pipelined batching</div>
       </div>
     </div>
   </div>

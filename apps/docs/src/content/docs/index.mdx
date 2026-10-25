@@ -1,48 +1,58 @@
 ---
 title: Reptar Documentation
-description: A C# web framework compiled to WebAssembly for Cloudflare Workers.
-template: splash
-hero:
-  tagline: Reptar is the backend. Zero frontend opinions, first-class Cloudflare bindings, and generated typed contracts.
-  actions:
-    - text: Quick Start
-      link: /getting-started/quickstart/
-      icon: right-arrow
-      variant: primary
-    - text: System Architecture
-      link: /overview/architecture/
-      icon: open-book
-      variant: secondary
-    - text: GitHub Repository
-      link: https://github.com/RocktownLabs/reptar
-      icon: external
-      variant: minimal
+description: A non-.NET-ceremony C# web framework for Cloudflare Workers (Wasm) and Native AOT containers.
 ---
 
 import { Card, CardGrid } from "@astrojs/starlight/components";
 
-## Architectural Foundations
+Reptar is a C# web framework built from first principles for **Cloudflare Workers (`netwasm0.1`)** and **Linux Native AOT (`net10.0`)**. It combines Hono-style routing, Drizzle-style table schemas, compile-time `[ReptarEntity]` row mapping, auto-derived OpenAPI 3.1 specifications, and end-to-end TypeScript RPC client generation—with zero runtime reflection.
 
-<CardGrid stagger>
-  <Card title="The One Rule" icon="seti:c-sharp">
-    Reptar is strictly the backend. The only frontend-facing surface is generated contracts: typed fetch client, Standard Schema, and OpenAPI.
+```csharp
+var app = ReptarApp.Create(new ReptarConfig
+{
+    Database = Db.D1(), // or Db.Sqlite("app.db"), Db.Postgres(url), Db.MySql(url)
+});
+
+app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
+app.Use(RateLimit.SlidingWindow(limit: 120, windowSeconds: 60));
+app.UseScalar(title: "My Reptar API");
+
+app.Get("/tasks/:id", async c =>
+{
+    var task = await c.Db.QuerySingleOrDefaultAsync<TaskItem>(
+        "SELECT id, title, status FROM tasks WHERE id = @id",
+        ("id", c.Req.Param("id")));
+    return task is null ? c.NotFound() : c.Json(task);
+}).Produces<TaskItem>(200);
+
+await app.RunAsync(args);
+```
+
+## Core Capabilities
+
+<CardGrid>
+  <Card title="Dual-Target Wasm & Native AOT" icon="rocket">
+    Compile the same C# feature slices to WebAssembly for Cloudflare Workers (&lt;2 ms warm execution) or a **10.9 MB** standalone Linux Native AOT binary (`-p:ReptarSqliteOnly=true`) that boots in 258 ms.
   </Card>
-  <Card title="Compiled WebAssembly" icon="rocket">
-    Your C# compiles to NetWasm and Native AOT. Zero runtime reflection; the Wasm instance is cached per isolate.
+  <Card title="Zero-Reflection Data Layer" icon="seti:db">
+    Decorate records with `[ReptarEntity]` to emit compile-time positional `DbDataReader` mappers. Query D1, SQLite (32-channel WAL read pool), PostgreSQL (`NpgsqlBatch`), and MySQL with stack-allocated value tuples.
   </Card>
-  <Card title="D1, R2 & AI Bindings" icon="cloud">
-    First-class platform surfaces exposed directly as C# APIs through `c.Db`, `c.Storage`, `c.AI`, and `c.RateLimit`.
+  <Card title="OpenAPI 3.1, SSE & SWR Cache" icon="open-book">
+    `Rule<T>()` validators automatically populate OpenAPI 3.1 JSON Schemas served via Scalar UI (`/reference`). Stream AI responses over zero-alloc `ctx.Sse(...)` channels and serve reads at 39k+ req/s with `CacheControl.SWR`.
   </Card>
-  <Card title="Zero-Dep Validation" icon="approve-check">
-    `Rule<T>` validates inputs on the backend and emits zero-dependency `~standard` validators for TanStack Form or Zod.
+  <Card title="Typed RPC & Better Auth" icon="approve-check">
+    Generate zero-dependency `@reptar/client` TypeScript RPC proxies and `~standard` validators directly from `.Produces<T>()`. Authenticate with built-in C# `Reptar.Auth` or the wire-compatible Better Auth protocol.
   </Card>
 </CardGrid>
 
-## Next Steps
+## Documentation Map
 
-Explore the core sections of the Reptar documentation:
-
-- **[Project Layout](/getting-started/project-structure/)**: Learn how `apps/api`, `apps/worker`, and `packages/rpc` collaborate.
-- **[Routing & Handlers](/core/routing/)**: Write concise, expressive routes with `.Produces<T>()` metadata.
-- **[Database & Schema](/data/schema/)**: Define your single source of truth using Drizzle-like table definitions.
-- **[Built-in Auth](/auth/builtin/)**: Secure your applications with host-native scrypt hashing and D1 sessions.
+| Section | Topics Covered |
+| :-- | :-- |
+| **[Quick Start](/getting-started/quickstart/)** | Scaffold a project, configure `ReptarApp`, run migrations, and call typed RPC endpoints |
+| **[Routing, SSE & Caching](/core/routing/)** | Feature slices, `.Produces<T>()`, `ctx.Sse` AI streaming, `CacheControl.SWR`, and `RateLimit.SlidingWindow` |
+| **[Validation & Rule&lt;T&gt;](/core/validation/)** | AOT-safe `Rule<T>()` validators, `SourceGenJsonCodec`, and `~standard` schema generation |
+| **[Database Client (c.Db)](/data/database/)** | `[ReptarEntity]` source generator, value-tuple parameters, `BatchAsync`, and D1 / SQLite / Postgres / MySQL drivers |
+| **[Migrations Engine](/data/migrations/)** | CLI runner (`bun scripts/reptar.ts db status \| migrate \| new`), programmatic `app.MigrateAsync()`, and DDL generation |
+| **[Typed Client & OpenAPI 3.1](/client/codegen/)** | `@reptar/client`, validator-derived OpenAPI 3.1 schemas, `app.UseScalar()`, and `app.UseSwaggerUi()` |
+| **[RealWorld & Benchmarks](/overview/realworld/)** | 154/154 Conduit Hurl compliance and Native AOT benchmarks vs .NET 10 Minimal API & Hono |

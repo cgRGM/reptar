@@ -1,108 +1,100 @@
 ---
 ---
 
-<section class="border-b border-[#232730] bg-[#090a0c] py-20 lg:py-24" id="architecture">
+<section class="border-b border-[#222630] bg-[#0a0b0e] py-20 lg:py-24" id="architecture">
   <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
     <div class="max-w-3xl">
       <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-        Architecture
+        Execution Architecture
       </h2>
-      <p class="mt-4 text-base sm:text-lg text-zinc-400 leading-relaxed">
-        Reptar couples the type safety and ergonomics of C# with the distributed execution of Cloudflare Workers.
-        The TypeScript host shim manages runtime I/O; the compiled Wasm engine executes routing, validation, and domain logic.
+      <p class="mt-3 text-base sm:text-lg text-zinc-400 leading-relaxed">
+        Reptar separates application domain logic from host transport. Your C# compiles either to a cached WebAssembly reactor inside Cloudflare Workers or directly to a standalone Native AOT executable on Kestrel or AWS Lambda.
       </p>
     </div>
 
-    <!-- Architectural Pipeline Diagram -->
-    <div class="mt-12 rounded border border-[#232730] bg-[#0d0e12] p-6 lg:p-8">
-      <div class="grid grid-cols-1 md:grid-cols-4 gap-4 items-stretch">
-        <!-- Stage 1 -->
-        <div class="rounded border border-[#232730] bg-[#111317] p-5 flex flex-col justify-between">
+    <!-- Clean 4-column structural grid without eyebrow badges -->
+    <div class="mt-10 border border-[#222630] bg-[#0f1116]">
+      <div class="grid grid-cols-1 md:grid-cols-4 divide-y md:divide-y-0 md:divide-x divide-[#222630]">
+        <div class="p-6 flex flex-col justify-between">
           <div>
-            <div class="flex items-center justify-between">
-              <span class="font-mono text-xs text-zinc-500 uppercase tracking-wider font-semibold">Tier 1</span>
-              <span class="rounded bg-[#1a1d24] px-1.5 py-0.5 font-mono text-[10px] text-zinc-300">Client</span>
+            <div class="flex items-center justify-between pb-3 border-b border-[#1b1f28]">
+              <h3 class="text-base font-semibold text-white">1. Typed Client</h3>
+              <span class="font-mono text-xs text-zinc-500">@reptar/client</span>
             </div>
-            <h3 class="mt-3 text-base font-semibold text-white">Frontend Client</h3>
-            <p class="mt-2 text-xs text-zinc-400 leading-relaxed">
-              Consumes <code class="text-zinc-200">createClient&lt;AppType&gt;</code>. Runs in TanStack Start, Expo, Next.js, or curl.
+            <p class="mt-3 text-xs text-zinc-400 leading-relaxed">
+              Zero-dependency TypeScript RPC proxy (~100 lines). Infers path parameters, query strings, request payloads, and status-discriminated responses directly from C#.
             </p>
           </div>
-          <div class="mt-4 pt-3 border-t border-[#1e232d] font-mono text-[11px] text-emerald-400">
-            contracts: JSON / RPC
+          <div class="mt-6 pt-3 border-t border-[#1b1f28] font-mono text-[11px] text-zinc-400">
+            TanStack Start · React 19 · Next.js · Expo
           </div>
         </div>
 
-        <!-- Stage 2 -->
-        <div class="rounded border border-[#232730] bg-[#111317] p-5 flex flex-col justify-between">
+        <div class="p-6 flex flex-col justify-between">
           <div>
-            <div class="flex items-center justify-between">
-              <span class="font-mono text-xs text-zinc-500 uppercase tracking-wider font-semibold">Tier 2</span>
-              <span class="rounded bg-[#1a1d24] px-1.5 py-0.5 font-mono text-[10px] text-zinc-300">Edge Shim</span>
+            <div class="flex items-center justify-between pb-3 border-b border-[#1b1f28]">
+              <h3 class="text-base font-semibold text-white">2. Host Transport</h3>
+              <span class="font-mono text-xs text-zinc-500">workerd / Kestrel</span>
             </div>
-            <h3 class="mt-3 text-base font-semibold text-white">TS Host Shim</h3>
-            <p class="mt-2 text-xs text-zinc-400 leading-relaxed">
-              Generated edge worker. Manages cookies, WebCrypto scrypt, telemetry, and Cloudflare environment bindings.
+            <p class="mt-3 text-xs text-zinc-400 leading-relaxed">
+              On Cloudflare Workers, the thin TS host shim bridges WebCrypto, cookies, and bindings. On Linux/Docker, <code class="text-zinc-200 font-mono">Reptar.Kestrel</code> pumps raw <code class="text-zinc-200 font-mono">PipeReader</code> spans with zero intermediate stream copies.
             </p>
           </div>
-          <div class="mt-4 pt-3 border-t border-[#1e232d] font-mono text-[11px] text-emerald-400">
-            calls: wasm.handle(...)
+          <div class="mt-6 pt-3 border-t border-[#1b1f28] font-mono text-[11px] text-zinc-400">
+            PipeReader / PipeWriter · JSImport Bridge
           </div>
         </div>
 
-        <!-- Stage 3 -->
-        <div class="rounded border border-[#232730] bg-[#161a22] p-5 flex flex-col justify-between border-l-2 border-l-emerald-500">
+        <div class="p-6 flex flex-col justify-between bg-[#13161c]">
           <div>
-            <div class="flex items-center justify-between">
-              <span class="font-mono text-xs text-emerald-400 uppercase tracking-wider font-semibold">Core Engine</span>
-              <span class="rounded bg-emerald-950/60 px-1.5 py-0.5 font-mono text-[10px] text-emerald-300 border border-emerald-800">C# Wasm</span>
+            <div class="flex items-center justify-between pb-3 border-b border-[#222630]">
+              <h3 class="text-base font-semibold text-white">3. Reptar C# Core</h3>
+              <span class="font-mono text-xs text-emerald-400">Wasm / Native AOT</span>
             </div>
-            <h3 class="mt-3 text-base font-semibold text-white">Reptar Reactor</h3>
-            <p class="mt-2 text-xs text-zinc-300 leading-relaxed">
-              Compiled via NetWasm. Cached per isolate. Executes routing, middleware, <code class="text-emerald-300">Rule&lt;T&gt;</code> validation, and handlers.
+            <p class="mt-3 text-xs text-zinc-300 leading-relaxed">
+              Zero-allocation radix router, <code class="text-zinc-100 font-mono">CacheControl.SWR</code> perimeter cache, O(1) sliding-window rate limiter, <code class="text-zinc-100 font-mono">Rule&lt;T&gt;</code> validation, and <code class="text-zinc-100 font-mono">SourceGenJsonCodec</code> UTF-8 serialization.
             </p>
           </div>
-          <div class="mt-4 pt-3 border-t border-[#232730] font-mono text-[11px] text-emerald-400">
-            imports: db / ai / storage
+          <div class="mt-6 pt-3 border-t border-[#222630] font-mono text-[11px] text-emerald-400">
+            0 Reflection · 10.9 MB AOT Binary
           </div>
         </div>
 
-        <!-- Stage 4 -->
-        <div class="rounded border border-[#232730] bg-[#111317] p-5 flex flex-col justify-between">
+        <div class="p-6 flex flex-col justify-between">
           <div>
-            <div class="flex items-center justify-between">
-              <span class="font-mono text-xs text-zinc-500 uppercase tracking-wider font-semibold">Tier 4</span>
-              <span class="rounded bg-[#1a1d24] px-1.5 py-0.5 font-mono text-[10px] text-zinc-300">Platform</span>
+            <div class="flex items-center justify-between pb-3 border-b border-[#1b1f28]">
+              <h3 class="text-base font-semibold text-white">4. Data &amp; Edge Bindings</h3>
+              <span class="font-mono text-xs text-zinc-500">c.Db / c.Storage</span>
             </div>
-            <h3 class="mt-3 text-base font-semibold text-white">Cloudflare Edge</h3>
-            <p class="mt-2 text-xs text-zinc-400 leading-relaxed">
-              Native bindings: D1 relational database, R2 object store, Workers AI inference, and edge rate limiters.
+            <p class="mt-3 text-xs text-zinc-400 leading-relaxed">
+              Compile-time <code class="text-zinc-200 font-mono">[ReptarEntity]</code> mappers read directly from <code class="text-zinc-200 font-mono">DbDataReader</code> ordinals. Supports 32-channel WAL read pools on SQLite, pipelined <code class="text-zinc-200 font-mono">NpgsqlBatch</code> on Postgres, MySQL, and Cloudflare D1/R2/KV/AI.
             </p>
           </div>
-          <div class="mt-4 pt-3 border-t border-[#1e232d] font-mono text-[11px] text-emerald-400">
-            responses: Typed Envelope
+          <div class="mt-6 pt-3 border-t border-[#1b1f28] font-mono text-[11px] text-zinc-400">
+            D1 · SQLite WAL · PostgreSQL · MySQL
           </div>
         </div>
       </div>
 
-      <!-- Lifecycle Detail Table -->
-      <div class="mt-8 border-t border-[#232730] pt-6">
-        <h4 class="font-mono text-xs font-semibold text-zinc-400 uppercase tracking-wider">
-          Request Lifecycle Execution
-        </h4>
-        <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-6 text-xs text-zinc-400">
-          <div>
-            <span class="font-mono text-white block mb-1">01. Isolate Reuse</span>
-            The WebAssembly module is compiled once and kept in worker isolate memory. Cold starts are constrained to initial module load; subsequent requests execute without instantiation overhead.
-          </div>
-          <div>
-            <span class="font-mono text-white block mb-1">02. Memory-Mapped Envelope</span>
-            Requests cross the JavaScript-Wasm boundary via raw JSON strings. Reptar uses source-generated serialization to eliminate double serialization and avoid runtime reflection.
-          </div>
-          <div>
-            <span class="font-mono text-white block mb-1">03. Dual-Target Compilation</span>
-            The same C# codebase targets <code class="text-zinc-200">netwasm0.1</code> for Cloudflare Workers and <code class="text-zinc-200">net10.0</code> Native AOT for AWS Lambda and Docker containers.
-          </div>
+      <!-- Lifecycle Detail Row -->
+      <div class="grid grid-cols-1 md:grid-cols-3 border-t border-[#222630] divide-y md:divide-y-0 md:divide-x divide-[#222630] bg-[#0c0e12]">
+        <div class="p-5">
+          <div class="font-mono text-xs font-semibold text-white">Isolate &amp; Process Reuse</div>
+          <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">
+            In Cloudflare Workers, the Wasm module is instantiated once per isolate and reused across requests (&lt;2 ms warm execution). In Native AOT containers, the binary boots in 258 ms with zero JIT warmup.
+          </p>
+        </div>
+        <div class="p-5">
+          <div class="font-mono text-xs font-semibold text-white">Positional Entity Mapping</div>
+          <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">
+            When SQL columns match your <code class="text-zinc-200 font-mono">[ReptarEntity]</code> constructor order, Reptar invokes a static <code class="text-zinc-200 font-mono">MapPositional</code> delegate using constant column indices (<code class="text-zinc-200 font-mono">0, 1, 2...</code>) with zero string lookups or closures.
+          </p>
+        </div>
+        <div class="p-5">
+          <div class="font-mono text-xs font-semibold text-white">Pipelined Write Batching</div>
+          <p class="mt-1.5 text-xs text-zinc-400 leading-relaxed">
+            Multi-statement writes execute via <code class="text-zinc-200 font-mono">c.Db.BatchAsync(...)</code>—using a single <code class="text-zinc-200 font-mono">NpgsqlBatch</code> network round-trip on PostgreSQL, atomic batching on Cloudflare D1, and pre-gate command building on SQLite.
+          </p>
         </div>
       </div>
     </div>

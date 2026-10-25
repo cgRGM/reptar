@@ -1,83 +1,103 @@
 ---
-const csharpRoutes = `// Terse route slice: records + rules + handlers
+const csharpRoutes = `// Zero-reflection entity + rules + typed route handlers
+[ReptarEntity]
+public record Post(string Id, string Title, string Content, int Published, string CreatedAt);
+public record CreatePost(string Title, string Content);
+
 public static class Posts
 {
-    public record CreatePost(string Title, string Content);
-    public record Post(string Id, string Title, string Content, int Published, string CreatedAt);
-
     public static readonly Validator<CreatePost> CreateSchema = Rule<CreatePost>()
         .Prop(x => x.Title, r => r.Min(3).Max(120))
         .Prop(x => x.Content, r => r.Min(1));
 
-    public static ReptarApp Routes() => Reptar()
-        .Get("/", async c => c.Json(
-            await c.Db.ListAsync<Post>(Schema.Posts, "where published = 1 order by created_at desc")))
-            .Produces<Post[]>(200)
+    public static void Configure(ReptarApp app)
+    {
+        app.Get("/posts", async c => c.Json(
+            await c.Db.QueryAsync<Post>(
+                "SELECT id, title, content, published, created_at FROM posts WHERE published = @pub ORDER BY created_at DESC",
+                ("pub", 1))))
+            .WithSummary("List published posts")
+            .WithTags("Posts")
+            .Produces<Post[]>(200);
 
-        .Get("/:id", async c =>
+        app.Get("/posts/:id", async c =>
         {
-            var post = await c.Db.GetAsync<Post>(Schema.Posts, c.Req.Param("id"));
-            return post is null
-                ? c.Json(new { error = "Not found" }, 404)
-                : c.Json(post);
+            var post = await c.Db.QuerySingleOrDefaultAsync<Post>(
+                "SELECT id, title, content, published, created_at FROM posts WHERE id = @id",
+                ("id", c.Req.Param("id")));
+            return post is null ? c.NotFound() : c.Json(post);
         })
             .Produces<Post>(200)
-            .Produces<ErrorBody>(404)
+            .Produces<ErrorBody>(404);
 
-        .Post("/", CreateSchema, async (c, input) =>
+        app.Post("/posts", CreateSchema, async (c, input) =>
         {
-            var post = new Post(Ids.New("post"), input.Title, input.Content, 0, c.Clock.IsoNow());
+            var post = new Post(Ids.New("post"), input.Title, input.Content, 1, c.Clock.IsoNow());
             await c.Db.InsertAsync(Schema.Posts, post);
             return c.Json(post, 201);
         })
             .Produces<Post>(201)
             .Produces<ValidationError>(400);
+    }
 }`;
 
-const tsClient = `// Generated typed fetch client (~100 lines runtime)
+const tsClient = `// Generated typed fetch client (~100 lines runtime, 0 dependencies)
 import { createClient } from "@reptar/client";
 import type { AppType } from "@reptar/rpc";
 
 export const api = createClient<AppType>(import.meta.env.VITE_API_URL);
 
 // 1. GET /posts — typed automatically as Post[]
-const posts = await api.posts.$get();
+const listRes = await api.posts.$get();
+if (listRes.ok) {
+  const posts = await listRes.json();
+}
 
-// 2. GET /posts/:id — typed params, returns Post | null
-const post = await api.posts[":id"].$get({
+// 2. GET /posts/:id — typed path params, returns Post | ErrorBody
+const detailRes = await api.posts[":id"].$get({
   param: { id: "post_01J8F" },
 });
 
-// 3. POST /posts — validates input before wire transfer
-const res = await api.posts.$post({
+// 3. POST /posts — compile-time checked input & response
+const createRes = await api.posts.$post({
   json: {
     title: "Production C# on Workers",
-    content: "NetWasm engine with zero runtime reflection.",
+    content: "Zero runtime reflection with [ReptarEntity] positional mappers.",
   },
 });
 
-if (res.ok) {
-  const row = await res.json(); // typed Post
-  console.log("Inserted post ID:", row.Id);
+if (createRes.ok) {
+  const created = await createRes.json(); // typed Post
 }`;
 
-const csharpSchema = `// Source of truth for DDL, D1 queries, and mappers
+const csharpSchema = `// Single source of truth for DDL, migrations, and CRUD
 public static partial class Schema
 {
-    public static readonly TableDef Posts = DefineTable("posts", new
-    {
-        Id        = Col.Text("id").PrimaryKey(),
-        AuthorId  = Col.Text("author_id").NotNull()
-                       .References(Users, "id", onDelete: "cascade"),
-        Slug      = Col.Text("slug").NotNull().Unique(),
-        Title     = Col.Text("title").NotNull(),
-        Content   = Col.Text("content").NotNull(),
-        Published = Col.Int("published").Default(0),
-        CreatedAt = Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
-    });
-}`;
+    public static readonly TableDef Posts = DefineTable("posts",
+        Col.Text("id").PrimaryKey(),
+        Col.Text("author_id").NotNull()
+           .References("users", "id", onDelete: "cascade"),
+        Col.Text("slug").NotNull().Unique(),
+        Col.Text("title").NotNull(),
+        Col.Text("content").NotNull(),
+        Col.Int("published").Default(0),
+        Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+    );
+}
 
-const sqlDdl = `-- Generated by: reptar db generate
+// Transactional pipelined batching across D1, SQLite, Postgres & MySQL
+await c.Db.BatchAsync(
+    ("INSERT INTO posts (id, author_id, slug, title, content) VALUES (@id, @author, @slug, @title, @body)",
+        new object?[] { ("id", postId), ("author", userId), ("slug", slug), ("title", title), ("body", body) }),
+    ("INSERT INTO post_tags (post_id, tag) VALUES (@id, @tag)",
+        new object?[] { ("id", postId), ("tag", "csharp") })
+);`;
+
+const sqlDdl = `-- Managed via CLI:
+-- $ bun scripts/reptar.ts db new add_posts_table
+-- $ bun scripts/reptar.ts db status
+-- $ bun scripts/reptar.ts db migrate
+
 CREATE TABLE IF NOT EXISTS posts (
   id TEXT PRIMARY KEY,
   author_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -91,167 +111,176 @@ CREATE TABLE IF NOT EXISTS posts (
 CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id);
 CREATE INDEX IF NOT EXISTS idx_posts_published ON posts(published);`;
 
-const csharpValidation = `// Built-in zero-dependency backend validation
-public record SignUpInput(string Email, string Password);
+const csharpStreamingAndOpenApi = `// Native SSE streaming, SWR caching, and OpenAPI 3.1 + Scalar UI
+var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite("app.db") });
 
-public static readonly Validator<SignUpInput> SignUpSchema = Rule<SignUpInput>()
-    .Prop(x => x.Email, r => r.Email().Max(255))
-    .Prop(x => x.Password, r => r.Min(8).Max(128))
-    .Refine(
-        x => !x.Password.Contains(x.Email),
-        "Password cannot contain email",
-        path: "password"
-    );`;
+// 1. Sub-3ms Stale-While-Revalidate perimeter cache + O(1) Sliding Window Rate Limit
+app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
+app.Use(RateLimit.SlidingWindow(limit: 100, windowSeconds: 60));
 
-const tsStandardSchema = `// Zero runtime dependencies — speaks ~standard specification
-import type { StandardSchemaV1 } from "@standard-schema/spec";
+// 2. Zero-reflection OpenAPI 3.1 spec + interactive Scalar UI at /reference
+app.UseScalar(title: "Reptar Production API", version: "1.0.0");
 
-export const signUpSchema: StandardSchemaV1<SignUpInput> = {
-  "~standard": {
-    version: 1,
-    vendor: "reptar",
-    validate(value) {
-      // Direct integration with TanStack Form, Formik, etc.
-      return runValidator(value, {
-        email: [{ type: "email" }, { type: "max", value: 255 }],
-        password: [{ type: "min", value: 8 }, { type: "max", value: 128 }]
-      });
+// 3. Channel<byte[]>-backed Server-Sent Events (SSE) for AI token streaming
+app.Get("/api/ai/stream", c => Task.FromResult(
+    c.Sse(async stream =>
+    {
+        await stream.SendAsync("connected", @event: "status");
+        await stream.SendJsonAsync(new { token = "Reptar " }, @event: "delta");
+        await stream.SendJsonAsync(new { token = "streams at zero alloc." }, @event: "delta");
+        await stream.SendAsync("[DONE]", @event: "done");
+    })
+));`;
+
+const openApiOutput = `// Auto-derived from RouteMeta + Validator<T> at GET /openapi.json
+{
+  "openapi": "3.1.0",
+  "info": { "title": "Reptar Production API", "version": "1.0.0" },
+  "paths": {
+    "/posts": {
+      "post": {
+        "summary": "Create a new post",
+        "tags": ["Posts"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["title", "content"],
+                "properties": {
+                  "title": { "type": "string", "minLength": 3, "maxLength": 120 },
+                  "content": { "type": "string", "minLength": 1 }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
-};`;
+}`;
 ---
 
-<section class="border-b border-[#232730] bg-[#090a0c] py-20 lg:py-24" id="comparison">
+<section class="border-b border-[#222630] bg-[#0a0b0e] py-20 lg:py-24" id="comparison">
   <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-    <div class="max-w-3xl">
-      <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">
-        What you write, what you get
-      </h2>
-      <p class="mt-4 text-base sm:text-lg text-zinc-400 leading-relaxed">
-        One feature file in C# defines the records, rules, and endpoints. The framework source-generates
-        the route tree, serialization mappers, and a lightweight typed client for any frontend.
-      </p>
-    </div>
+    <div class="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+      <div class="max-w-2xl">
+        <h2 class="text-3xl font-bold tracking-tight text-white sm:text-4xl">
+          What you write, what you get
+        </h2>
+        <p class="mt-3 text-base sm:text-lg text-zinc-400 leading-relaxed">
+          One C# feature slice defines your entities, validation rules, and route handlers. Source generators emit positional SQLite/Postgres mappers, TypeScript RPC clients, and OpenAPI 3.1 schemas at build time.
+        </p>
+      </div>
 
-    <!-- Mode Selector Tabs -->
-    <div class="mt-8 flex flex-wrap gap-2">
-      <button
-        type="button"
-        class="tab-btn active px-3.5 py-1.5 text-xs font-mono font-medium rounded border border-[#232730] bg-[#161a22] text-white hover:bg-[#1e232d] transition-colors"
-        data-target="tab-routes"
-      >
-        01. Endpoints & Typed RPC
-      </button>
-      <button
-        type="button"
-        class="tab-btn px-3.5 py-1.5 text-xs font-mono font-medium rounded border border-[#232730] bg-[#111317] text-zinc-400 hover:text-white hover:bg-[#161a22] transition-colors"
-        data-target="tab-schema"
-      >
-        02. Schema & SQL DDL
-      </button>
-      <button
-        type="button"
-        class="tab-btn px-3.5 py-1.5 text-xs font-mono font-medium rounded border border-[#232730] bg-[#111317] text-zinc-400 hover:text-white hover:bg-[#161a22] transition-colors"
-        data-target="tab-validation"
-      >
-        03. Rules & Standard Schema
-      </button>
+      <!-- Mode Selector Tabs -->
+      <div class="flex flex-wrap gap-2">
+        <button
+          type="button"
+          class="tab-btn active px-3.5 py-2 text-xs font-mono font-medium border border-[#222630] bg-[#161922] text-white transition-colors"
+          data-target="tab-routes"
+        >
+          01. Endpoints &amp; Typed RPC
+        </button>
+        <button
+          type="button"
+          class="tab-btn px-3.5 py-2 text-xs font-mono font-medium border border-[#222630] bg-[#0f1116] text-zinc-400 hover:text-white transition-colors"
+          data-target="tab-schema"
+        >
+          02. Schema, Batching &amp; Migrations
+        </button>
+        <button
+          type="button"
+          class="tab-btn px-3.5 py-2 text-xs font-mono font-medium border border-[#222630] bg-[#0f1116] text-zinc-400 hover:text-white transition-colors"
+          data-target="tab-streaming"
+        >
+          03. SSE, SWR &amp; OpenAPI 3.1
+        </button>
+      </div>
     </div>
 
     <!-- Tab 1: Endpoints & Typed RPC -->
-    <div id="tab-routes" class="code-tab mt-6 grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- C# Backend -->
-      <div class="rounded border border-[#232730] bg-[#0d0e12] overflow-hidden flex flex-col">
-        <div class="flex items-center justify-between border-b border-[#232730] bg-[#111317] px-4 py-2.5">
-          <div class="flex items-center gap-2">
-            <span class="h-2 w-2 rounded-full bg-zinc-600"></span>
-            <span class="font-mono text-xs text-zinc-300 font-medium">apps/api/features/posts.cs</span>
-          </div>
-          <span class="font-mono text-[11px] text-emerald-400 font-semibold uppercase tracking-wider">C# Backend</span>
+    <div id="tab-routes" class="code-tab mt-8 grid grid-cols-1 lg:grid-cols-2 border border-[#222630] bg-[#0d0f14] divide-y lg:divide-y-0 lg:divide-x divide-[#222630]">
+      <div class="flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between border-b border-[#222630] bg-[#13161c] px-4 py-2.5">
+          <span class="font-mono text-xs text-zinc-200 font-medium">apps/api/features/posts.cs</span>
+          <span class="font-mono text-xs text-zinc-500">C# Backend</span>
         </div>
-        <div class="p-4 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
+        <div class="p-5 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
           <pre><code>{csharpRoutes}</code></pre>
         </div>
       </div>
 
-      <!-- TypeScript Client -->
-      <div class="rounded border border-[#232730] bg-[#0d0e12] overflow-hidden flex flex-col">
-        <div class="flex items-center justify-between border-b border-[#232730] bg-[#111317] px-4 py-2.5">
-          <div class="flex items-center gap-2">
-            <span class="h-2 w-2 rounded-full bg-zinc-600"></span>
-            <span class="font-mono text-xs text-zinc-300 font-medium">apps/frontend/src/api.ts</span>
-          </div>
-          <span class="font-mono text-[11px] text-emerald-400 font-semibold uppercase tracking-wider">Frontend Client</span>
+      <div class="flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between border-b border-[#222630] bg-[#13161c] px-4 py-2.5">
+          <span class="font-mono text-xs text-zinc-200 font-medium">apps/web/src/api.ts</span>
+          <span class="font-mono text-xs text-zinc-500">Generated TypeScript RPC</span>
         </div>
-        <div class="p-4 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
+        <div class="p-5 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
           <pre><code>{tsClient}</code></pre>
         </div>
       </div>
     </div>
 
     <!-- Tab 2: Schema & SQL DDL -->
-    <div id="tab-schema" class="code-tab mt-6 hidden grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="rounded border border-[#232730] bg-[#0d0e12] overflow-hidden flex flex-col">
-        <div class="flex items-center justify-between border-b border-[#232730] bg-[#111317] px-4 py-2.5">
-          <span class="font-mono text-xs text-zinc-300 font-medium">apps/api/schema/posts.cs</span>
-          <span class="font-mono text-[11px] text-emerald-400 font-semibold uppercase tracking-wider">C# Schema</span>
+    <div id="tab-schema" class="code-tab mt-8 hidden grid-cols-1 lg:grid-cols-2 border border-[#222630] bg-[#0d0f14] divide-y lg:divide-y-0 lg:divide-x divide-[#222630]">
+      <div class="flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between border-b border-[#222630] bg-[#13161c] px-4 py-2.5">
+          <span class="font-mono text-xs text-zinc-200 font-medium">apps/api/schema/posts.cs</span>
+          <span class="font-mono text-xs text-zinc-500">TableDef &amp; Transactional Batch</span>
         </div>
-        <div class="p-4 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
+        <div class="p-5 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
           <pre><code>{csharpSchema}</code></pre>
         </div>
       </div>
 
-      <div class="rounded border border-[#232730] bg-[#0d0e12] overflow-hidden flex flex-col">
-        <div class="flex items-center justify-between border-b border-[#232730] bg-[#111317] px-4 py-2.5">
-          <span class="font-mono text-xs text-zinc-300 font-medium">apps/api/migrations/0000_init.sql</span>
-          <span class="font-mono text-[11px] text-emerald-400 font-semibold uppercase tracking-wider">Generated DDL</span>
+      <div class="flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between border-b border-[#222630] bg-[#13161c] px-4 py-2.5">
+          <span class="font-mono text-xs text-zinc-200 font-medium">apps/api/migrations/0001_posts.sql</span>
+          <span class="font-mono text-xs text-zinc-500">CLI Migration Runner</span>
         </div>
-        <div class="p-4 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
+        <div class="p-5 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
           <pre><code>{sqlDdl}</code></pre>
         </div>
       </div>
     </div>
 
-    <!-- Tab 3: Rules & Standard Schema -->
-    <div id="tab-validation" class="code-tab mt-6 hidden grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="rounded border border-[#232730] bg-[#0d0e12] overflow-hidden flex flex-col">
-        <div class="flex items-center justify-between border-b border-[#232730] bg-[#111317] px-4 py-2.5">
-          <span class="font-mono text-xs text-zinc-300 font-medium">apps/api/features/auth.cs</span>
-          <span class="font-mono text-[11px] text-emerald-400 font-semibold uppercase tracking-wider">C# Rule&lt;T&gt;</span>
+    <!-- Tab 3: SSE, SWR & OpenAPI 3.1 -->
+    <div id="tab-streaming" class="code-tab mt-8 hidden grid-cols-1 lg:grid-cols-2 border border-[#222630] bg-[#0d0f14] divide-y lg:divide-y-0 lg:divide-x divide-[#222630]">
+      <div class="flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between border-b border-[#222630] bg-[#13161c] px-4 py-2.5">
+          <span class="font-mono text-xs text-zinc-200 font-medium">apps/api/app.cs</span>
+          <span class="font-mono text-xs text-zinc-500">SSE, SWR &amp; Scalar UI</span>
         </div>
-        <div class="p-4 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
-          <pre><code>{csharpValidation}</code></pre>
+        <div class="p-5 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
+          <pre><code>{csharpStreamingAndOpenApi}</code></pre>
         </div>
       </div>
 
-      <div class="rounded border border-[#232730] bg-[#0d0e12] overflow-hidden flex flex-col">
-        <div class="flex items-center justify-between border-b border-[#232730] bg-[#111317] px-4 py-2.5">
-          <span class="font-mono text-xs text-zinc-300 font-medium">packages/rpc/schemas.generated.ts</span>
-          <span class="font-mono text-[11px] text-emerald-400 font-semibold uppercase tracking-wider">Standard Schema (~standard)</span>
+      <div class="flex flex-col overflow-hidden">
+        <div class="flex items-center justify-between border-b border-[#222630] bg-[#13161c] px-4 py-2.5">
+          <span class="font-mono text-xs text-zinc-200 font-medium">GET /openapi.json</span>
+          <span class="font-mono text-xs text-zinc-500">Validator-Derived OpenAPI 3.1</span>
         </div>
-        <div class="p-4 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
-          <pre><code>{tsStandardSchema}</code></pre>
+        <div class="p-5 font-mono text-xs leading-relaxed overflow-x-auto text-zinc-300">
+          <pre><code>{openApiOutput}</code></pre>
         </div>
       </div>
     </div>
 
     <!-- Bottom summary bar -->
-    <div class="mt-8 rounded border border-[#232730] bg-[#111317] p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-      <div class="flex items-center gap-3">
-        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-        <span class="text-xs font-mono text-zinc-300">Contract Generator</span>
-        <span class="text-zinc-600">|</span>
-        <span class="text-xs text-zinc-400">
-          Every route with <code class="text-zinc-200">.Produces&lt;T&gt;()</code> generates an accurate TypeScript RPC definition, Standard Schema validator, and OpenAPI spec.
-        </span>
+    <div class="border-x border-b border-[#222630] bg-[#0f1116] px-5 py-3.5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+      <div class="text-xs text-zinc-400">
+        Decorating a C# record with <code class="font-mono text-zinc-200">[ReptarEntity]</code> generates a compile-time <code class="font-mono text-zinc-200">IDataRecordMapper&lt;T&gt;</code> with positional ordinal fast-paths, eliminating runtime reflection on both Wasm and Native AOT.
       </div>
       <a
-        href="https://reptar-docs.rocktown-labs.workers.dev"
+        href="https://reptar-docs.rocktown-labs.workers.dev/client/codegen"
         target="_blank"
         rel="noopener noreferrer"
         class="text-xs font-mono font-medium text-emerald-400 hover:text-emerald-300 transition-colors whitespace-nowrap"
       >
-        Read Codegen Specs &rarr;
+        Explore Codegen &amp; OpenAPI &rarr;
       </a>
     </div>
   </div>
@@ -269,12 +298,12 @@ export const signUpSchema: StandardSchemaV1<SignUpInput> = {
       }
 
       for (const b of tabButtons) {
-        b.classList.remove("active", "bg-[#161a22]", "text-white");
-        b.classList.add("bg-[#111317]", "text-zinc-400");
+        b.classList.remove("active", "bg-[#161922]", "text-white");
+        b.classList.add("bg-[#0f1116]", "text-zinc-400");
       }
 
-      btn.classList.add("active", "bg-[#161a22]", "text-white");
-      btn.classList.remove("bg-[#111317]", "text-zinc-400");
+      btn.classList.add("active", "bg-[#161922]", "text-white");
+      btn.classList.remove("bg-[#0f1116]", "text-zinc-400");
 
       for (const pane of tabPanes) {
         if (pane.id === targetId) {

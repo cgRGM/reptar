@@ -17,7 +17,7 @@ export default defineConfig({
               label: "Deployment Targets",
               slug: "overview/deployment-targets",
             },
-            { label: "RealWorld API", slug: "overview/realworld" },
+            { label: "RealWorld & Benchmarks", slug: "overview/realworld" },
           ],
           label: "Overview",
         },
@@ -33,7 +33,7 @@ export default defineConfig({
         },
         {
           items: [
-            { label: "Routing & Handlers", slug: "core/routing" },
+            { label: "Routing, SSE & Caching", slug: "core/routing" },
             { label: "Context Surface (Ctx)", slug: "core/context" },
             { label: "Validation & Rule<T>", slug: "core/validation" },
           ],
@@ -50,13 +50,13 @@ export default defineConfig({
         {
           items: [
             { label: "Built-in C# Auth", slug: "auth/builtin" },
-            { label: "Adapters", slug: "auth/adapters" },
+            { label: "Better Auth & Adapters", slug: "auth/adapters" },
           ],
           label: "Authentication",
         },
         {
           items: [
-            { label: "D1, R2, AI & Limits", slug: "cloudflare/bindings" },
+            { label: "D1, R2, AI & Bindings", slug: "cloudflare/bindings" },
           ],
           label: "Cloudflare Bindings",
         },
@@ -66,9 +66,9 @@ export default defineConfig({
         },
         {
           items: [
-            { label: "Typed Client & Contracts", slug: "client/codegen" },
+            { label: "Typed Client & OpenAPI 3.1", slug: "client/codegen" },
           ],
-          label: "Client Codegen",
+          label: "Client & OpenAPI",
         },
         {
           items: [
@@ -84,7 +84,7 @@ export default defineConfig({
           label: "GitHub",
         },
       ],
-      title: "Reptar Documentation",
+      title: "reptar docs",
     }),
   ],
   server: {

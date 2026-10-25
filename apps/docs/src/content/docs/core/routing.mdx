@@ -1,6 +1,6 @@
 ---
-title: Routing & Handlers
-description: Terse, expressive route handlers with explicit response contracts.
+title: Routing, SSE & Caching
+description: Expressive route handlers, OpenAPI 3.1 metadata, Server-Sent Events, SWR caching, and sliding-window rate limiting.
 ---
 
 import { Code } from "@astrojs/starlight/components";
@@ -8,35 +8,85 @@ import postsCode from "../../../../../../examples/blog/features/posts.cs?raw";
 
 ## Feature-Slice Routing
 
-In Reptar, routes are organized into feature slices. A feature file contains records, validation rules, and route definitions in one cohesive class.
+In Reptar, routes are organized into cohesive feature slices containing request/response records, `Rule<T>` validators, and route handlers.
 
-The snippet below is **imported directly from the living codebase** (`examples/blog/features/posts.cs`), ensuring documentation never drifts from actual implementation:
+The snippet below is imported directly from `examples/blog/features/posts.cs`:
 
 <Code code={postsCode} lang="csharp" title="examples/blog/features/posts.cs" />
 
----
+## Route Parameters, Query Strings & Groups
 
-## Route Parameters & Query Strings
-
-Access path parameters and query strings directly from `ctx.Req`:
+Access path parameters, query strings, and headers directly from `ctx.Req`, and organize related endpoints with `app.Group(...)`:
 
 ```csharp
-// Path parameters
-var id = ctx.Req.Param("id");
+var api = app.Group("/api/v1");
 
-// Query string values
-var page = ctx.Req.Query("page", defaultValue: "1");
+api.Get("/tasks/:id", async ctx =>
+{
+    var id = ctx.Req.Param("id");
+    var includeComments = ctx.Req.Query("comments", defaultValue: "false");
+    var authorization = ctx.Req.Header("Authorization");
 
-// Headers
-var authorization = ctx.Req.Header("Authorization");
+    var task = await ctx.Db.QuerySingleOrDefaultAsync<TaskItem>(
+        "SELECT id, title, status FROM tasks WHERE id = @id",
+        ("id", id));
+
+    return task is null ? ctx.NotFound() : ctx.Json(task);
+});
 ```
 
----
+## Explicit Contracts & OpenAPI 3.1 Metadata
 
-## Explicit Contracts with `.Produces<T>()`
+Every route builder supports fluent contract and OpenAPI 3.1 metadata methods:
 
-`.Produces<T>(status)` is the core mechanism that connects C# route handlers to frontend TypeScript types and OpenAPI schemas:
+```csharp
+app.Post("/api/tasks", CreateTaskValidator, async (ctx, input) =>
+{
+    // ...
+    return ctx.Json(created, 201);
+})
+    .WithSummary("Create a task")
+    .WithDescription("Validates input constraints and inserts a new task record.")
+    .WithTags("Tasks")
+    .Produces<TaskItem>(201)
+    .Produces<ValidationError>(400);
+```
 
-- **Type safety:** Tells the codegen engine the exact return type for status code `200`, `201`, `404`, etc.
-- **Client accuracy:** Generated RPC clients type the return value of `await api.posts.$get()` based entirely on `.Produces<T>()`.
-- **Zero guesswork:** If a route produces different models on success versus error, both are explicitly declared.
+- **`.Produces<T>(status)`**: Declares exact response types per status code for both `@reptar/client` TypeScript RPC codegen and OpenAPI 3.1 responses.
+- **`.WithSummary()` / `.WithDescription()` / `.WithTags()`**: Populates the zero-reflection OpenAPI 3.1 specification.
+- **Interactive UI**: Call `app.UseScalar()` to serve `/openapi.json` and interactive Scalar documentation at `/reference`, or `app.UseSwaggerUi()` to serve Swagger UI at `/swagger`.
+
+## Server-Sent Events (SSE) for AI & Real-Time Streaming
+
+Reptar includes native, zero-allocation Server-Sent Events (`ctx.Sse`) backed by `System.Threading.Channels.Channel<byte[]>`. Chunks stream directly into Kestrel's `PipeWriter` with automatic `FlushAsync()` and proxy-buffering disabled (`X-Accel-Buffering: no`):
+
+```csharp
+app.Get("/api/ai/chat", ctx =>
+{
+    return Task.FromResult(ctx.Sse(async stream =>
+    {
+        await stream.SendAsync("Connecting to model...", @event: "status");
+        await stream.SendJsonAsync(new { token = "Hello " }, @event: "delta", id: "tok_1");
+        await stream.SendJsonAsync(new { token = "world!" }, @event: "delta", id: "tok_2");
+        await stream.SendAsync("[DONE]", @event: "done");
+    }));
+});
+```
+
+## Perimeter Stale-While-Revalidate (`CacheControl.SWR`)
+
+For read-heavy endpoints, `CacheControl.SWR` caches anonymous `GET` responses in memory, serves warm hits in **2.6–3.3 ms p50** (up to **39,214 req/s**), refreshes stale entries asynchronously in the background, and automatically invalidates affected routes on mutating writes (`POST`, `PUT`, `PATCH`, `DELETE`):
+
+```csharp
+// Serve fresh from memory for 15s; serve stale for up to 30s while revalidating in background
+app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
+```
+
+## Sliding-Window Rate Limiting
+
+`RateLimit.SlidingWindow` uses an O(1) atomic weighted sliding-window counter without timestamp list allocations and emits standard IETF rate-limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `Retry-After` on `429`):
+
+```csharp
+// Allow 60 requests per 60-second sliding window per client IP
+app.Use(RateLimit.SlidingWindow(limit: 60, windowSeconds: 60));
+```

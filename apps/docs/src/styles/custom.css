@@ -1,95 +1,375 @@
-:root {
+:root,
+:root[data-theme="dark"],
+:root[data-theme="light"] {
   --sl-font:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
-    Arial, sans-serif;
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
   --sl-font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+    "JetBrains Mono", "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
 
-  /* Brand accents (Reptar emerald) */
-  --sl-color-accent-low: #064e3b;
+  /* Brand accents — restrained emerald without neon block fills */
+  --sl-color-accent-low: #0d1915;
   --sl-color-accent: #10b981;
-  --sl-color-accent-high: #6ee7b7;
+  --sl-color-accent-high: #34d399;
 
-  /* Dark mode palette */
+  /* Consistent high-contrast matte dark palette */
   --sl-color-white: #f4f4f5;
   --sl-color-gray-1: #e4e4e7;
   --sl-color-gray-2: #a1a1aa;
   --sl-color-gray-3: #71717a;
-  --sl-color-gray-4: #27272a;
-  --sl-color-gray-5: #18181b;
-  --sl-color-gray-6: #090a0c;
-  --sl-color-black: #090a0c;
-  --sl-color-bg: #090a0c;
-  --sl-color-bg-sidebar: #090a0c;
-  --sl-color-bg-nav: #090a0c;
-  --sl-color-hairline: #232730;
-  --sl-color-hairline-light: #232730;
+  --sl-color-gray-4: #222630;
+  --sl-color-gray-5: #13161c;
+  --sl-color-gray-6: #0f1116;
+  --sl-color-black: #0a0b0e;
+  --sl-color-bg: #0a0b0e;
+  --sl-color-bg-sidebar: #0a0b0e;
+  --sl-color-bg-nav: #0a0b0e;
+  --sl-color-bg-inline-code: #13161c;
+  --sl-color-hairline: #222630;
+  --sl-color-hairline-light: #1b1f28;
+  --sl-color-hairline-shade: #181b22;
+
+  /* Layout sizing */
+  --sl-content-width: 52rem;
+  --sl-nav-height: 3.5rem;
 }
 
-/* Starlight sidebar and content polish */
+/* Header & Site Title */
 header.header {
-  border-bottom: 1px solid var(--sl-color-hairline);
-  background-color: #090a0c;
+  border-bottom: 1px solid #222630 !important;
+  background-color: #0a0b0e !important;
 }
 
-nav.sidebar {
-  border-right: 1px solid var(--sl-color-hairline);
-  background-color: #090a0c;
+.site-title {
+  color: #ffffff !important;
+  font-weight: 700 !important;
+  font-size: 1rem !important;
+  letter-spacing: -0.02em !important;
+  gap: 0.5rem !important;
 }
 
-/* Code block styling */
+.site-title::before {
+  content: "";
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  background-color: #10b981;
+}
+
+/* Search button refinement */
+site-search button[data-open-modal] {
+  background-color: #0f1116 !important;
+  border: 1px solid #222630 !important;
+  border-radius: 0 !important;
+  color: #a1a1aa !important;
+  height: 2.125rem !important;
+}
+
+site-search button[data-open-modal]:hover {
+  border-color: #323846 !important;
+  color: #f4f4f5 !important;
+}
+
+/* Left Sidebar — eliminate neon green highlight bars */
+nav.sidebar,
+.sidebar-pane {
+  border-right: 1px solid #222630 !important;
+  background-color: #0a0b0e !important;
+}
+
+.sidebar-content {
+  padding: 1.25rem 1rem !important;
+}
+
+.top-level > li + li {
+  margin-top: 1.25rem !important;
+}
+
+/* Group headings in sidebar */
+.sidebar-content summary .group-label .large {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #71717a !important;
+}
+
+/* Sidebar links */
+.sidebar-content ul ul li {
+  margin-inline-start: 0 !important;
+  padding-inline-start: 0 !important;
+  border-inline-start: 1px solid #1b1f28 !important;
+}
+
+.sidebar-content a {
+  border-radius: 0 !important;
+  padding: 0.375rem 0.75rem !important;
+  font-size: 0.84rem !important;
+  color: #a1a1aa !important;
+  transition:
+    color 0.12s ease,
+    background-color 0.12s ease;
+}
+
+.sidebar-content a:hover {
+  color: #f4f4f5 !important;
+  background-color: #0f1116 !important;
+}
+
+/* Active sidebar item: clean left border + crisp white text on dark surface */
+.sidebar-content a[aria-current="page"],
+.sidebar-content a[aria-current="page"]:hover,
+.sidebar-content a[aria-current="page"]:focus {
+  background-color: #13161c !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  border-left: 2px solid #10b981 !important;
+  margin-left: -1px;
+}
+
+/* Right Table of Contents */
+.right-sidebar {
+  border-left: 1px solid #222630 !important;
+}
+
+.right-sidebar-panel h2 {
+  font-family: var(--sl-font-mono);
+  font-size: 0.72rem !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #71717a !important;
+}
+
+starlight-toc a {
+  font-size: 0.8rem !important;
+  color: #a1a1aa !important;
+  border-radius: 0 !important;
+  padding-top: 0.25rem !important;
+  padding-bottom: 0.25rem !important;
+}
+
+starlight-toc a[aria-current="true"] {
+  background-color: transparent !important;
+  color: #10b981 !important;
+  font-weight: 600 !important;
+}
+
+/* Main Content Typography & Spacing */
+.content-panel {
+  border-top: none !important;
+  padding-top: 1.75rem !important;
+  padding-bottom: 1.5rem !important;
+}
+
+.content-panel + .content-panel {
+  border-top: 1px solid #222630 !important;
+  padding-top: 2rem !important;
+}
+
+.sl-markdown-content h1,
+h1#_top {
+  font-size: 2.25rem !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.03em !important;
+  color: #ffffff !important;
+  line-height: 1.15 !important;
+}
+
+.sl-markdown-content h2 {
+  font-size: 1.4rem !important;
+  font-weight: 650 !important;
+  letter-spacing: -0.02em !important;
+  color: #ffffff !important;
+  margin-top: 2.5rem !important;
+  padding-bottom: 0.5rem;
+  border-bottom: 1px solid #1b1f28;
+}
+
+.sl-markdown-content h3 {
+  font-size: 1.1rem !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  color: #f4f4f5 !important;
+  margin-top: 1.75rem !important;
+}
+
+.sl-markdown-content p,
+.sl-markdown-content li {
+  color: #b4b4bc;
+  line-height: 1.7;
+  font-size: 0.95rem;
+}
+
+.sl-markdown-content strong {
+  color: #f4f4f5;
+  font-weight: 600;
+}
+
+.sl-markdown-content hr {
+  border-color: #1b1f28 !important;
+  margin: 2.25rem 0 !important;
+}
+
+/* Inline code */
+.sl-markdown-content :not(pre) > code {
+  background-color: #13161c !important;
+  border: 1px solid #222630 !important;
+  border-radius: 0 !important;
+  padding: 0.12rem 0.38rem !important;
+  font-size: 0.82em !important;
+  color: #e4e4e7 !important;
+}
+
+/* Expressive Code blocks */
 .expressive-code {
-  --ec-brdCol: #232730;
-  --ec-bg: #0d0e12;
+  --ec-brdCol: #222630;
+  --ec-brdRad: 0px;
+  --ec-bg: #0d0f14;
+  --ec-frm-edTabBarBg: #13161c;
+  --ec-frm-edTabBarBrdCol: #222630;
+  --ec-frm-edActTabBg: #0d0f14;
+  --ec-frm-edActTabFg: #ffffff;
+  --ec-frm-edActTabIndTopCol: #10b981;
+  --ec-frm-trmTtbBg: #13161c;
+  --ec-frm-trmTtbBrdBtmCol: #222630;
+  --ec-frm-trmBg: #0d0f14;
+  margin-top: 1rem !important;
+  margin-bottom: 1.5rem !important;
 }
 
 .expressive-code pre {
-  border: 1px solid #232730 !important;
-  border-radius: 4px;
+  border: 1px solid #222630 !important;
+  border-radius: 0 !important;
+  background-color: #0d0f14 !important;
 }
 
-/* Links & CTAs */
-a {
-  text-decoration-thickness: 1px;
+/* Tables: full-width structural grid */
+.sl-markdown-content table {
+  display: table !important;
+  width: 100% !important;
+  border-collapse: collapse !important;
+  border: 1px solid #222630 !important;
+  background-color: #0f1116 !important;
+  margin: 1.5rem 0 !important;
+  font-size: 0.85rem !important;
+}
+
+.sl-markdown-content thead th {
+  background-color: #13161c !important;
+  color: #e4e4e7 !important;
+  font-family: var(--sl-font-mono);
+  font-size: 0.76rem !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.65rem 0.9rem !important;
+  border-bottom: 1px solid #222630 !important;
+}
+
+.sl-markdown-content td {
+  padding: 0.65rem 0.9rem !important;
+  border-bottom: 1px solid #1b1f28 !important;
+  color: #b4b4bc;
+}
+
+/* Tabs */
+starlight-tabs .tablist-wrapper {
+  border-bottom: 1px solid #222630 !important;
+}
+
+starlight-tabs a[role="tab"] {
+  font-family: var(--sl-font-mono);
+  font-size: 0.78rem !important;
+  padding: 0.5rem 1rem !important;
+  color: #a1a1aa !important;
+}
+
+starlight-tabs a[role="tab"][aria-selected="true"] {
+  color: #ffffff !important;
+  border-bottom-color: #10b981 !important;
+  font-weight: 600 !important;
+}
+
+/* Cards & Grids */
+.card {
+  border: 1px solid #222630 !important;
+  background-color: #0f1116 !important;
+  border-radius: 0 !important;
+  padding: 1.35rem !important;
+}
+
+.card .title {
+  font-size: 1rem !important;
+  font-weight: 600 !important;
+  color: #ffffff !important;
+}
+
+.card .icon {
+  background-color: #13161c !important;
+  border: 1px solid #222630 !important;
+  border-radius: 0 !important;
+  color: #10b981 !important;
+}
+
+/* Buttons & CTAs */
+.action {
+  border-radius: 0 !important;
+  font-size: 0.85rem !important;
+  padding: 0.6rem 1.15rem !important;
 }
 
 .action.primary {
   background-color: #10b981 !important;
   color: #090a0c !important;
   font-weight: 600;
-  border: none;
+  border: 1px solid #10b981 !important;
 }
 
 .action.primary:hover {
-  background-color: #059669 !important;
+  background-color: #34d399 !important;
 }
 
 .action.secondary,
 .action.minimal {
-  background-color: #111317 !important;
+  background-color: #0f1116 !important;
   color: #e4e4e7 !important;
-  border: 1px solid #232730 !important;
+  border: 1px solid #222630 !important;
 }
 
 .action.secondary:hover,
 .action.minimal:hover {
-  background-color: #18181b !important;
+  background-color: #161922 !important;
   color: #ffffff !important;
 }
 
-/* Asides & Callouts */
-.starlight-aside--note {
-  border-left-color: #10b981 !important;
-  background-color: #0d1210 !important;
+/* Pagination links at bottom of docs pages */
+.pagination-links a {
+  border: 1px solid #222630 !important;
+  background-color: #0f1116 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
+.pagination-links a:hover {
+  border-color: #323846 !important;
+  background-color: #13161c !important;
+}
+
+/* Asides & Callouts */
+.starlight-aside {
+  border-radius: 0 !important;
+  border: 1px solid #222630 !important;
+  border-left-width: 3px !important;
+  background-color: #0f1116 !important;
+}
+
+.starlight-aside--note,
 .starlight-aside--tip {
   border-left-color: #10b981 !important;
-  background-color: #0d1210 !important;
 }
 
 .starlight-aside--caution {
   border-left-color: #f59e0b !important;
-  background-color: #18150c !important;
 }
