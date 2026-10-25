@@ -18,6 +18,7 @@ export default defineConfig({
               slug: "overview/deployment-targets",
             },
             { label: "RealWorld & Benchmarks", slug: "overview/realworld" },
+            { label: "ReptarBase (BaaS Engine)", slug: "overview/baas" },
           ],
           label: "Overview",
         },

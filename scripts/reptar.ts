@@ -192,6 +192,8 @@ if (command === "--help" || command === "-h" || command === "help") {
 Commands:
   new          Scaffold a new fullstack Reptar + React + Better Auth project
   dev          Run the example blog API on http://localhost:8787
+  baas:dev     Run the ReptarBase BaaS engine & studio on http://localhost:8787
+  gateway:dev  Run the AI gateway example API on http://localhost:8788
   inspect      Inspect database tables, routes, migrations, and project state (--json)
   doctor       Diagnose SDK toolchain, database connectivity, and RPC status (--json)
   mcp          Run the Model Context Protocol stdio server for AI agents
@@ -514,6 +516,24 @@ switch (command) {
 
   case "realworld:dev": {
     run(["run", "app.cs", ...rest], path.join(repoRoot, "examples/realworld"));
+    break;
+  }
+
+  case "baas:dev": {
+    run(["run", "app.cs", ...rest], path.join(repoRoot, "examples/baas"));
+    break;
+  }
+
+  case "baas:test": {
+    const res = spawnSync("bash", ["test.sh"], {
+      cwd: path.join(repoRoot, "examples/baas"),
+      stdio: "inherit",
+    });
+    process.exit(res.status ?? 0);
+  }
+
+  case "gateway:dev": {
+    run(["run", "app.cs", ...rest], path.join(repoRoot, "examples/ai-gateway"));
     break;
   }
 

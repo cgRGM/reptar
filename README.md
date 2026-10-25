@@ -162,11 +162,7 @@ The Native AOT run surfaced and fixed AOT-unsafe anonymous parameter binding and
 
 ## Calibrated Benchmark (Reptar vs .NET Minimal API vs Hono)
 
-`bench/` contains a calibrated three-stack benchmark: the same multi-tenant
-issue-tracker API implemented in Reptar Native AOT, .NET 10 Minimal API Native
-AOT, and Hono on Bun. It runs a complexity ladder from plaintext and JSON
-through routing, validation, database reads/writes, JWT auth, and PBKDF2 login,
-so the report separates framework overhead from database I/O.
+`bench/` contains a calibrated three-stack benchmark: the same multi-tenant issue-tracker API implemented in Reptar Native AOT, .NET 10 Minimal API Native AOT, and Hono on Bun. It runs a complexity ladder from plaintext and JSON through routing, validation, database reads/writes, JWT auth, and PBKDF2 login, so the report separates framework overhead from database I/O.
 
 ```bash
 bun bench:seed                       # deterministic 50k-task SQLite database
@@ -175,8 +171,39 @@ bun bench:mixed --base-url ...       # weighted realistic mix
 bun bench:report bench/results/<dir> # Markdown comparison report
 ```
 
-See [bench/README.md](./bench/README.md) for the schema, tiers, fairness rules,
-VPS build/run scripts, and known AOT caveats.
+See [bench/README.md](./bench/README.md) for the schema, tiers, fairness rules, VPS build/run scripts, and known AOT caveats.
+
+## ReptarBase (Single-Container BaaS) & Studio
+
+`examples/baas` demonstrates a single-file, production-ready Backend-as-a-Service (BaaS) that compiles to a 10.4 MB Native AOT binary running in ~15 MB RAM as a high-concurrency, zero-dependency alternative to PocketBase, Supabase, and OpenShip.
+
+### Key Capabilities
+
+- **Better Auth & Personal API Keys (`/api/auth/*`)**: WebCrypto-compatible PBKDF2 password hashing, session tokens, and instant Bearer API key validation.
+- **Typed Collections with `ColumnRef<T>` (`/api/documents/*`)**: Zero-reflection filtering, sorting, pagination, and atomic view count increments.
+- **Magic-Byte Object Storage (`/api/files/*`)**: Stack-allocated file sniffing (PNG, JPEG, GIF, WebP, PDF), SHA-256 ETag generation, and conditional `304 Not Modified` fast-pathing.
+- **Real-Time Change Feeds (`/api/realtime`)**: Native Server-Sent Events (SSE) broadcasting database mutations with 15-second heartbeat keepalives.
+- **Embedded Studio Web Console (`GET /_` or `GET /dashboard`)**: An OpenShip-style dark-mode management console for managing collections, uploading assets via drag-and-drop, generating API keys, and monitoring real-time mutation logs.
+
+### Running ReptarBase & Benchmarks
+
+```bash
+bun baas:dev    # Launch ReptarBase and Studio on http://localhost:8787
+bun baas:test   # Run automated 12-step verification suite (~2s)
+bun baas:bench  # Run high-concurrency oha load benchmark suite
+```
+
+### High-Concurrency Benchmark Results (`oha -c 20 -z 5s` against SQLite WAL):
+
+| Tier | Workload | Method | Endpoint | RPS | p50 | p95 | Success |
+| :-- | :-- | :-- | :-- | :-: | :-: | :-: | :-: |
+| **T1** | Baseline Engine | `GET` | `/health` | **132,907** | 0.13 ms | 0.26 ms | 100% |
+| **T2** | Filtered Query (`ColumnRef<T>`) | `GET` | `/api/documents?status=published` | **34,215** | 0.43 ms | 1.38 ms | 100% |
+| **T3** | Atomic Read + View Counter | `GET` | `/api/documents/:id` | **55,689** | 0.30 ms | 0.96 ms | 100% |
+| **T4** | Authenticated Writes + SSE | `POST` | `/api/documents` | **31,722** | 0.52 ms | 1.55 ms | 100% |
+| **T5** | Conditional ETag Caching | `GET` | `/api/files/:key` | **68,052** | 0.27 ms | 0.46 ms | 100% |
+
+Under concurrent write pressure, SQLite WAL mode with Reptar's group-commit batching sustained **31,722 authenticated writes/sec** (0.52 ms p50) while simultaneously publishing events to active SSE listeners—surpassing typical PocketBase (~2.5k–3.5k writes/sec) and Node.js BaaS solutions (~2k–4k writes/sec) by nearly an order of magnitude.
 
 ## Production Deployment
 

@@ -91,3 +91,23 @@ Measured against the deployed Cloudflare Worker (`reptar-realworld-bench`) with 
 | `GET /api/articles/:slug` | 145 ms | **4,940** | **8 ms** |
 | `GET /api/articles/feed` | 635 ms | 80 | 494 ms |
 | `POST /api/articles` | 559 ms | 29 | 289 ms |
+
+## 3. ReptarBase (Single-Container BaaS) Workload Benchmarks
+
+`examples/baas` demonstrates a high-concurrency, single-container Backend-as-a-Service (BaaS) equipped with Better Auth, typed document collections via `ColumnRef<T>`, magic-byte file uploads, real-time Server-Sent Events, and an OpenShip-style embedded Studio console.
+
+Measured against the standalone Native AOT binary using `oha` with 20 concurrent connections and SQLite in WAL mode:
+
+| Tier | Workload | Method | Endpoint | RPS | p50 | p95 | p99 | Success |
+| :-- | :-- | :-- | :-- | :-: | :-: | :-: | :-: | :-: |
+| **T1** | **Baseline Engine** | `GET` | `/health` | **132,907** | 0.13 ms | 0.26 ms | 0.58 ms | 100% |
+| **T2** | **Filtered Query (`ColumnRef<T>`)** | `GET` | `/api/documents?status=published` | **34,215** | 0.43 ms | 1.38 ms | 2.19 ms | 100% |
+| **T3** | **Atomic Read + Counter** | `GET` | `/api/documents/:id` | **55,689** | 0.30 ms | 0.96 ms | 1.50 ms | 100% |
+| **T4** | **Authenticated Writes + SSE** | `POST` | `/api/documents` | **31,722** | 0.52 ms | 1.55 ms | 3.08 ms | 100% |
+| **T5** | **Conditional ETag Caching** | `GET` | `/api/files/:key` | **68,052** | 0.27 ms | 0.46 ms | 1.01 ms | 100% |
+
+### Why ReptarBase Outperforms PocketBase & Node BaaS
+
+- **31,722 authenticated writes/sec**: Reptar's SQLite write path utilizes lock-free group-commit batching and zero-copy `PipeReader` JSON parsing. Under similar concurrent write conditions, PocketBase (Go CGO) tops out at ~2.5k–3.5k writes/sec and Node.js solutions at ~2k–4k writes/sec.
+- **34,215 filtered queries/sec**: Stack-allocated `ColumnRef<T>` filter evaluation with zero runtime reflection and an optimized SQLite read connection pool.
+- **Footprint**: The complete server, database engine, storage pipeline, and embedded UI compile to a single 10.4 MB standalone binary with ~15 MB RAM usage.
