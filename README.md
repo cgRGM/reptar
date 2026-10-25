@@ -125,6 +125,7 @@ bun run fix          # Auto-fix code style issues
 The framework ships a provider-agnostic AI agent engine — not an example, a core module (`framework/Reptar/AI/`):
 
 - **Streaming LLM clients** for OpenAI-compatible endpoints (incl. OpenRouter and Vercel AI Gateway), Anthropic, Gemini, and local Ollama — plus an offline **Echo** provider so `bun reptar agent` works with zero API keys.
+- **Interactive provider connection** (Pi `/login` + OpenCode `/connect` parity): `bun reptar agent --connect [provider]` or in-session `/connect` — provider picker with live status, hidden API-key entry, live connection test, model catalog picker, saved to `~/.reptar/agent/auth.json` (0600). `/providers` shows every provider's credential source; custom OpenAI-compatible endpoints register through `Other`; env keys always win over saved credentials.
 - **`StreamingAgentHarness`**: a ReAct loop that dispatches tool calls **in-process** via `app.ExecuteAiToolAsync` (full `Rule<T>` validation, zero HTTP overhead) with live events for terminal and SSE frontends.
 - **`app.UseWorkspaceTools(root)`**: one line mounts `read_file`, `write_file`, `edit_file`, `list_dir`, and `run_command` as normal `.AsAiTool(...)` routes with path-traversal protection.
 - **`TerminalAgent`**: the interactive loop behind `bun reptar agent` — ANSI markdown streaming, slash commands, Ctrl+C interrupt, SQLite session persistence across launches (`--session <id>`).

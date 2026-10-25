@@ -529,12 +529,35 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
                 Ansi.Color(Ansi.Gray, $" [blank = {baseUrl}]: "));
             var overrideUrl = (ReadLineSync() ?? "").Trim();
             if (overrideUrl.Length > 0)
+            {
+                if (!overrideUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase) &&
+                    !overrideUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    Ansi.WriteLine(Ansi.Red, "Base URL must start with http:// or https://.");
+                    return;
+                }
                 baseUrl = overrideUrl;
+            }
         }
 
         // Verify against the provider's model list (opencode-style connection check).
-        var trial = LlmConfig.FromEnvironment(selection, model: defaultModel);
-        trial = trial with { BaseUrl = baseUrl, ApiKey = apiKey };
+        // Build the trial config directly: a custom provider id is only resolvable
+        // through FromEnvironment after it has been saved. The wire provider
+        // comes from the registry so the connection test hits the right endpoint.
+        var trial = new LlmConfig
+        {
+            ProviderKey = selection,
+            Provider = selection switch
+            {
+                LlmProviders.Anthropic => LlmProvider.Anthropic,
+                LlmProviders.Gemini => LlmProvider.Gemini,
+                LlmProviders.Ollama => LlmProvider.Ollama,
+                _ => LlmProvider.OpenAi
+            },
+            Model = defaultModel ?? "model",
+            ApiKey = apiKey,
+            BaseUrl = baseUrl
+        };
 
         Ansi.Write(Ansi.Color(Ansi.Gray, "  testing connection… "));
         var catalog = await LlmCatalog.ListAsync(trial);

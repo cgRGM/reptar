@@ -62,6 +62,11 @@ public static class LlmCatalog
         {
             return CatalogResult.Failure("Malformed model list: " + ex.Message);
         }
+        catch (InvalidOperationException ex)
+        {
+            // Invalid base URLs surface as request-building failures, not crashes.
+            return CatalogResult.Failure(ex.Message);
+        }
     }
 
     /// <summary>Fetch the catalog and return the first usable model (pi's post-login model sync).</summary>
@@ -125,11 +130,17 @@ public static class LlmCatalog
 
     // ---- parsers (unit-testable, JsonNode-only: AOT clean) ----
 
-    public static List<string> ParseOpenAiModels(string json)
+    public static List<string> ParseOpenAiModels(string json) =>
+        ParseIds(json, "data");
+
+    public static List<string> ParseAnthropicModels(string json) =>
+        ParseIds(json, "data");
+
+    private static List<string> ParseIds(string json, string arrayKey)
     {
         var result = new List<string>();
-        if (JsonNode.Parse(json) is not JsonObject root ||
-            root["data"] is not JsonArray data)
+        if (ParseObject(json) is not { } root ||
+            root[arrayKey] is not JsonArray data)
             return result;
 
         foreach (var item in data)
@@ -141,26 +152,22 @@ public static class LlmCatalog
         return result;
     }
 
-    public static List<string> ParseAnthropicModels(string json)
+    private static JsonObject? ParseObject(string json)
     {
-        var result = new List<string>();
-        if (JsonNode.Parse(json) is not JsonObject root ||
-            root["data"] is not JsonArray data)
-            return result;
-
-        foreach (var item in data)
+        try
         {
-            if (item?["id"] is { } id)
-                result.Add(id.GetValue<string>());
+            return JsonNode.Parse(json) as JsonObject;
         }
-
-        return result;
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     public static List<string> ParseGeminiModels(string json)
     {
         var result = new List<string>();
-        if (JsonNode.Parse(json) is not JsonObject root ||
+        if (ParseObject(json) is not { } root ||
             root["models"] is not JsonArray models)
             return result;
 
@@ -179,7 +186,7 @@ public static class LlmCatalog
     public static List<string> ParseOllamaModels(string json)
     {
         var result = new List<string>();
-        if (JsonNode.Parse(json) is not JsonObject root ||
+        if (ParseObject(json) is not { } root ||
             root["models"] is not JsonArray models)
             return result;
 

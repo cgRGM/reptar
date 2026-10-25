@@ -361,4 +361,238 @@ public sealed class AgentEngineTests : IDisposable
         Assert.Contains(events, e => e is LlmStreamEvent.TextDelta);
         Assert.Contains(events, e => e is LlmStreamEvent.Completed);
     }
+
+    // ------------------------------------------------------------------
+    // Provider credentials (/connect flow)
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void LlmAuthFile_persists_upserts_and_clears()
+    {
+        var authPath = Path.Combine(Path.GetTempPath(), $"reptar-auth-{Guid.NewGuid():N}", "auth.json");
+        try
+        {
+            var auth = new LlmAuthFile(authPath);
+            Assert.Empty(auth.Credentials);
+
+            auth.Set(LlmProviders.OpenAi, new ProviderCredential("sk-test", null, "gpt-4o"));
+            auth.Set(LlmProviders.Ollama, new ProviderCredential(null, "http://localhost:11434", "llama3.2"));
+
+            Assert.Equal(2, auth.Credentials.Count);
+            Assert.Equal(LlmProviders.Ollama, auth.DefaultProvider);
+
+            // Upsert keeps one entry and updates the default model.
+            auth.Set(LlmProviders.OpenAi, new ProviderCredential("sk-test-2", null, "gpt-4o-mini"));
+            var openAi = auth.Get(LlmProviders.OpenAi);
+            Assert.NotNull(openAi);
+            Assert.Equal("sk-test-2", openAi!.ApiKey);
+            Assert.Equal(2, auth.Credentials.Count);
+
+            // Reloading from disk round-trips everything.
+            var reloaded = new LlmAuthFile(authPath);
+            Assert.Equal(2, reloaded.Credentials.Count);
+            Assert.Equal("http://localhost:11434", reloaded.Get(LlmProviders.Ollama)!.BaseUrl);
+            Assert.Equal(LlmProviders.OpenAi, reloaded.DefaultProvider);
+
+            // Clearing the default provider moves the default to the remainder.
+            Assert.True(reloaded.Clear(LlmProviders.OpenAi));
+            Assert.Equal(LlmProviders.Ollama, reloaded.DefaultProvider);
+            Assert.False(reloaded.Clear(LlmProviders.OpenAi));
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(authPath)!, true); }
+            catch { }
+        }
+    }
+
+    [Fact]
+    public void LlmConfig_resolves_saved_auth_when_no_env_keys_are_set()
+    {
+        var (authPath, originals) = IsolateAuthAndProviderEnv();
+        try
+        {
+            var auth = new LlmAuthFile(authPath);
+            auth.Set(LlmProviders.Anthropic,
+                new ProviderCredential("sk-ant-saved", null, "claude-haiku-4-5"));
+
+            var config = LlmConfig.FromEnvironment();
+            Assert.Equal(LlmProvider.Anthropic, config.Provider);
+            Assert.Equal("sk-ant-saved", config.ApiKey);
+            Assert.Equal("claude-haiku-4-5", config.Model);
+            Assert.Equal(LlmProviders.Anthropic, config.ProviderKey);
+        }
+        finally
+        {
+            RestoreEnv(originals);
+        }
+    }
+
+    [Fact]
+    public void LlmConfig_env_keys_win_over_saved_auth()
+    {
+        var (authPath, originals) = IsolateAuthAndProviderEnv();
+        try
+        {
+            var auth = new LlmAuthFile(authPath);
+            auth.Set(LlmProviders.Anthropic, new ProviderCredential("sk-ant-saved", null, null));
+
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", "sk-env-wins");
+            var config = LlmConfig.FromEnvironment();
+            Assert.Equal(LlmProvider.OpenAi, config.Provider);
+            Assert.Equal("sk-env-wins", config.ApiKey);
+        }
+        finally
+        {
+            RestoreEnv(originals);
+        }
+    }
+
+    [Fact]
+    public void LlmConfig_resolves_custom_saved_providers()
+    {
+        var (authPath, originals) = IsolateAuthAndProviderEnv();
+        try
+        {
+            var auth = new LlmAuthFile(authPath);
+            auth.Set("mocai", new ProviderCredential("sk-mock", "http://localhost:5999/v1", "mock-sonnet"));
+
+            var config = LlmConfig.FromEnvironment("mocai");
+            Assert.Equal(LlmProvider.OpenAi, config.Provider);
+            Assert.Equal("mocai", config.ProviderKey);
+            Assert.Equal("mock-sonnet", config.Model);
+            Assert.Equal("http://localhost:5999/v1", config.BaseUrl);
+
+            // Unknown, unregistered provider ids fail fast with the supported list.
+            var error = Assert.Throws<ArgumentException>(() => LlmConfig.FromEnvironment("nope-123"));
+            Assert.Contains("openai, anthropic, gemini", error.Message);
+        }
+        finally
+        {
+            RestoreEnv(originals);
+        }
+    }
+
+    [Fact]
+    public async Task StreamingAgentHarness_dedupes_streamed_and_complete_tool_call_events()
+    {
+        var app = CreateApp();
+        var history = new List<ChatMessage> { new("user", "list the workspace") };
+
+        // OpenAI-compatible streams emit argument deltas first and then a
+        // complete call with the same id. The harness must merge them or the
+        // tool executes twice (regression: caught against a live mock server).
+        var executions = 0;
+
+        IAsyncEnumerable<LlmStreamEvent> Stream(
+            IReadOnlyList<ChatMessage> _,
+            IReadOnlyList<AiToolDefinition> __,
+            CancellationToken ___)
+        {
+            return StreamOnce();
+        }
+
+        async IAsyncEnumerable<LlmStreamEvent> StreamOnce()
+        {
+            await Task.Yield();
+            yield return new LlmStreamEvent.ToolCallDelta(0, "call_1", "list_dir", "{\"path\"");
+            yield return new LlmStreamEvent.ToolCallDelta(0, null, null, ": \".\"}");
+            yield return new LlmStreamEvent.ToolCall("call_1", "list_dir", "{\"path\":\".\"}");
+            yield return new LlmStreamEvent.Completed("tool_calls");
+        }
+
+        IAsyncEnumerable<LlmStreamEvent> StreamFinal(
+            IReadOnlyList<ChatMessage> _,
+            IReadOnlyList<AiToolDefinition> __,
+            CancellationToken ___)
+        {
+            return StreamDone();
+        }
+
+        async IAsyncEnumerable<LlmStreamEvent> StreamDone()
+        {
+            await Task.Yield();
+            yield return new LlmStreamEvent.TextDelta("listed.");
+            yield return new LlmStreamEvent.Completed("stop");
+        }
+
+        var callCount = 0;
+
+        var summary = await StreamingAgentHarness.RunAsync(
+            history,
+            (m, t, c) => ++callCount == 1 ? Stream(m, t, c) : StreamFinal(m, t, c),
+            (name, args) =>
+            {
+                executions++;
+                return app.ExecuteAiToolAsync(name, args);
+            },
+            app.GetAiTools(onlyExplicit: true),
+            maxSteps: 4,
+            model: "test");
+
+        Assert.Equal(1, executions);
+        Assert.Equal(1, summary.ToolCallsExecuted);
+        Assert.Equal("listed.", summary.FinalContent);
+
+        // One assistant tool-call message and one tool result message.
+        Assert.Equal(4, history.Count);
+        Assert.Single(history[1].ToolCalls!);
+        Assert.Equal("tool", history[2].Role);
+    }
+
+    [Fact]
+    public void LlmCatalog_parsers_read_every_provider_shape()
+    {
+        Assert.Equal(
+            ["mock-haiku", "mock-sonnet"],
+            LlmCatalog.ParseOpenAiModels(
+                """{"data":[{"id":"mock-haiku"},{"id":"mock-sonnet"}]}"""));
+
+        Assert.Equal(
+            ["claude-a", "claude-b"],
+            LlmCatalog.ParseAnthropicModels(
+                """{"data":[{"id":"claude-a"},{"id":"claude-b"}]}"""));
+
+        Assert.Equal(
+            ["gemini-2.5-flash", "gemini-2.5-pro"],
+            LlmCatalog.ParseGeminiModels(
+                """{"models":[{"name":"models/gemini-2.5-flash"},{"name":"models/gemini-2.5-pro"}]}"""));
+
+        Assert.Equal(
+            ["llama3.2:latest", "qwen3:8b"],
+            LlmCatalog.ParseOllamaModels(
+                """{"models":[{"name":"llama3.2:latest"},{"name":"qwen3:8b"}]}"""));
+
+        // Malformed payloads yield empty lists, never exceptions.
+        Assert.Empty(LlmCatalog.ParseOpenAiModels("{not json"));
+        Assert.Empty(LlmCatalog.ParseGeminiModels("{}"));
+    }
+
+    private static (string AuthPath, List<(string Key, string? Value)> Originals) IsolateAuthAndProviderEnv()
+    {
+        var keys = new[]
+        {
+            "REPTAR_AGENT_AUTH", "REPTAR_AGENT_PROVIDER", "REPTAR_AGENT_MODEL", "REPTAR_AGENT_API_KEY",
+            "OPENAI_API_KEY", "OPENAI_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL",
+            "GEMINI_API_KEY", "GOOGLE_API_KEY", "GEMINI_BASE_URL", "OLLAMA_HOST",
+            "OPENROUTER_API_KEY", "AI_GATEWAY_API_KEY"
+        };
+
+        var originals = keys.Select(k => (k, Environment.GetEnvironmentVariable(k))).ToList();
+
+        foreach (var key in keys)
+            Environment.SetEnvironmentVariable(key, null);
+
+        var authPath = Path.Combine(Path.GetTempPath(), $"reptar-auth-{Guid.NewGuid():N}", "auth.json");
+        Environment.SetEnvironmentVariable("REPTAR_AGENT_AUTH", authPath);
+
+        return (authPath, originals);
+    }
+
+    private static void RestoreEnv(List<(string Key, string? Value)> originals)
+    {
+        foreach (var (key, value) in originals)
+            Environment.SetEnvironmentVariable(key, value);
+    }
+
 }

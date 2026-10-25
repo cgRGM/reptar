@@ -247,11 +247,23 @@ public static class AiToolExtensions
         bool indented = true)
     {
         var tools = app.GetAiTools(format, onlyExplicit);
-        var formatted = tools.Select(t => t.ToDictionary(format)).ToList();
-        return JsonSerializer.Serialize(formatted, new JsonSerializerOptions
+
+        // Reflection-free serialization: tool parameter schemas are nested
+        // dictionaries, which JsonSerializer.Serialize would refuse under
+        // Native AOT. Build the JsonArray directly instead.
+        var array = new System.Text.Json.Nodes.JsonArray();
+        foreach (var tool in tools)
         {
-            WriteIndented = indented,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+            var dict = tool.ToDictionary(format);
+            var obj = new System.Text.Json.Nodes.JsonObject();
+            foreach (var (key, value) in dict)
+                obj[key] = AI.LlmHttp.ToNode(value);
+            array.Add(obj);
+        }
+
+        return array.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = indented
         });
     }
 

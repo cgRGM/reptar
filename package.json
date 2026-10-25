@@ -16,6 +16,7 @@
   },
   "type": "module",
   "scripts": {
+    "reptar": "bun scripts/reptar.ts",
     "dev": "turbo run dev --filter=web --filter=docs --filter=@reptar/workers-blog-demo",
     "build": "turbo run build",
     "check-types": "turbo run check-types",

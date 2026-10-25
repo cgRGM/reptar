@@ -26,7 +26,30 @@ bun scripts/reptar.ts run examples/agent-cli/app.cs
 cd examples/agent-cli && dotnet run app.cs -- --web
 ```
 
-**Model resolution:** `--model`/`--provider` flags → `REPTAR_AGENT_MODEL`/ `REPTAR_AGENT_PROVIDER` → first of `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_HOST` / `OPENROUTER_API_KEY` / `AI_GATEWAY_API_KEY` → offline Echo provider (deterministic reply, tools still real).
+## Connecting providers (pi `/login` + opencode `/connect` style)
+
+```bash
+bun reptar agent --connect            # pick a provider, paste the key (hidden), live test
+bun reptar agent --connect anthropic   # connect a specific one directly
+bun reptar agent --providers           # show connection status and exit
+```
+
+In-session: `/connect`, `/providers`, `/models`, `/disconnect`.
+
+The flow mirrors Pi and OpenCode: a provider picker with live status per row
+(`✓ env: OPENAI_API_KEY`, `✓ saved`, `• not connected`), hidden API-key entry,
+an optional base URL override, a **live connection test** against the
+provider's model list, a model picker, and a save to
+`~/.reptar/agent/auth.json` (flat map, `0600` permissions, last-connect
+becomes the default provider). `Other` registers any custom
+OpenAI-compatible endpoint (id + base URL + key + model), like OpenCode's
+custom provider flow.
+
+**Precedence — env always wins over saved, and the status table shows which source is live:**
+`--model`/`--provider` flags → `REPTAR_AGENT_*` env vars → provider env keys
+(`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_HOST` /
+`OPENROUTER_API_KEY` / `AI_GATEWAY_API_KEY`) → credentials saved by
+`/connect` → offline Echo provider (deterministic reply, tools still real).
 
 ## Terminal Session
 

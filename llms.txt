@@ -216,13 +216,28 @@ var summary = await StreamingAgentHarness.RunAsync(
 // summary.StopReason / FinalContent / StepsTaken / ToolCallsExecuted / ElapsedMs
 ```
 
-### Provider selection
+### Provider selection & credentials
 
 `LlmConfig.FromEnvironment()` resolves in this order: explicit flags →
 `REPTAR_AGENT_MODEL` / `REPTAR_AGENT_PROVIDER` / `REPTAR_AGENT_BASE_URL` →
 first present key among `OPENAI_API_KEY` / `AI_GATEWAY_API_KEY` /
 `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `OLLAMA_HOST` →
-offline `Echo` provider (deterministic reply; tools still real).
+credentials saved by `/connect` in `~/.reptar/agent/auth.json` (flat map,
+`0600`, override the path with `REPTAR_AGENT_AUTH`) → offline `Echo` provider.
+
+Interactive connection (pi `/login`, opencode `/connect` parity):
+`bun reptar agent --connect [provider]` or `/connect` in-session — provider
+picker with per-row status, hidden API-key entry, base URL override, live
+connection test via `LlmCatalog.ListAsync` (models endpoint per provider),
+model pick, then save + switch. `/providers` shows the status table
+(source: env var or saved), `/models` picks from the live catalog,
+`/disconnect` removes saved credentials. `Other` registers a custom
+OpenAI-compatible endpoint (id + base URL + key + model); custom ids are
+resolvable everywhere afterwards (`/model myid/model`, `--model myid/model`).
+
+Registry: `LlmProviders.Known` (openai, anthropic, gemini, ollama, openrouter,
+gateway) with env keys, default base URLs, and default models; custom
+providers extend it through the auth file.
 
 ### Session persistence (AOT-safe)
 

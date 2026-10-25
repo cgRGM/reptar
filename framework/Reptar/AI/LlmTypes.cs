@@ -391,31 +391,52 @@ internal static class LlmHttp
                 ? node.GetValue<string>()
                 : node.ToJsonString();
 
-    public static JsonArray BuildOpenAiTools(IReadOnlyList<AiToolDefinition> tools)
-    {
-        var array = new JsonArray();
-        foreach (var tool in tools)
-            array.Add(JsonSerializer.SerializeToNode(tool.ToDictionary(AiToolFormat.OpenAi)));
+    public static JsonArray BuildOpenAiTools(IReadOnlyList<AiToolDefinition> tools) =>
+        ToArray(tools, AiToolFormat.OpenAi);
 
-        return array;
-    }
-
-    public static JsonArray BuildAnthropicTools(IReadOnlyList<AiToolDefinition> tools)
-    {
-        var array = new JsonArray();
-        foreach (var tool in tools)
-            array.Add(JsonSerializer.SerializeToNode(tool.ToDictionary(AiToolFormat.Anthropic)));
-
-        return array;
-    }
+    public static JsonArray BuildAnthropicTools(IReadOnlyList<AiToolDefinition> tools) =>
+        ToArray(tools, AiToolFormat.Anthropic);
 
     public static JsonArray BuildGeminiTools(IReadOnlyList<AiToolDefinition> tools)
     {
-        var declarations = new JsonArray();
-        foreach (var tool in tools)
-            declarations.Add(JsonSerializer.SerializeToNode(tool.ToDictionary(AiToolFormat.Gemini)));
-
+        var declarations = ToArray(tools, AiToolFormat.Gemini);
         return [new JsonObject { ["functionDeclarations"] = declarations }];
+    }
+
+    private static JsonArray ToArray(IReadOnlyList<AiToolDefinition> tools, AiToolFormat format)
+    {
+        var array = new JsonArray();
+        foreach (var tool in tools)
+            array.Add(ToNode(tool.ToDictionary(format)));
+        return array;
+    }
+
+    /// <summary>
+    /// Converts parameter-schema values (strings, primitives, nested
+    /// dictionaries, string lists) into JsonNode without reflection, so tool
+    /// declarations serialize identically under Native AOT.
+    /// </summary>
+    public static JsonNode? ToNode(object? value)
+    {
+        return value switch
+        {
+            null => null,
+            JsonNode node => node,
+            string text => text,
+            bool flag => flag,
+            int number => number,
+            long bigNumber => bigNumber,
+            double real => real,
+            float floatReal => floatReal,
+            decimal money => money,
+            Dictionary<string, object?> map => new JsonObject(
+                map.Select(pair => new KeyValuePair<string, JsonNode?>(pair.Key, ToNode(pair.Value)))),
+            List<string> strings => new JsonArray(
+                strings.Select(item => (JsonNode?)item).ToArray()),
+            IEnumerable<object?> items => new JsonArray(
+                items.Select(ToNode).ToArray()),
+            _ => value.ToString()
+        };
     }
 
     public static string NormalizeArguments(JsonNode? node)

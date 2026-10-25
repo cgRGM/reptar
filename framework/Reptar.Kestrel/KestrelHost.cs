@@ -50,7 +50,24 @@ public static class KestrelHost
             ? configuredPort
             : 8787;
 
-        builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(port));
+        // HOST pins the listen address (e.g. HOST=127.0.0.1 or HOST=0.0.0.0).
+        // On macOS 26 + .NET 10, dual-stack (IPv6) listeners can crash or stop
+        // accepting when aborted connects return a zero-length sockaddr from
+        // accept(2) — see dotnet/runtime#121848 and #130284. Binding IPv4
+        // (HOST=0.0.0.0) avoids the AF_INET6 accept path entirely.
+        var host = Environment.GetEnvironmentVariable("HOST");
+
+        builder.WebHost.ConfigureKestrel(options =>
+        {
+            if (host is not null && System.Net.IPAddress.TryParse(host, out var address))
+            {
+                options.Listen(address, port);
+            }
+            else
+            {
+                options.ListenAnyIP(port);
+            }
+        });
 
         var web = builder.Build();
 

@@ -186,9 +186,12 @@ public static class StreamingAgentHarness
         }
         catch (Exception ex)
         {
-            onEvent?.Invoke(new AgentEvent.RunFailed(ex.Message));
+            var message = ex.InnerException is { } inner
+                ? $"{ex.Message}: {inner.Message}"
+                : ex.Message;
+            onEvent?.Invoke(new AgentEvent.RunFailed(message));
             return new AgentRunSummary(
-                AgentStopReason.Error, "", steps, toolCallsExecuted, model,
+                AgentStopReason.Error, message, steps, toolCallsExecuted, model,
                 stopwatch.Elapsed.TotalMilliseconds, Snapshot(history));
         }
     }
@@ -226,8 +229,24 @@ public static class StreamingAgentHarness
                     break;
 
                 case LlmStreamEvent.ToolCall call:
-                    toolArgs[toolArgs.Count == 0 ? 0 : toolArgs.Keys.Max() + 1] =
-                        (call.Id, call.Name, new StringBuilder(call.ArgumentsJson));
+                    // OpenAI-compatible clients emit argument deltas first and then
+                    // a complete call. Merge by call id instead of appending a
+                    // duplicate (which would execute the tool twice).
+                    var existingIndex = -1;
+                    foreach (var (key, entry) in toolArgs)
+                    {
+                        if (entry.Id is not null && entry.Id == call.Id)
+                        {
+                            existingIndex = key;
+                            break;
+                        }
+                    }
+
+                    if (existingIndex >= 0)
+                        toolArgs[existingIndex] = (call.Id, call.Name, new StringBuilder(call.ArgumentsJson));
+                    else
+                        toolArgs[toolArgs.Count == 0 ? 0 : toolArgs.Keys.Max() + 1] =
+                            (call.Id, call.Name, new StringBuilder(call.ArgumentsJson));
                     break;
 
                 case LlmStreamEvent.Completed done:

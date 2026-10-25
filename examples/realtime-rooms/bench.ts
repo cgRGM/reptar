@@ -142,10 +142,14 @@ const connectOne = (index: number, clients: Client[]): Promise<void> =>
           break;
         }
         case "message": {
-          const sentAt = client.pending.get(frame.id);
-          if (sentAt !== undefined) {
+          // The bench's probe id travels inside the payload; the server
+          // assigns its own top-level message id.
+          const probeId = (frame.payload as { id?: string } | undefined)?.id;
+          const sentAt =
+            probeId === undefined ? undefined : client.pending.get(probeId);
+          if (probeId !== undefined && sentAt !== undefined) {
             client.receipts.push(performance.now() - sentAt);
-            client.pending.delete(frame.id);
+            client.pending.delete(probeId);
           }
           break;
         }

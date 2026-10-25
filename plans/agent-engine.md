@@ -92,6 +92,55 @@ LLMs follow whatever the JSON schema says, but tool descriptions say `wait_ms` w
 - `db plan` on this checkout reports perpetual drift for auth tables (`users.image`, `sessions_token_hash_uq`, `api_keys`) that `EnsureCreated` apparently doesn't create from `Auth.Configure` — worth reconciling so `doctor` doesn't normalize "drift_detected" as healthy.
 - The portable SDK check `ensureSdk()` runs even for `inspect`/`doctor`/ `db status` — those are pure Bun paths; moving them before `ensureSdk()` would make `bun reptar doctor` feel instant on cold machines. (The MCP server path already does this.)
 
+## Follow-up: Provider Connection Flow (pi /login + opencode /connect parity)
+
+Added after studying Pi and OpenCode reference implementations:
+
+- **`/connect`** — provider picker with live per-row status (Pi's oauth-selector
+  pattern: `✓ env: OPENAI_API_KEY` / `✓ saved` / `• not connected`), hidden
+  API-key entry, base URL override, live connection test against the provider's
+  model endpoint, model pick, save + switch. `Other` registers custom
+  OpenAI-compatible endpoints (opencode parity).
+- **`~/.reptar/agent/auth.json`** — flat credential map (opencode's auth.json
+  shape) with `0600` permissions (pi) and a `_default` marker so the last
+  connected provider wins on plain launches. `REPTAR_AGENT_AUTH` overrides the
+  path (hermetic tests, sandboxes).
+- **Precedence kept env-first** — OpenCode's issue #10950 documents stored
+  credentials *silently overriding* explicit config, causing auth failures with
+  no explanation. Reptar's rule: env wins over saved, and `/providers` always
+  shows the live source.
+- **`/models`** — live catalog fetch per provider wire format (OpenAI-compat
+  `/models`, Anthropic `/v1/models`, Gemini `v1beta/models`, Ollama `/api/tags`)
+  with a numbered picker that persists the chosen default.
+- **`--connect [provider]` / `--providers`** CLI flags (opencode `auth login`
+  parity).
+
+### New bugs this uncovered (both fixed + regression-tested)
+
+1. **Double tool execution on OpenAI-style streams.** OpenAI clients emit
+   argument *deltas* and then a *complete* `ToolCall`; the harness treated
+   them as two calls, so every streamed tool call executed twice. Caught only
+   because the mock-server verification sent a real tool call over the wire —
+   the scripted unit tests emitted a single complete event and passed. Fix:
+   merge by call id (`StreamingAgentHarness`), regression test added.
+
+2. **Reflection-based tool schema serialization failed under Native AOT.**
+   `JsonSerializer.SerializeToNode(Dictionary<string, object?>)` throws
+   "Reflection-based serialization has been disabled" in AOT — the JIT dev
+   host and all unit tests masked it. Any AOT-published Reptar app making a
+   tool-carrying LLM call would have failed. Fix: manual `LlmHttp.ToNode`
+   converter; also fixed `GetAiToolsJson` which had the same pattern.
+
+3. **Agent errors surfaced as blank text** — the harness returned an empty
+   `FinalContent` on exceptions. Errors now carry the exception message
+   (innermost included).
+
+Verification highlights: full `/connect → connection test → save → chat with
+in-process tool call → /models → /disconnect` run against a live local
+OpenAI-compatible mock through the real 12 MB AOT binary, plus a
+`--connect anthropic` test against the **real** Anthropic API confirming the
+wrong-key path (401, clean display, save-anyway prompt, no crash).
+
 ## Architecture Decisions Worth Keeping
 
 - **In-process dispatch over HTTP hops.** Tool calls run through `app.ExecuteAiToolAsync` with zero network overhead and full `Rule<T>` validation — the agent harness never knows HTTP exists.
