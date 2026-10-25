@@ -261,13 +261,7 @@ public sealed class DevCrypto : ICrypto
 }
 #endif
 
-public interface IR2Client
-{
-    Task<string> PutAsync(string key, byte[] body, string contentType);
-    Task<byte[]?> GetAsync(string key);
-    Task<bool> ExistsAsync(string key);
-    Task DeleteAsync(string key);
-}
+public interface IR2Client : IStorage;
 
 public sealed class NoopR2Client : IR2Client
 {

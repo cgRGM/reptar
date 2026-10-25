@@ -17,6 +17,9 @@ public sealed class RouteMeta
     public bool IsAiTool { get; internal set; }
     public string? AiToolName { get; internal set; }
     public string? AiToolDescription { get; internal set; }
+    public string? FileFieldName { get; internal set; }
+    public string? FileDescription { get; internal set; }
+    public bool FileRequired { get; internal set; } = true;
 
     internal RouteMeta CloneWithPath(string path)
     {
@@ -32,6 +35,9 @@ public sealed class RouteMeta
             IsAiTool = IsAiTool,
             AiToolName = AiToolName,
             AiToolDescription = AiToolDescription,
+            FileFieldName = FileFieldName,
+            FileDescription = FileDescription,
+            FileRequired = FileRequired,
         };
 
         clone.Produces.AddRange(Produces);
@@ -837,7 +843,7 @@ public sealed class ReptarApp
 #endif
     }
 
-    private static IR2Client DefaultStorage()
+    private static IStorage DefaultStorage()
     {
 #if NETWASM
         return new R2Client();
@@ -983,6 +989,17 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         meta.IsAiTool = true;
         meta.AiToolName = name;
         meta.AiToolDescription = description;
+        return this;
+    }
+
+    public RouteBuilder AcceptsFile(
+        string fieldName = "file",
+        string? description = null,
+        bool required = true)
+    {
+        meta.FileFieldName = fieldName;
+        meta.FileDescription = description;
+        meta.FileRequired = required;
         return this;
     }
 

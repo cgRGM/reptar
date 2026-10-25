@@ -6,7 +6,7 @@ public sealed class ReptarConfig
 {
     public bool Debug { get; set; }
     public IDbClient? Database { get; set; }
-    public IR2Client? Storage { get; set; }
+    public IStorage? Storage { get; set; }
     public IAiClient? AI { get; set; }
     public IRateLimiter? RateLimit { get; set; }
     public IKvClient? Cache { get; set; }
@@ -88,6 +88,14 @@ public static class ReptarApi
             "D1 is provided by the Workers shim. Use Db.Sqlite(...) for local development.");
 
     public static IR2Client R2() => new NoopR2Client();
+
+#if !NETWASM
+    public static LocalStorage LocalStorage(string rootDirectory = "uploads") =>
+        new(rootDirectory);
+
+    public static S3Storage S3(S3StorageOptions options) =>
+        new(options);
+#endif
 
     public static IAiClient WorkersAI() => new NoopAiClient();
 

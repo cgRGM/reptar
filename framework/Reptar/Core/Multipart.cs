@@ -6,10 +6,24 @@ public sealed record FormFile(
     string Name,
     string? FileName,
     string? ContentType,
-    byte[] Data);
+    byte[] Data)
+{
+    public int Length => Data.Length;
+
+    public string? SniffedContentType => Files.Sniff(Data)?.ContentType;
+}
+
+public sealed class MultipartOptions
+{
+    public int MaxTotalBytes { get; set; } = 10 * 1024 * 1024;
+    public int MaxFileBytes { get; set; } = 10 * 1024 * 1024;
+    public int MaxFiles { get; set; } = 10;
+    public int MaxFields { get; set; } = 100;
+}
 
 public sealed class MultipartForm
 {
+    private static readonly MultipartOptions DefaultOptions = new();
     private readonly Dictionary<string, string> _fields;
     private readonly List<FormFile> _files;
 
@@ -33,74 +47,130 @@ public sealed class MultipartForm
 
     public static MultipartForm? TryParse(
         string? contentType,
-        byte[]? body)
+        byte[]? body,
+        MultipartOptions? options = null) =>
+        body is null ? null : TryParse(contentType, body.AsSpan(), options);
+
+    public static MultipartForm? TryParse(
+        string? contentType,
+        ReadOnlySpan<byte> body,
+        MultipartOptions? options = null)
     {
-        if (body is null || string.IsNullOrWhiteSpace(contentType))
+        if (body.IsEmpty || string.IsNullOrWhiteSpace(contentType))
+            return null;
+
+        var opts = options ?? DefaultOptions;
+        if (body.Length > opts.MaxTotalBytes)
             return null;
 
         var boundary = Boundary(contentType);
-
-        if (boundary is null)
+        if (boundary is null || boundary.Length > 70)
             return null;
 
-        var text = Encoding.Latin1.GetString(body);
-        var delimiter = $"--{boundary}";
-        var segments = text.Split(delimiter);
+        var delimiterBytes = Encoding.ASCII.GetBytes($"--{boundary}");
+        var delimiter = delimiterBytes.AsSpan();
+
+        var firstPos = body.IndexOf(delimiter);
+        if (firstPos < 0)
+            return null;
+
+        var cursor = body[(firstPos + delimiter.Length)..];
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var files = new List<FormFile>();
+        var sawTerminator = false;
 
-        foreach (var rawSegment in segments)
+        while (!cursor.IsEmpty)
         {
-            var segment = rawSegment;
-
-            if (segment.StartsWith("--", StringComparison.Ordinal))
+            // Check for closing "--" right after "--boundary"
+            if (cursor.Length >= 2 && cursor[0] == (byte)'-' && cursor[1] == (byte)'-')
+            {
+                sawTerminator = true;
                 break;
+            }
 
-            segment = segment.TrimStart('\r', '\n');
+            // Advance past CRLF or LF after boundary line
+            if (cursor.Length >= 2 && cursor[0] == (byte)'\r' && cursor[1] == (byte)'\n')
+                cursor = cursor[2..];
+            else if (cursor[0] == (byte)'\n')
+                cursor = cursor[1..];
+            else
+                return null;
 
-            if (segment.Length == 0)
+            var nextDelimiter = cursor.IndexOf(delimiter);
+            if (nextDelimiter < 0)
+                return null;
+
+            var part = cursor[..nextDelimiter];
+            cursor = cursor[(nextDelimiter + delimiter.Length)..];
+
+            // Strip trailing CRLF or LF preceding the next "--boundary"
+            if (part.Length >= 2 && part[^2] == (byte)'\r' && part[^1] == (byte)'\n')
+                part = part[..^2];
+            else if (part.Length >= 1 && part[^1] == (byte)'\n')
+                part = part[..^1];
+
+            if (part.IsEmpty)
                 continue;
 
-            var headerEnd = segment.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            var headerEnd = part.IndexOf("\r\n\r\n"u8);
+            var separatorLength = 4;
+            if (headerEnd < 0)
+            {
+                headerEnd = part.IndexOf("\n\n"u8);
+                separatorLength = 2;
+            }
 
             if (headerEnd < 0)
-                continue;
+                return null;
 
-            var headers = segment[..headerEnd];
-            var content = segment[(headerEnd + 4)..];
+            var headerText = Encoding.UTF8.GetString(part[..headerEnd]);
+            var payload = part[(headerEnd + separatorLength)..];
 
-            if (content.EndsWith("\r\n", StringComparison.Ordinal))
-                content = content[..^2];
-
-            var disposition = Header(headers, "content-disposition");
-
+            var disposition = Header(headerText, "content-disposition");
             if (disposition is null)
                 continue;
 
             var name = Parameter(disposition, "name");
-
             if (string.IsNullOrEmpty(name))
                 continue;
 
             var fileName = Parameter(disposition, "filename");
-            var partType = Header(headers, "content-type");
-            var data = Encoding.Latin1.GetBytes(content);
+            var partType = Header(headerText, "content-type");
 
             if (fileName is null)
             {
-                fields[name] = Encoding.UTF8.GetString(data);
+                if (fields.Count >= opts.MaxFields)
+                    return null;
+
+                fields[name] = Encoding.UTF8.GetString(payload);
             }
             else
             {
-                files.Add(new FormFile(name, fileName, partType, data));
+                if (files.Count >= opts.MaxFiles || payload.Length > opts.MaxFileBytes)
+                    return null;
+
+                files.Add(new FormFile(
+                    name,
+                    SanitizeFileName(fileName),
+                    partType,
+                    payload.ToArray()));
             }
         }
 
-        return new MultipartForm(fields, files);
+        return sawTerminator ? new MultipartForm(fields, files) : null;
+    }
+
+    private static string SanitizeFileName(string rawFileName)
+    {
+        var lastSlash = Math.Max(rawFileName.LastIndexOf('/'), rawFileName.LastIndexOf('\\'));
+        return lastSlash >= 0 ? rawFileName[(lastSlash + 1)..] : rawFileName;
     }
 
     private static string? Boundary(string contentType)
     {
+        if (!contentType.Contains("multipart/", StringComparison.OrdinalIgnoreCase))
+            return null;
+
         foreach (var part in contentType.Split(';'))
         {
             var trimmed = part.Trim();
@@ -121,8 +191,9 @@ public sealed class MultipartForm
 
     private static string? Header(string headers, string name)
     {
-        foreach (var line in headers.Split("\r\n"))
+        foreach (var rawLine in headers.Split('\n'))
         {
+            var line = rawLine.TrimEnd('\r');
             var separator = line.IndexOf(':');
 
             if (separator <= 0)

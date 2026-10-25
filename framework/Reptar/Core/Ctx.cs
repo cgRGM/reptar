@@ -18,7 +18,7 @@ public sealed class Ctx
 
     public ReptarRequest Req { get; }
     public IDbClient Db => _services.Db;
-    public IR2Client Storage => _services.Storage;
+    public IStorage Storage => _services.Storage;
     public IAiClient AI => _services.AI;
     public IRateLimiter RateLimit => _services.RateLimit;
     public IKvClient Cache => _services.Cache;
@@ -148,7 +148,7 @@ public sealed class Ctx
 
 internal sealed record ServiceSet(
     IDbClient Db,
-    IR2Client Storage,
+    IStorage Storage,
     IAiClient AI,
     IRateLimiter RateLimit,
     IKvClient Cache,

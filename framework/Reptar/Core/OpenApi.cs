@@ -183,7 +183,40 @@ internal static class OpenApiGenerator
                 operation["parameters"] = parameters;
 
             // Request body
-            if (route.Validator is IValidatorMeta validatorMeta && route.InputType is not null)
+            if (!string.IsNullOrEmpty(route.FileFieldName))
+            {
+                var fileProp = new Dictionary<string, object?>
+                {
+                    ["type"] = "string",
+                    ["format"] = "binary",
+                };
+                if (!string.IsNullOrWhiteSpace(route.FileDescription))
+                    fileProp["description"] = route.FileDescription;
+
+                var multipartSchema = new Dictionary<string, object?>
+                {
+                    ["type"] = "object",
+                    ["properties"] = new Dictionary<string, object?>
+                    {
+                        [route.FileFieldName!] = fileProp,
+                    },
+                };
+                if (route.FileRequired)
+                    multipartSchema["required"] = new[] { route.FileFieldName! };
+
+                operation["requestBody"] = new Dictionary<string, object?>
+                {
+                    ["required"] = route.FileRequired,
+                    ["content"] = new Dictionary<string, object?>
+                    {
+                        ["multipart/form-data"] = new Dictionary<string, object?>
+                        {
+                            ["schema"] = multipartSchema,
+                        },
+                    },
+                };
+            }
+            else if (route.Validator is IValidatorMeta validatorMeta && route.InputType is not null)
             {
                 operation["requestBody"] = new Dictionary<string, object?>
                 {
@@ -389,6 +422,13 @@ internal static class OpenApiGenerator
         {
             schema["type"] = "string";
             schema["format"] = "date-time";
+            return schema;
+        }
+
+        if (unwrapped == typeof(FormFile))
+        {
+            schema["type"] = "string";
+            schema["format"] = "binary";
             return schema;
         }
 
