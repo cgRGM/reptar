@@ -58,6 +58,31 @@ List responses omit the article body and fetch tags, favorite counts, favorite s
 
 `synchronous=NORMAL` is a durability tradeoff; override it with `REPTAR_SQLITE_SYNCHRONOUS=FULL` if required.
 
+## PostgreSQL
+
+Set `REALWORLD_DATABASE_URL` (or `DATABASE_URL`) to a `postgres://` or
+`postgresql://` connection string to run the same API on PostgreSQL:
+
+```bash
+REALWORLD_DATABASE_URL=postgresql://user@127.0.0.1:5432/reptar_realworld \
+bun run realworld:dev
+```
+
+The official Hurl suite passes 154/154 on PostgreSQL 14. A local PostgreSQL 14
+run with 300 seeded articles and 100 read clients measured:
+
+| Scenario | Req/sec | p50 |
+| --- | --: | --: |
+| `GET /api/articles?limit=20` | 1,753 | 46 ms |
+| `GET /api/articles/feed` | 781 | 104 ms |
+| `GET /api/articles/:slug` | 4,806 | 10 ms |
+| `POST /api/articles` | 133 | 71 ms |
+
+These are local-machine numbers and are not directly comparable to the VPS
+SQLite table. PostgreSQL list and single-article reads are substantially faster;
+writes are currently slower because `PostgresDbClient` uses the default
+non-transactional batch path.
+
 ## Edge comparison
 
 A separate Cloudflare Workers + D1 deployment (`reptar-realworld-bench`) passes the same 154-request Hurl suite. From the Lightsail VPS, with 50 read clients and 100 seeded articles:
