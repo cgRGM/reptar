@@ -1,11 +1,14 @@
 using System.Collections;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
 using Microsoft.Data.Sqlite;
 
 namespace Reptar;
+
+public readonly record struct DbWriteTiming(long GateWaitTicks, long ExecuteTicks);
 
 public sealed class SqliteDbClient : IDbClient, IDisposable
 {
@@ -18,6 +21,13 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     private readonly List<SqliteConnection> _allConnections = new();
     private readonly string _readConnectionString;
     private bool _disposed;
+
+    /// <summary>
+    /// Optional write-path observer used by benchmarks/telemetry. Receives the
+    /// time spent waiting for the write gate and the time spent executing the
+    /// statement. Null by default, so the hot path only pays a null check.
+    /// </summary>
+    public Action<DbWriteTiming>? WriteTimingObserver { get; set; }
 
     public SqliteDbClient(string path, int maxReadConnections = 0)
     {
@@ -165,6 +175,32 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
+    private static async Task<List<T>> ExecuteReaderInternalAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        SqliteCommand command)
+    {
+        await using (command)
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            if (EntityMapper<T>.Factory is { } factory)
+            {
+                var map = factory(reader);
+                var results = new List<T>();
+                while (await reader.ReadAsync())
+                    results.Add(map(reader));
+                return results;
+            }
+
+            var fallbackMap = RowMapper.Resolve<T>(reader);
+            var fallbackResults = new List<T>();
+            while (await reader.ReadAsync())
+                fallbackResults.Add(fallbackMap(reader));
+            return fallbackResults;
+        }
+    }
+
     public async Task<List<T>> QueryAsync<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
@@ -173,25 +209,59 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         object? param = null)
     {
         using var rented = await RentReadConnectionAsync(sql);
-        await using var command = BuildCommand(rented.Connection, sql, param);
-        await using var reader = await command.ExecuteReaderAsync();
+        var command = BuildCommand(rented.Connection, sql, param);
+        return await ExecuteReaderInternalAsync<T>(command);
+    }
 
-        if (EntityMapper<T>.Factory is { } factory)
-        {
-            var map = factory(reader);
-            var results = new List<T>();
-            while (await reader.ReadAsync())
-                results.Add(map(reader));
-            return results;
-        }
+    public async Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1)
+    {
+        using var rented = await RentReadConnectionAsync(sql);
+        var command = BuildCommand(rented.Connection, sql, p1);
+        return await ExecuteReaderInternalAsync<T>(command);
+    }
 
-        var fallbackMap = RowMapper.Resolve<T>(reader);
+    public async Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1,
+        (string Name, object? Value) p2)
+    {
+        using var rented = await RentReadConnectionAsync(sql);
+        var command = BuildCommand(rented.Connection, sql, p1, p2);
+        return await ExecuteReaderInternalAsync<T>(command);
+    }
 
-        var fallbackResults = new List<T>();
-        while (await reader.ReadAsync())
-            fallbackResults.Add(fallbackMap(reader));
+    public async Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1,
+        (string Name, object? Value) p2,
+        (string Name, object? Value) p3)
+    {
+        using var rented = await RentReadConnectionAsync(sql);
+        var command = BuildCommand(rented.Connection, sql, p1, p2, p3);
+        return await ExecuteReaderInternalAsync<T>(command);
+    }
 
-        return fallbackResults;
+    public async Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        params (string Name, object? Value)[] parameters)
+    {
+        using var rented = await RentReadConnectionAsync(sql);
+        var command = BuildCommand(rented.Connection, sql, parameters);
+        return await ExecuteReaderInternalAsync<T>(command);
     }
 
     public async Task<List<T>> QueryMappedAsync<T>(
@@ -233,19 +303,122 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return results.Count == 0 ? default : results[0];
     }
 
-    public async Task<int> ExecuteAsync(string sql, object? param = null)
+    public async Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1)
     {
-        await _writeGate.WaitAsync();
+        var results = await QueryAsync<T>(sql, p1);
+        return results.Count == 0 ? default : results[0];
+    }
 
+    public async Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1,
+        (string Name, object? Value) p2)
+    {
+        var results = await QueryAsync<T>(sql, p1, p2);
+        return results.Count == 0 ? default : results[0];
+    }
+
+    public async Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1,
+        (string Name, object? Value) p2,
+        (string Name, object? Value) p3)
+    {
+        var results = await QueryAsync<T>(sql, p1, p2, p3);
+        return results.Count == 0 ? default : results[0];
+    }
+
+    public async Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        params (string Name, object? Value)[] parameters)
+    {
+        var results = await QueryAsync<T>(sql, parameters);
+        return results.Count == 0 ? default : results[0];
+    }
+
+    private async Task<int> ExecuteCommandAsync(SqliteCommand command, long gateStarted, Action<DbWriteTiming>? observer)
+    {
         try
         {
-            await using var command = BuildCommand(_writeConnection, sql, param);
-            return await command.ExecuteNonQueryAsync();
+            long executeStarted = 0;
+            if (observer is not null)
+                executeStarted = Stopwatch.GetTimestamp();
+
+            await using (command)
+            {
+                var result = await command.ExecuteNonQueryAsync();
+
+                if (observer is not null)
+                    observer(new DbWriteTiming(
+                        executeStarted - gateStarted,
+                        Stopwatch.GetTimestamp() - executeStarted));
+
+                return result;
+            }
         }
         finally
         {
             _writeGate.Release();
         }
+    }
+
+    public async Task<int> ExecuteAsync(string sql, object? param = null)
+    {
+        var observer = WriteTimingObserver;
+        long gateStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+        await _writeGate.WaitAsync();
+        var command = BuildCommand(_writeConnection, sql, param);
+        return await ExecuteCommandAsync(command, gateStarted, observer);
+    }
+
+    public async Task<int> ExecuteAsync(string sql, (string Name, object? Value) p1)
+    {
+        var observer = WriteTimingObserver;
+        long gateStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+        await _writeGate.WaitAsync();
+        var command = BuildCommand(_writeConnection, sql, p1);
+        return await ExecuteCommandAsync(command, gateStarted, observer);
+    }
+
+    public async Task<int> ExecuteAsync(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2)
+    {
+        var observer = WriteTimingObserver;
+        long gateStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+        await _writeGate.WaitAsync();
+        var command = BuildCommand(_writeConnection, sql, p1, p2);
+        return await ExecuteCommandAsync(command, gateStarted, observer);
+    }
+
+    public async Task<int> ExecuteAsync(string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3)
+    {
+        var observer = WriteTimingObserver;
+        long gateStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+        await _writeGate.WaitAsync();
+        var command = BuildCommand(_writeConnection, sql, p1, p2, p3);
+        return await ExecuteCommandAsync(command, gateStarted, observer);
+    }
+
+    public async Task<int> ExecuteAsync(string sql, params (string Name, object? Value)[] parameters)
+    {
+        var observer = WriteTimingObserver;
+        long gateStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
+        await _writeGate.WaitAsync();
+        var command = BuildCommand(_writeConnection, sql, parameters);
+        return await ExecuteCommandAsync(command, gateStarted, observer);
     }
 
     public async Task<int> CountAsync(
@@ -315,7 +488,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         return QuerySingleOrDefaultAsync<T>(
             $"SELECT * FROM \"{table.Name}\" WHERE \"{primaryKey}\" = @id",
-            new Dictionary<string, object?> { ["id"] = id });
+            ("id", id));
     }
 
     public Task<List<T>> ListAsync<
@@ -512,7 +685,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         return ExecuteAsync(
             $"DELETE FROM \"{table.Name}\" WHERE \"{primaryKey}\" = @id",
-            new Dictionary<string, object?> { ["id"] = id });
+            ("id", id));
     }
 
     public Task<int> DeleteAsync<T>(TableDef table, object id) => DeleteAsync(table, id);
@@ -589,6 +762,51 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
+    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = sql;
+        var n = p1.Name.StartsWith('@') ? p1.Name : "@" + p1.Name;
+        command.Parameters.AddWithValue(n, p1.Value ?? DBNull.Value);
+        return command;
+    }
+
+    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = sql;
+        var n1 = p1.Name.StartsWith('@') ? p1.Name : "@" + p1.Name;
+        var n2 = p2.Name.StartsWith('@') ? p2.Name : "@" + p2.Name;
+        command.Parameters.AddWithValue(n1, p1.Value ?? DBNull.Value);
+        command.Parameters.AddWithValue(n2, p2.Value ?? DBNull.Value);
+        return command;
+    }
+
+    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = sql;
+        var n1 = p1.Name.StartsWith('@') ? p1.Name : "@" + p1.Name;
+        var n2 = p2.Name.StartsWith('@') ? p2.Name : "@" + p2.Name;
+        var n3 = p3.Name.StartsWith('@') ? p3.Name : "@" + p3.Name;
+        command.Parameters.AddWithValue(n1, p1.Value ?? DBNull.Value);
+        command.Parameters.AddWithValue(n2, p2.Value ?? DBNull.Value);
+        command.Parameters.AddWithValue(n3, p3.Value ?? DBNull.Value);
+        return command;
+    }
+
+    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value)[] parameters)
+    {
+        var command = connection.CreateCommand();
+        command.CommandText = sql;
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            var n = parameters[i].Name.StartsWith('@') ? parameters[i].Name : "@" + parameters[i].Name;
+            command.Parameters.AddWithValue(n, parameters[i].Value ?? DBNull.Value);
+        }
+        return command;
+    }
+
     private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, object? param)
     {
         var command = connection.CreateCommand();
@@ -597,12 +815,45 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         if (param is null)
             return command;
 
+        if (param is System.Runtime.CompilerServices.ITuple singleTuple && singleTuple.Length == 2)
+        {
+            var name = singleTuple[0]?.ToString() ?? "";
+            var n = name.StartsWith('@') ? name : "@" + name;
+            command.Parameters.AddWithValue(n, singleTuple[1] ?? DBNull.Value);
+            return command;
+        }
+
+        if (param is IEnumerable tupleEnum && param is not string && param is not IDictionary)
+        {
+            var isTupleSeq = false;
+            foreach (var item in tupleEnum)
+            {
+                if (item is System.Runtime.CompilerServices.ITuple t && t.Length == 2)
+                {
+                    isTupleSeq = true;
+                    var name = t[0]?.ToString() ?? "";
+                    var n = name.StartsWith('@') ? name : "@" + name;
+                    command.Parameters.AddWithValue(n, t[1] ?? DBNull.Value);
+                }
+                else
+                {
+                    isTupleSeq = false;
+                    break;
+                }
+            }
+
+            if (isTupleSeq)
+                return command;
+        }
+
         if (param is IDictionary dictionary)
         {
             foreach (DictionaryEntry entry in dictionary)
             {
+                var key = entry.Key?.ToString() ?? "";
+                var n = key.StartsWith('@') ? key : "@" + key;
                 command.Parameters.AddWithValue(
-                    "@" + entry.Key,
+                    n,
                     entry.Value ?? DBNull.Value);
             }
 

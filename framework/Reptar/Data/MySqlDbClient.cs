@@ -1,3 +1,4 @@
+#if !REPTAR_SQLITE_ONLY
 using System.Collections;
 using System.Data.Common;
 using System.Diagnostics.CodeAnalysis;
@@ -196,7 +197,7 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
             ?? throw new InvalidOperationException($"Table '{table.Name}' has no single primary key.");
 
         var sql = $"SELECT * FROM `{table.Name}` WHERE `{pk}` = @id LIMIT 1";
-        return QuerySingleOrDefaultAsync<T>(sql, new Dictionary<string, object?> { ["id"] = id });
+        return QuerySingleOrDefaultAsync<T>(sql, ("id", id));
     }
 
     public Task<List<T>> ListAsync<
@@ -354,7 +355,7 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
             ?? throw new InvalidOperationException($"Table '{table.Name}' has no single primary key.");
 
         var sql = $"DELETE FROM `{table.Name}` WHERE `{primaryKey}` = @id";
-        return ExecuteAsync(sql, new Dictionary<string, object?> { ["id"] = id });
+        return ExecuteAsync(sql, ("id", id));
     }
 
     public Task<int> DeleteAsync<T>(TableDef table, object id) => DeleteAsync(table, id);
@@ -450,6 +451,37 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         if (param is null)
             return command;
 
+        if (param is System.Runtime.CompilerServices.ITuple singleTuple && singleTuple.Length == 2)
+        {
+            var pName = singleTuple[0]?.ToString() ?? "";
+            var name = pName.StartsWith('@') ? pName : "@" + pName;
+            command.Parameters.AddWithValue(name, singleTuple[1] ?? DBNull.Value);
+            return command;
+        }
+
+        if (param is IEnumerable tupleEnum && param is not string && param is not IDictionary)
+        {
+            var isTupleSeq = false;
+            foreach (var item in tupleEnum)
+            {
+                if (item is System.Runtime.CompilerServices.ITuple t && t.Length == 2)
+                {
+                    isTupleSeq = true;
+                    var pName = t[0]?.ToString() ?? "";
+                    var name = pName.StartsWith('@') ? pName : "@" + pName;
+                    command.Parameters.AddWithValue(name, t[1] ?? DBNull.Value);
+                }
+                else
+                {
+                    isTupleSeq = false;
+                    break;
+                }
+            }
+
+            if (isTupleSeq)
+                return command;
+        }
+
         if (param is IDictionary dictionary)
         {
             foreach (DictionaryEntry entry in dictionary)
@@ -484,3 +516,35 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         return command;
     }
 }
+#else
+namespace Reptar;
+
+public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
+{
+    public MySqlDbClient(string connectionString)
+    {
+        throw new PlatformNotSupportedException("MySQL support was excluded at compile time (ReptarSqliteOnly=true).");
+    }
+
+    public string ConnectionString => throw new PlatformNotSupportedException();
+    public string? LastExecutedSql => null;
+    public object? LastExecutedParams => null;
+    public Task<List<T>> QueryAsync<T>(string sql, object? param = null) => throw new PlatformNotSupportedException();
+    public Task<T?> QuerySingleOrDefaultAsync<T>(string sql, object? param = null) => throw new PlatformNotSupportedException();
+    public Task<int> ExecuteAsync(string sql, object? param = null) => throw new PlatformNotSupportedException();
+    public Task<int> BatchAsync(IReadOnlyList<DbStatement> statements) => throw new PlatformNotSupportedException();
+    public Task<T?> GetAsync<T>(TableDef table, object id) => throw new PlatformNotSupportedException();
+    public Task<List<T>> ListAsync<T>(TableDef table, string? clause = null, object? param = null, int limit = 0, int offset = 0) => throw new PlatformNotSupportedException();
+    public Task<int> InsertAsync<T>(TableDef table, T values) where T : class => throw new PlatformNotSupportedException();
+    public Task<int> InsertAsync(TableDef table, object values) => throw new PlatformNotSupportedException();
+    public Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class => throw new PlatformNotSupportedException();
+    public Task<int> UpdateAsync(TableDef table, object values, object id) => throw new PlatformNotSupportedException();
+    public Task<int> DeleteAsync(TableDef table, object id) => throw new PlatformNotSupportedException();
+    public Task<int> DeleteAsync<T>(TableDef table, object id) => throw new PlatformNotSupportedException();
+    public Task<int> DeleteWhereAsync(TableDef table, string where, object? param = null) => throw new PlatformNotSupportedException();
+    public Task<bool> ExistsAsync(TableDef table, string where, object? param = null) => throw new PlatformNotSupportedException();
+    public Task EnsureCreatedAsync(params TableDef[] tables) => throw new PlatformNotSupportedException();
+    public void Dispose() {}
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+#endif

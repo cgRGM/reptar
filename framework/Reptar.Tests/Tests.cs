@@ -577,6 +577,40 @@ public class PostgresTests
     }
 
     [Fact]
+    public async Task PostgresDbClient_BatchAsync_handles_mock_statements()
+    {
+        var client = new PostgresDbClient("mock:test");
+        var statements = new List<DbStatement>
+        {
+            new("INSERT INTO widgets (id, name) VALUES (@id, @name)", ("id", "w1")),
+            new("DELETE FROM widgets WHERE id = @id", ("id", "w2"))
+        };
+
+        var count = await client.BatchAsync(statements);
+        Assert.Equal(2, count);
+    }
+
+    [Fact]
+    public void PostgresDbClient_NormalizeSqlAndParams_supports_tuples()
+    {
+        var (sql1, params1) = PostgresDbClient.NormalizeSqlAndParams(
+            "SELECT * FROM users WHERE id = @id",
+            ("id", "u_42"),
+            new DefaultJsonCodec());
+
+        Assert.Equal("SELECT * FROM users WHERE id = $1", sql1);
+        Assert.Equal(["u_42"], params1);
+
+        var (sql2, params2) = PostgresDbClient.NormalizeSqlAndParams(
+            "SELECT * FROM tasks WHERE status = @status AND user_id = @user_id",
+            new[] { ("status", (object?)"active"), ("user_id", (object?)"u_1") },
+            new DefaultJsonCodec());
+
+        Assert.Equal("SELECT * FROM tasks WHERE status = $1 AND user_id = $2", sql2);
+        Assert.Equal(new object?[] { "active", "u_1" }, params2);
+    }
+
+    [Fact]
     public async Task PostgresDbClient_live_integration_test_when_postgres_is_available()
     {
         var requirePostgres = Environment.GetEnvironmentVariable("POSTGRES_TEST") == "1";
@@ -1735,6 +1769,62 @@ public class AotSafeSqliteTests
         Assert.Equal("gen_2", widget.Id);
         Assert.Equal("DirectWidget", widget.Name);
         Assert.Equal(42, widget.Count);
+    }
+
+    [Fact]
+    public async Task SqliteDbClient_zero_allocation_tuple_overloads()
+    {
+        using var db = new SqliteDbClient(":memory:");
+        await db.EnsureCreatedAsync(TestSchema.Widgets);
+
+        // ExecuteAsync with array of tuples
+        var inserted1 = await db.ExecuteAsync(
+            "INSERT INTO widgets (id, name, count) VALUES (@id, @name, @count)",
+            new[] { ("id", (object?)"w_1"), ("name", (object?)"Alpha"), ("count", (object?)10) });
+        Assert.Equal(1, inserted1);
+
+        // ExecuteAsync with direct 1, 2 tuples
+        var updated = await db.ExecuteAsync(
+            "UPDATE widgets SET count = @count WHERE id = @id",
+            ("count", 25),
+            ("id", "w_1"));
+        Assert.Equal(1, updated);
+
+        // QuerySingleOrDefaultAsync with single tuple
+        var single = await db.QuerySingleOrDefaultAsync<Widget>(
+            "SELECT id, name, count FROM widgets WHERE id = @id",
+            ("id", "w_1"));
+        Assert.NotNull(single);
+        Assert.Equal("w_1", single.Id);
+        Assert.Equal("Alpha", single.Name);
+        Assert.Equal(25, single.Count);
+
+        // QueryAsync with two tuples
+        var list = await db.QueryAsync<Widget>(
+            "SELECT id, name, count FROM widgets WHERE name = @name AND count >= @minCount",
+            ("name", "Alpha"),
+            ("minCount", 20));
+        Assert.Single(list);
+        Assert.Equal("w_1", list[0].Id);
+
+        // QueryAsync with three tuples
+        var list3 = await db.QueryAsync<Widget>(
+            "SELECT id, name, count FROM widgets WHERE id = @id AND name = @name AND count = @count",
+            ("id", "w_1"),
+            ("name", "Alpha"),
+            ("count", 25));
+        Assert.Single(list3);
+
+        // GetAsync and DeleteAsync using zero-allocation tuples under the hood
+        var got = await db.GetAsync<Widget>(TestSchema.Widgets, "w_1");
+        Assert.NotNull(got);
+        Assert.Equal("w_1", got.Id);
+
+        var deleted = await db.DeleteAsync(TestSchema.Widgets, "w_1");
+        Assert.Equal(1, deleted);
+
+        var afterDelete = await db.GetAsync<Widget>(TestSchema.Widgets, "w_1");
+        Assert.Null(afterDelete);
     }
 }
 

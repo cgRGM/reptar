@@ -37,6 +37,53 @@ public sealed class PostgresDbClient : IDbClient
         return ExecuteNonQueryAsync(normSql, paramValues);
     }
 
+    public async Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
+    {
+#if NETWASM
+        var changes = 0;
+        foreach (var statement in statements)
+            changes += await ExecuteAsync(statement.Sql, statement.Param);
+        return changes;
+#elif REPTAR_SQLITE_ONLY
+        throw new PlatformNotSupportedException("PostgreSQL support was excluded at compile time (ReptarSqliteOnly=true).");
+#else
+        var ds = GetDataSource();
+        if (ds is null)
+            return statements.Count;
+
+        await using var connection = await ds.OpenConnectionAsync();
+        await using var transaction = await connection.BeginTransactionAsync();
+
+        try
+        {
+            await using var batch = new Npgsql.NpgsqlBatch(connection, transaction);
+
+            foreach (var statement in statements)
+            {
+                var (sql, values) = NormalizeSqlAndParams(
+                    statement.Sql,
+                    statement.Param,
+                    _json);
+                var command = new Npgsql.NpgsqlBatchCommand(sql);
+
+                foreach (var value in values)
+                    command.Parameters.AddWithValue(value ?? DBNull.Value);
+
+                batch.BatchCommands.Add(command);
+            }
+
+            var changes = await batch.ExecuteNonQueryAsync();
+            await transaction.CommitAsync();
+            return changes;
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+#endif
+    }
+
     public Task<T?> GetAsync<T>(TableDef table, object id)
     {
         var pk = table.SinglePrimaryKey
@@ -249,7 +296,7 @@ public sealed class PostgresDbClient : IDbClient
     public (string Sql, object?[] Params) NormalizeSqlAndParams(string sql, object? param) =>
         NormalizeSqlAndParams(sql, param, _json);
 
-    internal static (string Sql, object?[] Params) NormalizeSqlAndParams(string sql, object? param, IJsonCodec jsonCodec)
+    public static (string Sql, object?[] Params) NormalizeSqlAndParams(string sql, object? param, IJsonCodec jsonCodec)
     {
         var (rewrittenSql, paramNames) = SqlParamParser.ParsePostgresParameters(sql);
 
@@ -261,6 +308,49 @@ public sealed class PostgresDbClient : IDbClient
         if (param is object?[] arr)
         {
             return (rewrittenSql, arr);
+        }
+
+        if (param is System.Runtime.CompilerServices.ITuple singleTuple && singleTuple.Length == 2)
+        {
+            var tupleName = singleTuple[0]?.ToString() ?? "";
+            var tupleVal = singleTuple[1];
+            var tupleParams = new List<object?>();
+            foreach (var name in paramNames)
+            {
+                tupleParams.Add(string.Equals(name, tupleName, StringComparison.OrdinalIgnoreCase)
+                    ? tupleVal
+                    : null);
+            }
+            return (rewrittenSql, tupleParams.ToArray());
+        }
+
+        if (param is IEnumerable tupleEnum && param is not string)
+        {
+            var isTupleSeq = false;
+            var tupleDict = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var item in tupleEnum)
+            {
+                if (item is System.Runtime.CompilerServices.ITuple t && t.Length == 2)
+                {
+                    isTupleSeq = true;
+                    tupleDict[t[0]?.ToString() ?? ""] = t[1];
+                }
+                else
+                {
+                    isTupleSeq = false;
+                    break;
+                }
+            }
+
+            if (isTupleSeq && tupleDict.Count > 0)
+            {
+                var tupleParams = new List<object?>();
+                foreach (var name in paramNames)
+                {
+                    tupleParams.Add(tupleDict.TryGetValue(name, out var val) ? val : null);
+                }
+                return (rewrittenSql, tupleParams.ToArray());
+            }
         }
 
         if (param is IDictionary dictionary)
@@ -408,7 +498,7 @@ public sealed class PostgresDbClient : IDbClient
         return elem.GetRawText();
     }
 
-#if !NETWASM
+#if !NETWASM && !REPTAR_SQLITE_ONLY
     private Npgsql.NpgsqlDataSource? _dataSource;
     private readonly object _dsLock = new();
 
@@ -515,7 +605,7 @@ public sealed class PostgresDbClient : IDbClient
         LastExecutedSql = sql;
         LastExecutedParams = parameters;
 
-#if !NETWASM
+#if !NETWASM && !REPTAR_SQLITE_ONLY
         var ds = GetDataSource();
         if (ds is not null)
         {
@@ -543,7 +633,7 @@ public sealed class PostgresDbClient : IDbClient
 
             return fallbackResults;
         }
-#else
+#elif NETWASM
         if (!string.IsNullOrEmpty(_connectionString) &&
             !_connectionString.StartsWith("mock:", StringComparison.OrdinalIgnoreCase))
         {
@@ -570,7 +660,7 @@ public sealed class PostgresDbClient : IDbClient
         LastExecutedSql = sql;
         LastExecutedParams = parameters;
 
-#if !NETWASM
+#if !NETWASM && !REPTAR_SQLITE_ONLY
         var ds = GetDataSource();
         if (ds is not null)
         {
@@ -582,7 +672,7 @@ public sealed class PostgresDbClient : IDbClient
 
             return await cmd.ExecuteNonQueryAsync();
         }
-#else
+#elif NETWASM
         if (!string.IsNullOrEmpty(_connectionString) &&
             !_connectionString.StartsWith("mock:", StringComparison.OrdinalIgnoreCase))
         {
@@ -600,7 +690,7 @@ public sealed class PostgresDbClient : IDbClient
     private sealed record CountRow(int Count);
 }
 
-#if !NETWASM
+#if !NETWASM && !REPTAR_SQLITE_ONLY
 public sealed class PostgresTransactionContext
 {
     private readonly Npgsql.NpgsqlConnection _connection;
@@ -652,6 +742,23 @@ public sealed class PostgresTransactionContext
         while (await reader.ReadAsync())
             fallbackResults.Add(fallbackMap(reader));
         return fallbackResults;
+    }
+
+    public async Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
+    {
+        if (statements.Count == 0) return 0;
+        await using var batch = new Npgsql.NpgsqlBatch(_connection, _transaction);
+        foreach (var statement in statements)
+        {
+            var (normSql, paramValues) = PostgresDbClient.NormalizeSqlAndParams(statement.Sql, statement.Param, _json);
+            var cmd = new Npgsql.NpgsqlBatchCommand(normSql);
+            for (var i = 0; i < paramValues.Length; i++)
+            {
+                cmd.Parameters.Add(new Npgsql.NpgsqlParameter { Value = paramValues[i] ?? DBNull.Value });
+            }
+            batch.BatchCommands.Add(cmd);
+        }
+        return await batch.ExecuteNonQueryAsync();
     }
 }
 #endif
