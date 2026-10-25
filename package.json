@@ -24,6 +24,7 @@
     "api:dev": "bun scripts/reptar.ts dev",
     "realworld:dev": "bun scripts/reptar.ts realworld:dev",
     "baas:dev": "bun scripts/reptar.ts baas:dev",
+    "baas:seed": "bun examples/baas/seed.ts",
     "baas:test": "bun scripts/reptar.ts baas:test",
     "baas:bench": "bun examples/baas/bench.ts",
     "gateway:dev": "bun scripts/reptar.ts gateway:dev",

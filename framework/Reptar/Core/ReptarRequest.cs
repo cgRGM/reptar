@@ -18,7 +18,7 @@ public sealed class ReptarRequest
     public Dictionary<string, string> Headers
     {
         get => _headers ??= HeadersFactory?.Invoke() ?? new(StringComparer.OrdinalIgnoreCase);
-        init => _headers = value;
+        init => _headers = new Dictionary<string, string>(value, StringComparer.OrdinalIgnoreCase);
     }
 
     public Dictionary<string, string> Cookies
@@ -55,7 +55,9 @@ public sealed class ReptarRequest
         if (Query.Length == 0)
             return null;
 
-        foreach (var pair in Query.Split('&'))
+        var raw = Query.StartsWith('?') ? Query[1..] : Query;
+
+        foreach (var pair in raw.Split('&'))
         {
             var index = pair.IndexOf('=');
 

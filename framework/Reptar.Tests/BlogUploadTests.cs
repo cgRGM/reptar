@@ -4,6 +4,7 @@ using Xunit;
 
 namespace Reptar.Tests;
 
+[Collection("AuthStaticTests")]
 public sealed class BlogUploadTests
 {
     private static readonly byte[] ValidPngBytes =

@@ -1,0 +1,1248 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ReptarDrop — Real-Time Paste & Media Vault</title>
+    <style>
+      :root {
+        --bg: #07090e;
+        --surface: #0e131f;
+        --surface-hover: #141c2e;
+        --border: #1e293b;
+        --border-accent: #334155;
+        --primary: #6366f1;
+        --primary-hover: #4f46e5;
+        --emerald: #10b981;
+        --text: #f8fafc;
+        --text-muted: #94a3b8;
+        --text-dim: #64748b;
+        --danger: #ef4444;
+        --font-mono:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+        --font-sans:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica,
+          Arial, sans-serif;
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--font-sans);
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+
+      /* Header */
+      header {
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        padding: 12px 24px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-shrink: 0;
+        gap: 16px;
+      }
+
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        text-decoration: none;
+        color: var(--text);
+      }
+
+      .logo-badge {
+        background: linear-gradient(135deg, #10b981, #6366f1);
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 16px;
+        font-weight: bold;
+        color: #fff;
+        box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+      }
+
+      .brand-title {
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+      }
+
+      .brand-sub {
+        font-size: 11px;
+        color: var(--text-dim);
+        font-family: var(--font-mono);
+        background: rgba(255, 255, 255, 0.05);
+        padding: 2px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--border);
+      }
+
+      .header-center {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .status-pill {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--emerald);
+        background: rgba(16, 185, 129, 0.1);
+        border: 1px solid rgba(16, 185, 129, 0.25);
+        padding: 4px 10px;
+        border-radius: 9999px;
+        font-family: var(--font-mono);
+      }
+
+      .status-dot {
+        width: 7px;
+        height: 7px;
+        background: var(--emerald);
+        border-radius: 50%;
+        animation: pulse 2s infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.4;
+          transform: scale(0.85);
+        }
+      }
+
+      .header-actions {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .btn {
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 7px 14px;
+        border-radius: 6px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        text-decoration: none;
+        transition: all 0.15s ease;
+      }
+
+      .btn:hover {
+        background: var(--surface-hover);
+        border-color: var(--border-accent);
+      }
+
+      .btn-primary {
+        background: var(--primary);
+        color: white;
+        border-color: var(--primary);
+      }
+      .btn-primary:hover {
+        background: var(--primary-hover);
+        border-color: var(--primary-hover);
+      }
+
+      .btn-danger {
+        color: var(--danger);
+        border-color: rgba(239, 68, 68, 0.3);
+      }
+      .btn-danger:hover {
+        background: rgba(239, 68, 68, 0.1);
+        border-color: var(--danger);
+      }
+
+      .btn-sm {
+        padding: 4px 8px;
+        font-size: 12px;
+      }
+
+      /* Main Container */
+      .app-body {
+        display: flex;
+        flex: 1;
+        overflow: hidden;
+      }
+
+      /* Sidebar */
+      aside {
+        width: 340px;
+        background: var(--surface);
+        border-right: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+      }
+
+      .sidebar-header {
+        padding: 16px;
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+
+      .search-box {
+        position: relative;
+      }
+
+      .search-input {
+        width: 100%;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 8px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        outline: none;
+        transition: border-color 0.15s;
+      }
+      .search-input:focus {
+        border-color: var(--primary);
+      }
+
+      .filter-tabs {
+        display: flex;
+        gap: 4px;
+        background: var(--bg);
+        padding: 3px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+      }
+
+      .filter-tab {
+        flex: 1;
+        text-align: center;
+        padding: 5px 0;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--text-muted);
+        cursor: pointer;
+        border-radius: 4px;
+        transition: all 0.15s;
+      }
+
+      .filter-tab.active {
+        background: var(--surface);
+        color: var(--text);
+        font-weight: 600;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+      }
+
+      .document-list {
+        flex: 1;
+        overflow-y: auto;
+        padding: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .doc-item {
+        padding: 12px;
+        background: var(--bg);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.15s;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .doc-item:hover {
+        background: var(--surface-hover);
+        border-color: var(--border-accent);
+      }
+
+      .doc-item.active {
+        border-color: var(--primary);
+        background: rgba(99, 102, 241, 0.08);
+      }
+
+      .doc-item-title {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .doc-item-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 11px;
+        color: var(--text-dim);
+        font-family: var(--font-mono);
+      }
+
+      .badge {
+        display: inline-block;
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        text-transform: uppercase;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+      }
+      .badge-published {
+        background: rgba(16, 185, 129, 0.15);
+        color: var(--emerald);
+        border: 1px solid rgba(16, 185, 129, 0.3);
+      }
+      .badge-draft {
+        background: rgba(245, 158, 11, 0.15);
+        color: #f59e0b;
+        border: 1px solid rgba(245, 158, 11, 0.3);
+      }
+      .badge-unlisted {
+        background: rgba(148, 163, 184, 0.15);
+        color: #94a3b8;
+        border: 1px solid rgba(148, 163, 184, 0.3);
+      }
+
+      /* Workspace */
+      main {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        background: var(--bg);
+        overflow: hidden;
+      }
+
+      .editor-toolbar {
+        padding: 12px 24px;
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .doc-title-input {
+        background: transparent;
+        border: 1px solid transparent;
+        color: var(--text);
+        font-size: 18px;
+        font-weight: 700;
+        padding: 4px 8px;
+        border-radius: 6px;
+        outline: none;
+        flex: 1;
+        transition: border-color 0.15s;
+      }
+      .doc-title-input:focus {
+        background: var(--bg);
+        border-color: var(--border-accent);
+      }
+
+      .toolbar-controls {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      select.input-select {
+        background: var(--bg);
+        color: var(--text);
+        border: 1px solid var(--border);
+        padding: 6px 10px;
+        border-radius: 6px;
+        font-size: 12px;
+        outline: none;
+        cursor: pointer;
+      }
+
+      .view-count-pill {
+        font-family: var(--font-mono);
+        font-size: 12px;
+        background: rgba(255, 255, 255, 0.05);
+        border: 1px solid var(--border);
+        padding: 4px 8px;
+        border-radius: 4px;
+        color: var(--text-muted);
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .editor-layout {
+        flex: 1;
+        display: flex;
+        overflow: hidden;
+      }
+
+      .editor-pane {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        border-right: 1px solid var(--border);
+        overflow: hidden;
+      }
+
+      .code-textarea {
+        flex: 1;
+        background: transparent;
+        border: none;
+        outline: none;
+        color: #e2e8f0;
+        font-family: var(--font-mono);
+        font-size: 14px;
+        line-height: 1.6;
+        padding: 24px;
+        resize: none;
+        tab-size: 2;
+      }
+
+      .dropzone-footer {
+        padding: 12px 24px;
+        background: var(--surface);
+        border-top: 1px solid var(--border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        font-size: 12px;
+        color: var(--text-dim);
+      }
+
+      .dropzone-area {
+        border: 1px dashed var(--border-accent);
+        background: rgba(255, 255, 255, 0.02);
+        padding: 8px 16px;
+        border-radius: 6px;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        transition: all 0.15s;
+      }
+      .dropzone-area:hover,
+      .dropzone-area.dragover {
+        border-color: var(--primary);
+        background: rgba(99, 102, 241, 0.08);
+        color: var(--text);
+      }
+
+      .preview-pane {
+        flex: 1;
+        padding: 24px;
+        overflow-y: auto;
+        background: var(--bg);
+        color: #cbd5e1;
+        line-height: 1.7;
+        font-size: 14px;
+      }
+
+      .preview-pane h1 {
+        font-size: 24px;
+        color: #fff;
+        margin-bottom: 16px;
+        border-bottom: 1px solid var(--border);
+        padding-bottom: 8px;
+      }
+      .preview-pane h2 {
+        font-size: 20px;
+        color: #fff;
+        margin: 20px 0 12px;
+      }
+      .preview-pane h3 {
+        font-size: 16px;
+        color: #fff;
+        margin: 16px 0 8px;
+      }
+      .preview-pane p {
+        margin-bottom: 12px;
+      }
+      .preview-pane ul,
+      .preview-pane ol {
+        margin: 0 0 16px 24px;
+      }
+      .preview-pane li {
+        margin-bottom: 4px;
+      }
+      .preview-pane pre {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        padding: 14px;
+        font-family: var(--font-mono);
+        font-size: 13px;
+        overflow-x: auto;
+        margin: 12px 0 16px;
+        color: #38bdf8;
+      }
+      .preview-pane code {
+        font-family: var(--font-mono);
+        background: rgba(255, 255, 255, 0.08);
+        padding: 2px 5px;
+        border-radius: 4px;
+        font-size: 12px;
+        color: #f43f5e;
+      }
+      .preview-pane pre code {
+        background: transparent;
+        padding: 0;
+        color: inherit;
+      }
+      .preview-pane blockquote {
+        border-left: 3px solid var(--primary);
+        padding-left: 12px;
+        margin: 12px 0;
+        color: var(--text-muted);
+        font-style: italic;
+      }
+      .preview-pane img {
+        max-width: 100%;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        margin: 12px 0;
+        display: block;
+      }
+
+      /* Modal */
+      .modal-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        backdrop-filter: blur(4px);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        z-index: 50;
+      }
+      .modal-overlay.open {
+        display: flex;
+      }
+      .modal-card {
+        background: var(--surface);
+        border: 1px solid var(--border-accent);
+        border-radius: 10px;
+        width: 440px;
+        padding: 24px;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .modal-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: #fff;
+      }
+      .modal-input {
+        background: var(--bg);
+        border: 1px solid var(--border);
+        color: var(--text);
+        padding: 10px 12px;
+        border-radius: 6px;
+        font-size: 13px;
+        outline: none;
+        font-family: var(--font-mono);
+        width: 100%;
+      }
+      .modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      /* Flash toast */
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        background: var(--surface);
+        border: 1px solid var(--emerald);
+        color: #fff;
+        padding: 10px 18px;
+        border-radius: 8px;
+        font-size: 13px;
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+        display: none;
+        z-index: 100;
+        animation: slideUp 0.2s ease;
+      }
+      @keyframes slideUp {
+        from {
+          transform: translateY(10px);
+          opacity: 0;
+        }
+        to {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Header -->
+    <header>
+      <a href="/" class="brand">
+        <div class="logo-badge">R</div>
+        <div>
+          <div class="brand-title">ReptarDrop</div>
+        </div>
+        <div class="brand-sub">Native AOT BaaS</div>
+      </a>
+
+      <div class="header-center">
+        <div class="status-pill" id="sse-pill">
+          <span class="status-dot"></span>
+          <span id="sse-status">Connecting SSE...</span>
+        </div>
+      </div>
+
+      <div class="header-actions">
+        <button class="btn btn-sm" id="btn-auth-key" onclick="openKeyModal()">
+          🔑 <span id="auth-status-label">API Key</span>
+        </button>
+        <a
+          href="/_"
+          class="btn btn-sm"
+          target="_blank"
+          title="Open OpenShip / PocketBase-style Studio Console"
+        >
+          ⚡ Studio Console (/_ ) ↗
+        </a>
+      </div>
+    </header>
+
+    <!-- App Body -->
+    <div class="app-body">
+      <!-- Sidebar -->
+      <aside>
+        <div class="sidebar-header">
+          <button
+            class="btn btn-primary"
+            onclick="newSnippet()"
+            style="justify-content: center"
+          >
+            + New Snippet
+          </button>
+          <div class="search-box">
+            <input
+              type="text"
+              id="search-input"
+              class="search-input"
+              placeholder="Search documents or tags..."
+              oninput="filterDocuments()"
+            />
+          </div>
+          <div class="filter-tabs">
+            <div class="filter-tab active" onclick="setTab('all', this)">
+              All
+            </div>
+            <div class="filter-tab" onclick="setTab('published', this)">
+              Published
+            </div>
+            <div class="filter-tab" onclick="setTab('draft', this)">Drafts</div>
+            <div class="filter-tab" onclick="setTab('unlisted', this)">
+              Unlisted
+            </div>
+          </div>
+        </div>
+
+        <div class="document-list" id="document-list">
+          <!-- Rendered dynamically -->
+        </div>
+      </aside>
+
+      <!-- Main Workspace -->
+      <main>
+        <div class="editor-toolbar">
+          <input
+            type="text"
+            id="doc-title"
+            class="doc-title-input"
+            placeholder="Untitled Snippet..."
+          />
+
+          <div class="toolbar-controls">
+            <select id="doc-status" class="input-select">
+              <option value="published">Published</option>
+              <option value="draft">Draft</option>
+              <option value="unlisted">Unlisted</option>
+            </select>
+
+            <div class="view-count-pill" id="view-count-display">
+              👁 <span id="view-count-number">0</span> views
+            </div>
+
+            <button
+              class="btn btn-danger btn-sm"
+              id="btn-delete"
+              onclick="deleteCurrentDoc()"
+              style="display: none"
+            >
+              Delete
+            </button>
+            <button class="btn btn-primary btn-sm" onclick="saveCurrentDoc()">
+              Save & Sync
+            </button>
+          </div>
+        </div>
+
+        <div class="editor-layout">
+          <!-- Editor Pane -->
+          <div class="editor-pane">
+            <textarea
+              id="doc-content"
+              class="code-textarea"
+              placeholder="# Write markdown or paste code here...
+
+Drag & drop images (PNG, JPEG, WebP, GIF) or PDFs anywhere to upload directly via magic-byte storage!"
+              oninput="updatePreview()"
+            ></textarea>
+
+            <div class="dropzone-footer">
+              <div
+                class="dropzone-area"
+                id="file-dropzone"
+                onclick="document.getElementById('hidden-file-input').click()"
+              >
+                📎 Drag & drop file or click to upload
+              </div>
+              <input
+                type="file"
+                id="hidden-file-input"
+                style="display: none"
+                onchange="handleFileInput(event)"
+              />
+              <span id="upload-status"
+                >Files sniffed with stack-allocated magic bytes</span
+              >
+            </div>
+          </div>
+
+          <!-- Preview Pane -->
+          <div class="preview-pane" id="preview-pane">
+            <!-- Rendered live -->
+          </div>
+        </div>
+      </main>
+    </div>
+
+    <!-- API Key Modal -->
+    <div class="modal-overlay" id="key-modal">
+      <div class="modal-card">
+        <div class="modal-title">Personal Access Token (API Key)</div>
+        <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5">
+          Enter a Reptar API Key (<code style="color: #6366f1">rep_live_*</code
+          >) or generate one in the Studio Console to create authenticated
+          documents.
+        </p>
+        <input
+          type="password"
+          id="api-key-input"
+          class="modal-input"
+          placeholder="rep_live_..."
+        />
+        <div class="modal-actions">
+          <button class="btn btn-sm" onclick="closeKeyModal()">Cancel</button>
+          <button class="btn btn-primary btn-sm" onclick="saveApiKey()">
+            Save Token
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div class="toast" id="toast"></div>
+
+    <script>
+      // State
+      let documents = [];
+      let activeDocId = null;
+      let currentTab = "all";
+      let apiKey =
+        localStorage.getItem("reptar_api_key") ||
+        "rep_live_ACHjvYh65jK0_demotoken123";
+      let sseSource = null;
+
+      // Elements
+      const docListEl = document.getElementById("document-list");
+      const docTitleEl = document.getElementById("doc-title");
+      const docContentEl = document.getElementById("doc-content");
+      const docStatusEl = document.getElementById("doc-status");
+      const previewEl = document.getElementById("preview-pane");
+      const viewCountEl = document.getElementById("view-count-number");
+      const btnDelete = document.getElementById("btn-delete");
+      const ssePill = document.getElementById("sse-pill");
+      const sseStatus = document.getElementById("sse-status");
+      const dropzone = document.getElementById("file-dropzone");
+      const uploadStatus = document.getElementById("upload-status");
+      const toastEl = document.getElementById("toast");
+
+      function showToast(msg) {
+        toastEl.textContent = msg;
+        toastEl.style.display = "block";
+        setTimeout(() => {
+          toastEl.style.display = "none";
+        }, 3000);
+      }
+
+      // Initialize
+      async function init() {
+        updateAuthLabel();
+        initSSE();
+        initDragAndDrop();
+        await fetchDocuments();
+        if (documents.length > 0) {
+          selectDocument(documents[0].id);
+        } else {
+          newSnippet();
+        }
+      }
+
+      function updateAuthLabel() {
+        const label = document.getElementById("auth-status-label");
+        if (apiKey) {
+          label.textContent = "API Key (" + apiKey.substring(0, 12) + "...)";
+        } else {
+          label.textContent = "Anonymous Mode";
+        }
+      }
+
+      function openKeyModal() {
+        document.getElementById("api-key-input").value = apiKey;
+        document.getElementById("key-modal").classList.add("open");
+      }
+
+      function closeKeyModal() {
+        document.getElementById("key-modal").classList.remove("open");
+      }
+
+      function saveApiKey() {
+        apiKey = document.getElementById("api-key-input").value.trim();
+        localStorage.setItem("reptar_api_key", apiKey);
+        updateAuthLabel();
+        closeKeyModal();
+        showToast("API key updated.");
+      }
+
+      // Real-Time SSE
+      function initSSE() {
+        if (sseSource) sseSource.close();
+        sseSource = new EventSource("/api/realtime");
+
+        sseSource.onopen = () => {
+          sseStatus.textContent = "Live Sync Active (SSE)";
+          ssePill.style.color = "var(--emerald)";
+        };
+
+        sseSource.addEventListener("document:created", (e) => {
+          const doc = JSON.parse(e.data);
+          const existing = documents.find((d) => d.id === doc.id);
+          if (!existing) {
+            documents.unshift(doc);
+            renderList();
+            showToast(`⚡ New snippet synced: "${doc.title}"`);
+          }
+        });
+
+        sseSource.addEventListener("document:updated", (e) => {
+          const doc = JSON.parse(e.data);
+          const idx = documents.findIndex((d) => d.id === doc.id);
+          if (idx !== -1) {
+            documents[idx] = { ...documents[idx], ...doc };
+            renderList();
+            if (activeDocId === doc.id) {
+              viewCountEl.textContent =
+                doc.view_count || documents[idx].view_count || 0;
+            }
+          }
+        });
+
+        sseSource.addEventListener("document:deleted", (e) => {
+          const payload = JSON.parse(e.data);
+          documents = documents.filter((d) => d.id !== payload.id);
+          renderList();
+          if (activeDocId === payload.id) {
+            newSnippet();
+          }
+        });
+
+        sseSource.onerror = () => {
+          sseStatus.textContent = "Reconnecting...";
+          ssePill.style.color = "#f59e0b";
+        };
+      }
+
+      // Fetch Documents
+      async function fetchDocuments() {
+        try {
+          const res = await fetch("/api/documents");
+          if (res.ok) {
+            documents = await res.json();
+            renderList();
+          }
+        } catch (err) {
+          console.error("Failed to load documents:", err);
+        }
+      }
+
+      // Filter & Tabs
+      function setTab(tab, el) {
+        currentTab = tab;
+        document
+          .querySelectorAll(".filter-tab")
+          .forEach((t) => t.classList.remove("active"));
+        el.classList.add("active");
+        renderList();
+      }
+
+      function filterDocuments() {
+        renderList();
+      }
+
+      function renderList() {
+        const search = document
+          .getElementById("search-input")
+          .value.toLowerCase()
+          .trim();
+        const filtered = documents.filter((doc) => {
+          const matchesTab = currentTab === "all" || doc.status === currentTab;
+          const matchesSearch =
+            !search ||
+            doc.title.toLowerCase().includes(search) ||
+            (doc.content && doc.content.toLowerCase().includes(search));
+          return matchesTab && matchesSearch;
+        });
+
+        docListEl.innerHTML = "";
+        if (filtered.length === 0) {
+          docListEl.innerHTML =
+            '<div style="padding:24px;text-align:center;color:var(--text-dim);font-size:12px;">No snippets found.</div>';
+          return;
+        }
+
+        for (const doc of filtered) {
+          const item = document.createElement("div");
+          item.className =
+            "doc-item" + (doc.id === activeDocId ? " active" : "");
+          item.onclick = () => selectDocument(doc.id);
+
+          item.innerHTML = `
+          <div class="doc-item-title">${escapeHtml(doc.title || "Untitled")}</div>
+          <div class="doc-item-meta">
+            <span class="badge badge-${doc.status}">${doc.status}</span>
+            <span>👁 ${doc.view_count || 0}</span>
+          </div>
+        `;
+          docListEl.appendChild(item);
+        }
+      }
+
+      // Select Document
+      async function selectDocument(id) {
+        activeDocId = id;
+        renderList();
+
+        try {
+          // GET /api/documents/:id atomically increments view count
+          const res = await fetch(`/api/documents/${id}`);
+          if (res.ok) {
+            const doc = await res.json();
+            docTitleEl.value = doc.title || "";
+            docContentEl.value = doc.content || "";
+            docStatusEl.value = doc.status || "published";
+            viewCountEl.textContent = doc.view_count || 0;
+            btnDelete.style.display = "inline-flex";
+
+            // Update local memory
+            const idx = documents.findIndex((d) => d.id === id);
+            if (idx !== -1) {
+              documents[idx].view_count = doc.view_count;
+              renderList();
+            }
+            updatePreview();
+          }
+        } catch (err) {
+          console.error("Failed to load document details:", err);
+        }
+      }
+
+      // New Snippet
+      function newSnippet() {
+        activeDocId = null;
+        renderList();
+        docTitleEl.value = "New Snippet";
+        docContentEl.value =
+          '# Welcome to ReptarDrop\n\nA real-time paste and media vault built on **ReptarBase**.\n\n- Zero reflection Native AOT backend\n- Magic-byte file storage verification\n- Real-time SSE updates\n\n```csharp\n// 31k writes/sec with SQLite WAL\napp.Post("/api/documents", async (ctx, input) => ...);\n```\n';
+        docStatusEl.value = "published";
+        viewCountEl.textContent = "0";
+        btnDelete.style.display = "none";
+        updatePreview();
+        docTitleEl.focus();
+      }
+
+      // Save Document
+      async function saveCurrentDoc() {
+        const title = docTitleEl.value.trim() || "Untitled Snippet";
+        const content = docContentEl.value;
+        const status = docStatusEl.value;
+
+        const headers = { "Content-Type": "application/json" };
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+        try {
+          if (activeDocId) {
+            // Update existing
+            const res = await fetch(`/api/documents/${activeDocId}`, {
+              method: "PATCH",
+              headers,
+              body: JSON.stringify({ title, content, status }),
+            });
+            if (res.ok) {
+              const updated = await res.json();
+              const idx = documents.findIndex((d) => d.id === activeDocId);
+              if (idx !== -1)
+                documents[idx] = { ...documents[idx], ...updated };
+              renderList();
+              showToast("Snippet updated successfully.");
+            } else {
+              showToast("Save failed (check auth token).");
+            }
+          } else {
+            // Create new
+            const res = await fetch("/api/documents", {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ title, content, status }),
+            });
+            if (res.ok) {
+              const created = await res.json();
+              activeDocId = created.id;
+              documents.unshift(created);
+              renderList();
+              btnDelete.style.display = "inline-flex";
+              showToast("Snippet published successfully.");
+            } else {
+              showToast("Publish failed (check auth token).");
+            }
+          }
+        } catch (err) {
+          console.error("Failed to save document:", err);
+          showToast("Network error during save.");
+        }
+      }
+
+      // Delete Document
+      async function deleteCurrentDoc() {
+        if (!activeDocId) return;
+        if (!confirm("Are you sure you want to delete this snippet?")) return;
+
+        const headers = {};
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+        try {
+          const res = await fetch(`/api/documents/${activeDocId}`, {
+            method: "DELETE",
+            headers,
+          });
+          if (res.ok) {
+            documents = documents.filter((d) => d.id !== activeDocId);
+            renderList();
+            newSnippet();
+            showToast("Snippet deleted.");
+          } else {
+            showToast("Delete failed.");
+          }
+        } catch (err) {
+          console.error("Failed to delete:", err);
+        }
+      }
+
+      // Drag & Drop File Upload
+      function initDragAndDrop() {
+        const pane = document.querySelector(".editor-pane");
+
+        ["dragenter", "dragover", "dragleave", "drop"].forEach((eventName) => {
+          pane.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+
+        ["dragenter", "dragover"].forEach((eventName) => {
+          pane.addEventListener(
+            eventName,
+            () => dropzone.classList.add("dragover"),
+            false
+          );
+        });
+
+        ["dragleave", "drop"].forEach((eventName) => {
+          pane.addEventListener(
+            eventName,
+            () => dropzone.classList.remove("dragover"),
+            false
+          );
+        });
+
+        pane.addEventListener("drop", handleDrop, false);
+      }
+
+      function handleDrop(e) {
+        const dt = e.dataTransfer;
+        const files = dt.files;
+        if (files.length > 0) uploadFile(files[0]);
+      }
+
+      function handleFileInput(e) {
+        const files = e.target.files;
+        if (files.length > 0) uploadFile(files[0]);
+      }
+
+      async function uploadFile(file) {
+        uploadStatus.textContent = `Uploading ${file.name}...`;
+
+        const formData = new FormData();
+        formData.append("file", file, file.name);
+
+        const headers = {};
+        if (apiKey) headers["Authorization"] = `Bearer ${apiKey}`;
+
+        try {
+          const res = await fetch("/api/files/upload", {
+            method: "POST",
+            headers,
+            body: formData,
+          });
+
+          if (res.ok) {
+            const data = await res.json();
+            uploadStatus.textContent = `Uploaded ${data.filename} (${data.content_type})`;
+            showToast(`File verified via magic bytes (${data.content_type})`);
+
+            // Insert into markdown editor
+            const imgMarkdown = file.type.startsWith("image/")
+              ? `\n\n![${data.filename}](${data.url})\n`
+              : `\n\n[Download ${data.filename}](${data.url})\n`;
+
+            docContentEl.value += imgMarkdown;
+            updatePreview();
+          } else {
+            const err = await res.json();
+            uploadStatus.textContent = `Upload rejected: ${err.error || "Magic byte check failed"}`;
+            showToast("File upload rejected by magic byte validator.");
+          }
+        } catch (err) {
+          uploadStatus.textContent = "Upload failed.";
+          console.error("Upload error:", err);
+        }
+      }
+
+      // Lightweight Markdown Renderer
+      function updatePreview() {
+        const raw = docContentEl.value;
+        previewEl.innerHTML = parseMarkdown(raw);
+      }
+
+      function escapeHtml(str) {
+        return str
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
+      }
+
+      function parseMarkdown(md) {
+        if (!md)
+          return '<p style="color:var(--text-dim);font-style:italic;">No content to preview.</p>';
+
+        let html = escapeHtml(md);
+
+        // Fenced code blocks
+        html = html.replace(
+          /```([a-zA-Z0-9_-]*)\n([\s\S]*?)```/g,
+          (_, lang, code) => {
+            return `<pre><code>${code.trim()}</code></pre>`;
+          }
+        );
+
+        // Headers
+        html = html.replace(/^### (.*$)/gim, "<h3>$1</h3>");
+        html = html.replace(/^## (.*$)/gim, "<h2>$1</h2>");
+        html = html.replace(/^# (.*$)/gim, "<h1>$1</h1>");
+
+        // Images
+        html = html.replace(
+          /!\[([^\]]*)\]\(([^)]+)\)/g,
+          '<img src="$2" alt="$1" />'
+        );
+
+        // Links
+        html = html.replace(
+          /\[([^\]]+)\]\(([^)]+)\)/g,
+          '<a href="$2" target="_blank" style="color:var(--primary);">$1</a>'
+        );
+
+        // Bold & Italic
+        html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+
+        // Inline code
+        html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+        // Blockquotes
+        html = html.replace(/^\> (.*$)/gim, "<blockquote>$1</blockquote>");
+
+        // Unordered lists
+        html = html.replace(/^\- (.*$)/gim, "<li>$1</li>");
+        html = html.replace(/(<li>.*<\/li>)/gim, "<ul>$1</ul>");
+
+        // Paragraphs
+        html = html
+          .split("\n\n")
+          .map((p) => {
+            p = p.trim();
+            if (
+              p.startsWith("<h") ||
+              p.startsWith("<pre") ||
+              p.startsWith("<ul") ||
+              p.startsWith("<blockquote") ||
+              p.startsWith("<img")
+            ) {
+              return p;
+            }
+            return `<p>${p.replace(/\n/g, "<br>")}</p>`;
+          })
+          .join("\n");
+
+        return html;
+      }
+
+      // Start
+      init();
+    </script>
+  </body>
+</html>

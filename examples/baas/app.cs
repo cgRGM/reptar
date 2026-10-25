@@ -280,7 +280,21 @@ app.Post("/api/files/upload", async ctx =>
     await ctx.Db.InsertAsync(Schema.Files, record);
     await realtimeHub.BroadcastAsync("file_uploaded", ctx.JsonCodec.Serialize(record));
 
-    return ctx.Json(record, 201);
+    var hash = Convert.ToHexString(SHA256.HashData(file.Data)).ToLowerInvariant();
+    var etag = $"\"{hash}\"";
+
+    return ctx.Json(new
+    {
+        id = fileId,
+        ownerId = user.Id,
+        filename = record.Filename,
+        mimeType = record.MimeType,
+        sizeBytes = record.SizeBytes,
+        storageKey = storageKey,
+        url = $"/api/files/{storageKey}",
+        etag = etag,
+        createdAt = record.CreatedAt
+    }, 201);
 });
 
 // GET /api/files/:key - Serve stored file with ETag caching
@@ -331,7 +345,7 @@ app.Delete("/api/files/:id", async ctx =>
     return ctx.Json(new { deleted = true, id });
 });
 
-// 9. Studio Admin Console / Web GUI (OpenShip & PocketBase style)
+// 9. Studio Admin Console & End-User Client App
 string GetDashboardHtml()
 {
     var candidates = new[]
@@ -349,7 +363,25 @@ string GetDashboardHtml()
     return "<!DOCTYPE html><html><body style='background:#050811;color:#fff;font-family:sans-serif;padding:40px;'><h1>ReptarBase Studio</h1><p>dashboard.html not found.</p></body></html>";
 }
 
-app.Get("/", ctx => ctx.Html(GetDashboardHtml()));
+string GetAppHtml()
+{
+    var candidates = new[]
+    {
+        "app.html",
+        Path.Combine(AppContext.BaseDirectory, "app.html"),
+        Path.Combine(Directory.GetCurrentDirectory(), "app.html"),
+        Path.Combine(Directory.GetCurrentDirectory(), "examples", "baas", "app.html"),
+    };
+    foreach (var path in candidates)
+    {
+        if (File.Exists(path))
+            return File.ReadAllText(path);
+    }
+    return "<!DOCTYPE html><html><body style='background:#050811;color:#fff;font-family:sans-serif;padding:40px;'><h1>ReptarDrop</h1><p>app.html not found.</p></body></html>";
+}
+
+app.Get("/", ctx => ctx.Html(GetAppHtml()));
+app.Get("/app", ctx => ctx.Html(GetAppHtml()));
 app.Get("/dashboard", ctx => ctx.Html(GetDashboardHtml()));
 app.Get("/_", ctx => ctx.Html(GetDashboardHtml()));
 

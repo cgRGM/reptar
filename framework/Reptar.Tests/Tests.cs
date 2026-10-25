@@ -1932,6 +1932,7 @@ public class AotSafeSqliteTests
     }
 }
 
+[Collection("AuthStaticTests")]
 public class BetterAuthTests
 {
     private static ReptarRequest Json(string method, string path, string json) => new()
