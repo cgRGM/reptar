@@ -117,16 +117,16 @@ var app = ReptarApp.Create();
 // Synchronous JSON response
 app.Get("/api/health", ctx => ctx.Json(new { ok = true, timestamp = DateTime.UtcNow }));
 
-// Asynchronous handler with URL parameter
-app.Get("/api/posts/{slug}", async ctx =>
+// Asynchronous handler with URL parameter (route params use the :name syntax)
+app.Get("/api/posts/:slug", async ctx =>
 {
-    var slug = ctx.Param("slug");
+    var slug = ctx.Req.Param("slug");
     var post = await ctx.Db.From<PostDto>(Schema.Posts)
-        .Where(Schema.PostSlug.Eq(slug))
+        .Where(Schema.PostsCols.Slug.Eq(slug))
         .FirstOrDefaultAsync();
 
     return post is null
-        ? ctx.Status(404).Json(new { error = "Post not found" })
+        ? ctx.NotFound("Post not found.")
         : ctx.Json(post);
 });
 
@@ -151,7 +151,7 @@ app.Post("/api/posts", createPostValidator, async (ctx, input) =>
         Published = 1
     });
 
-    return ctx.Status(201).Json(new { id, slug });
+    return ctx.Json(new { id, slug }, 201);
 }).AsAiTool("create_post", "Create and publish a new blog post");
 ```
 
@@ -175,6 +175,90 @@ app.Post("/api/chat", async ctx =>
     return await ctx.StreamLlmAsync(tokenStream);
 });
 ```
+
+---
+
+## 5b. Built-in Agent Engine (`Reptar.AI`, namespace `Reptar.AI`)
+
+Reptar ships a provider-agnostic agent engine in the framework core (`framework/Reptar/AI/`): streaming LLM clients (OpenAI-compatible, Anthropic, Gemini, Ollama, offline Echo), a ReAct loop, the standard workspace tools, SQLite session persistence, and the interactive terminal behind `bun reptar agent`.
+
+### Mount workspace tools in one line
+
+```csharp
+using Reptar.AI;
+
+app.UseWorkspaceTools(workspaceRoot: ".");   // read_file, write_file, edit_file, list_dir, run_command
+```
+
+Every tool is a normal Reptar route marked `.AsAiTool(...)` with path-traversal
+protection against the workspace root, and dispatch happens **in-process** via
+`app.ExecuteAiToolAsync` (zero HTTP overhead, full `Rule<T>` validation).
+
+### Run the streaming agent loop
+
+```csharp
+var client = LlmClientFactory.FromEnvironment();       // OpenAI/Anthropic/Gemini/Ollama/Echo
+var history = new List<ChatMessage> { new("user", "fix the failing test") };
+
+var summary = await StreamingAgentHarness.RunAsync(
+    app, client, history,
+    systemPrompt: "You are a coding agent in this repo.",
+    maxSteps: 24,
+    onEvent: evt =>
+    {
+        switch (evt)
+        {
+            case AgentEvent.TextDelta delta: Console.Write(delta.Text); break;
+            case AgentEvent.ToolCallStarted call: Console.WriteLine($"→ {call.Name}"); break;
+            case AgentEvent.ToolCallFinished call: Console.WriteLine($"{(call.Success ? "✓" : "✗")} {call.Name} {call.ElapsedMs:0}ms"); break;
+        }
+    });
+// summary.StopReason / FinalContent / StepsTaken / ToolCallsExecuted / ElapsedMs
+```
+
+### Provider selection
+
+`LlmConfig.FromEnvironment()` resolves in this order: explicit flags →
+`REPTAR_AGENT_MODEL` / `REPTAR_AGENT_PROVIDER` / `REPTAR_AGENT_BASE_URL` →
+first present key among `OPENAI_API_KEY` / `AI_GATEWAY_API_KEY` /
+`ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `OLLAMA_HOST` →
+offline `Echo` provider (deterministic reply; tools still real).
+
+### Session persistence (AOT-safe)
+
+```csharp
+using Reptar.AI;
+
+var store = new AgentSessionStore(
+    app.Db,
+    AgentSchema.Sessions("agent_sessions"),   // id PK, title, created_at
+    AgentSchema.Messages("agent_messages"));   // id PK, session_id indexed, role, content, tool_calls, created_at
+await store.EnsureCreatedAsync();
+var session = await store.CreateSessionAsync("first chat");
+await store.AppendMessageAsync(session.Id, new ChatMessage("user", "hello"));
+var messages = await store.LoadMessagesAsync(session.Id);   // List<ChatMessage>
+```
+
+Row mapping is registered manually (zero reflection — no source generator
+dependency for Native AOT apps).
+
+### CLI
+
+- `bun reptar agent` — interactive terminal agent in the current workspace
+  (slash commands: `/reset /history /tools /model /sessions /session /new /exit`).
+- `bun reptar agent --web [port]` — web companion on 4040 (`POST /api/chat` SSE, `GET /api/sessions`).
+- `bun reptar agent --self-test` — 7-check offline verification of the tool bridge.
+- `bun reptar run <app.cs>` — run any file-based app.
+
+Reference app: `examples/agent-cli/` (see `plans/agent-engine.md` for the
+full build report and AOT findings).
+
+### Native AOT rule (critical)
+
+Under Native AOT, `ctx.Json(new { ... })` and `ctx.Json(record)` serialize via
+reflection and **fail at runtime** (`SmallObjectWithParameterizedConverter`).
+In AOT-published code paths, build `JsonObject`/`JsonArray` and return
+`ctx.JsonRaw(obj.ToJsonString())` instead.
 
 ---
 

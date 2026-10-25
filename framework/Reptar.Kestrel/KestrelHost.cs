@@ -74,7 +74,7 @@ public static class KestrelHost
                 var sessionId = Guid.NewGuid().ToString("N");
                 kestrelTransport.Register(sessionId, socket);
 
-                var wsRequest = await ToReptarRequest(http);
+                var wsRequest = ToWebSocketReptarRequest(http);
                 await app.HandleWebSocketOpenAsync(sessionId, wsRequest);
 
                 var buffer = new byte[8192];
@@ -255,12 +255,23 @@ public static class KestrelHost
     private static readonly Dictionary<string, string> EmptyCookies = new(StringComparer.OrdinalIgnoreCase);
 
     private static async ValueTask<(byte[]? Body, bool TooLarge)> ReadBodyAsync(
-        PipeReader reader,
-        long? contentLength,
+        HttpRequest request,
         long maxBodyBytes)
     {
+        var contentLength = request.ContentLength;
         if (contentLength is <= 0)
             return (null, false);
+
+        var method = request.Method;
+        var hasNoBodyByDefault = HttpMethods.IsGet(method) ||
+                                 HttpMethods.IsHead(method) ||
+                                 HttpMethods.IsOptions(method) ||
+                                 HttpMethods.IsTrace(method);
+
+        if (!contentLength.HasValue && hasNoBodyByDefault && !request.Headers.ContainsKey("Transfer-Encoding"))
+            return (null, false);
+
+        var reader = request.BodyReader;
 
         if (maxBodyBytes > 0 && contentLength.HasValue && contentLength.Value > maxBodyBytes)
             return (null, true);
@@ -314,10 +325,7 @@ public static class KestrelHost
 
     private static async Task<ReptarRequest> ToReptarRequest(HttpContext http, long maxBodyBytes = 0)
     {
-        var (body, bodyTooLarge) = await ReadBodyAsync(
-            http.Request.BodyReader,
-            http.Request.ContentLength,
-            maxBodyBytes);
+        var (body, bodyTooLarge) = await ReadBodyAsync(http.Request, maxBodyBytes);
 
         var cookies = EmptyCookies;
 
@@ -358,6 +366,50 @@ public static class KestrelHost
             Cookies = cookies,
             Body = body,
             BodyTooLarge = bodyTooLarge,
+        };
+    }
+
+    private static ReptarRequest ToWebSocketReptarRequest(HttpContext http)
+    {
+        var cookies = EmptyCookies;
+
+        if (http.Request.Headers.TryGetValue("Cookie", out var cookieHeader))
+        {
+            var headerStr = cookieHeader.ToString();
+            if (!string.IsNullOrEmpty(headerStr))
+            {
+                cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var segment in headerStr.Split(
+                    ';',
+                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    var separator = segment.IndexOf('=');
+
+                    if (separator > 0)
+                        cookies[segment[..separator]] = segment[(separator + 1)..];
+                }
+            }
+        }
+
+        return new ReptarRequest
+        {
+            Method = http.Request.Method,
+            Path = http.Request.Path.Value ?? "/",
+            Query = http.Request.QueryString.HasValue
+                ? http.Request.QueryString.Value!.TrimStart('?')
+                : "",
+            RemoteIp = http.Connection.RemoteIpAddress?.ToString(),
+            HeaderLookup = name => http.Request.Headers.TryGetValue(name, out var v) ? v.ToString() : null,
+            HeadersFactory = () =>
+            {
+                var dict = new Dictionary<string, string>(http.Request.Headers.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var (key, value) in http.Request.Headers)
+                    dict[key] = value.ToString();
+                return dict;
+            },
+            Cookies = cookies,
+            Body = [],
+            BodyTooLarge = false,
         };
     }
 

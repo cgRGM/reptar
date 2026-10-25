@@ -54,7 +54,7 @@ const csharpFenceRegex = /```csharp([\s\S]*?)```/g;
 
 for (const file of files) {
   const rel = relative(ROOT, file);
-  const content = readFileSync(file, "utf8");
+  const content = readFileSync(file, "utf-8");
 
   for (const rule of FORBIDDEN_PATTERNS) {
     if (rule.pattern.test(content)) {

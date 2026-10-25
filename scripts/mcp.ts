@@ -132,7 +132,7 @@ export const runMcpServer = (
       request = JSON.parse(trimmed);
     } catch {
       sendResponse({
-        error: { code: -32700, message: "Parse error: invalid JSON" },
+        error: { code: -32_700, message: "Parse error: invalid JSON" },
         id: null,
         jsonrpc: "2.0",
       });
@@ -282,7 +282,7 @@ export const runMcpServer = (
             default: {
               sendResponse({
                 error: {
-                  code: -32601,
+                  code: -32_601,
                   message: `Method '${toolName}' not found`,
                 },
                 id,
@@ -298,27 +298,27 @@ export const runMcpServer = (
             result: {
               content: [
                 {
-                  type: "text",
                   text:
                     typeof output === "string"
                       ? output
                       : JSON.stringify(output, null, 2),
+                  type: "text",
                 },
               ],
             },
           });
         } catch (error: any) {
           sendResponse({
-            jsonrpc: "2.0",
             id,
+            jsonrpc: "2.0",
             result: {
-              isError: true,
               content: [
                 {
                   type: "text",
                   text: `Error executing ${toolName}: ${error?.message ?? String(error)}`,
                 },
               ],
+              isError: true,
             },
           });
         }
@@ -328,7 +328,7 @@ export const runMcpServer = (
       default: {
         sendResponse({
           error: {
-            code: -32601,
+            code: -32_601,
             message: `Method '${method}' not found`,
           },
           id,

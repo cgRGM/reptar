@@ -17,6 +17,13 @@ public sealed class Ctx
     }
 
     public ReptarRequest Req { get; }
+
+    /// <summary>
+    /// Shortcut for <see cref="ReptarRequest.Param"/> route parameters,
+    /// e.g. ctx.Param("id") on GET /api/posts/:id.
+    /// </summary>
+    public string? Param(string name) => Req.Param(name);
+
     public IDbClient Db => _services.Db;
     public IStorage Storage => _services.Storage;
     public IAiClient AI => _services.AI;

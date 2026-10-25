@@ -14,8 +14,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { patchNetWasmHost } from "../packages/host/src/patch";
 import { upsertReptarAgentsContext } from "../packages/create-reptar/src/scaffold";
+import { patchNetWasmHost } from "../packages/host/src/patch";
 import { planMigrations, generateMigrationFile } from "./diff";
 import { inspectProject, doctorProject } from "./inspect";
 import { runMcpServer } from "./mcp";
@@ -192,8 +192,12 @@ if (command === "--help" || command === "-h" || command === "help") {
 Commands:
   new          Scaffold a new fullstack Reptar + React + Better Auth project
   dev          Run the example blog API on http://localhost:8787
+  agent        Boot the interactive Reptar AI agent in the current workspace
+               (flags: --model <name>, --provider <p>, --session <id>, --web [port])
+  run          Run any file-based Reptar app: bun reptar run <path/to/app.cs>
   baas:dev     Run the ReptarBase BaaS engine & studio on http://localhost:8787
   gateway:dev  Run the AI gateway example API on http://localhost:8788
+  rooms:dev    Run the real-time rooms WebSocket hub on http://localhost:8787
   inspect      Inspect database tables, routes, migrations, and project state (--json)
   doctor       Diagnose SDK toolchain, database connectivity, and RPC status (--json)
   mcp          Run the Model Context Protocol stdio server for AI agents
@@ -514,6 +518,79 @@ switch (command) {
     break;
   }
 
+  case "agent": {
+    if (rest.includes("--help") || rest.includes("-h")) {
+      console.log(`reptar agent — interactive AI agent for your workspace
+
+Usage:
+  bun reptar agent                          start the terminal agent here
+  bun reptar agent --connect [provider]     connect a provider (paste API key,
+                                             hidden input, connection test, saved
+                                             to ~/.reptar/agent/auth.json)
+  bun reptar agent --providers              show provider connection status
+  bun reptar agent --model <provider/model>  pick a model (openai/gpt-4o-mini,
+                                             anthropic/claude-sonnet-4-5, gemini/..., ollama/...)
+  bun reptar agent --session <id>            resume a saved session
+  bun reptar agent --web [port]              serve the web companion (default 4040)
+  bun reptar agent --self-test               verify the workspace tools offline
+
+In-session: /connect (add a provider), /providers (status), /models (live
+catalog), /disconnect (remove saved credentials), plus /reset /history /tools
+/model /sessions /exit.
+
+Model resolution order: --model/--provider flags, REPTAR_AGENT_MODEL/PROVIDER,
+provider env keys (OPENAI_API_KEY / ANTHROPIC_API_KEY / GEMINI_API_KEY /
+OLLAMA_HOST / OPENROUTER_API_KEY / AI_GATEWAY_API_KEY), credentials saved by
+/connect, then offline echo mode. Env keys win over saved credentials; the
+/providers table always shows which source is in use.
+
+Slash commands inside the session: /reset /history /tools /model /sessions
+/session <id> /new <title> /help /exit`);
+      process.exit(0);
+    }
+
+    const workspaceFlag = rest.indexOf("--workspace");
+    const workspace =
+      workspaceFlag !== -1 && rest[workspaceFlag + 1]
+        ? path.resolve(rest[workspaceFlag + 1])
+        : process.cwd();
+
+    // Drop an explicit --workspace flag (and its value); the CLI injects the
+    // caller's cwd as the workspace root by default.
+    const passThrough =
+      workspaceFlag === -1
+        ? rest
+        : rest.filter(
+            (_, index) => index !== workspaceFlag && index !== workspaceFlag + 1
+          );
+
+    run(
+      ["run", "app.cs", "--", "--workspace", workspace, ...passThrough],
+      path.join(repoRoot, "examples/agent-cli")
+    );
+    break;
+  }
+
+  case "run": {
+    const [target, ...runArgs] = rest;
+    if (!target || target.startsWith("-")) {
+      console.error("Usage: bun reptar run <path/to/app.cs> [args...]");
+      process.exit(1);
+    }
+
+    const appPath = path.isAbsolute(target)
+      ? target
+      : ([path.join(process.cwd(), target), path.join(repoRoot, target)].find(
+          (candidate) => existsSync(candidate)
+        ) ?? path.join(process.cwd(), target));
+
+    run(
+      ["run", path.basename(appPath), "--", ...runArgs],
+      path.dirname(appPath)
+    );
+    break;
+  }
+
   case "realworld:dev": {
     run(["run", "app.cs", ...rest], path.join(repoRoot, "examples/realworld"));
     break;
@@ -530,10 +607,19 @@ switch (command) {
       stdio: "inherit",
     });
     process.exit(res.status ?? 0);
+    break;
   }
 
   case "gateway:dev": {
     run(["run", "app.cs", ...rest], path.join(repoRoot, "examples/ai-gateway"));
+    break;
+  }
+
+  case "rooms:dev": {
+    run(
+      ["run", "app.cs", ...rest],
+      path.join(repoRoot, "examples/realtime-rooms")
+    );
     break;
   }
 

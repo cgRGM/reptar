@@ -33,42 +33,43 @@ Generated: 2026-10-25T00:21:13.105Z
 ## Startup and binary size
 
 | Implementation | Startup to first 200 | Binary size |
-| :--- | ---: | ---: |
-| Reptar | 258 ms | 18.4 MB |
+| :------------- | -------------------: | ----------: |
+| Reptar         |               258 ms |     18.4 MB |
 
 ## Throughput (req/s)
 
-| Tier | Scenario | Reptar | Reptar vs Minimal API |
-| :--- | :--- | ---: | ---: |
-| T4 | task-detail | 39214 | n/a |
-| T5 | task-list | 29874 | n/a |
-| T6 | task-comments | 35485 | n/a |
+| Tier | Scenario      | Reptar | Reptar vs Minimal API |
+| :--- | :------------ | -----: | --------------------: |
+| T4   | task-detail   |  39214 |                   n/a |
+| T5   | task-list     |  29874 |                   n/a |
+| T6   | task-comments |  35485 |                   n/a |
 
 ## Latency p50 (ms)
 
-| Tier | Scenario | Reptar |
-| :--- | :--- | ---: |
-| T4 | task-detail | 2.6 |
-| T5 | task-list | 3.3 |
-| T6 | task-comments | 2.7 |
+| Tier | Scenario      | Reptar |
+| :--- | :------------ | -----: |
+| T4   | task-detail   |    2.6 |
+| T5   | task-list     |    3.3 |
+| T6   | task-comments |    2.7 |
 
 ## Latency p99 (ms)
 
-| Tier | Scenario | Reptar |
-| :--- | :--- | ---: |
-| T4 | task-detail | 3.5 |
-| T5 | task-list | 4.2 |
-| T6 | task-comments | 3.8 |
+| Tier | Scenario      | Reptar |
+| :--- | :------------ | -----: |
+| T4   | task-detail   |    3.5 |
+| T5   | task-list     |    4.2 |
+| T6   | task-comments |    3.8 |
 
 ## CPU and memory
 
-| Tier | Scenario | Reptar CPU ms/req | Reptar RSS |
-| :--- | :--- | ---: | ---: |
-| T4 | task-detail | 0.025 | 48.5 MB |
-| T5 | task-list | 0.033 | 48.9 MB |
-| T6 | task-comments | 0.028 | 49.0 MB |
+| Tier | Scenario      | Reptar CPU ms/req | Reptar RSS |
+| :--- | :------------ | ----------------: | ---------: |
+| T4   | task-detail   |             0.025 |    48.5 MB |
+| T5   | task-list     |             0.033 |    48.9 MB |
+| T6   | task-comments |             0.028 |    49.0 MB |
 
 ## Headline
+
 - **T4 task-detail**: Reptar 39214 req/s. p50 2.6 ms, p99 3.5 ms.
 - **T5 task-list**: Reptar 29874 req/s. p50 3.3 ms, p99 4.2 ms.
 - **T6 task-comments**: Reptar 35485 req/s. p50 2.7 ms, p99 3.8 ms.

@@ -61,7 +61,10 @@ When formatted for OpenAI, Reptar outputs:
       "parameters": {
         "type": "object",
         "properties": {
-          "projectId": { "type": "string", "description": "Route parameter projectId" },
+          "projectId": {
+            "type": "string",
+            "description": "Route parameter projectId"
+          },
           "title": { "type": "string", "minLength": 3, "maxLength": 50 },
           "priority": { "type": "integer", "minimum": 1, "maximum": 5 }
         },
@@ -159,6 +162,7 @@ bun reptar mcp
 ```
 
 Published MCP tools:
+
 - `reptar_inspect` — Full project topology (routes, compiler-extracted `TableDef` columns, `[ReptarEntity]` records, migrations, and environment bindings).
 - `reptar_doctor` — Verifies .NET SDK, Bun, SQLite connectivity, `AGENTS.md` pointer block, and RPC contract freshness.
 - `reptar_db_plan` — Compares compiled `TableDef` schemas (`--schema`) against the active SQLite database and returns pending DDL statements.

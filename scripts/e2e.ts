@@ -283,7 +283,10 @@ const run = async (): Promise<void> => {
       201
     );
     const uploaded = await json<{ key: string; url: string }>(uploadRes);
-    if (uploaded.key === "attacker_ignored.svg" || !uploaded.key.endsWith(".png")) {
+    if (
+      uploaded.key === "attacker_ignored.svg" ||
+      !uploaded.key.endsWith(".png")
+    ) {
       fail(`expected server-generated .png key, got ${uploaded.key}`);
     }
     const image = await assertStatus(

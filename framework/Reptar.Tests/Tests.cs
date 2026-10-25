@@ -182,6 +182,7 @@ public class DbTests
     }
 }
 
+[Collection("AuthStaticTests")]
 public class E2eTests
 {
     private static ReptarApp BuildApp()

@@ -120,7 +120,25 @@ bun run fix          # Auto-fix code style issues
   - Constant-time HMAC-SHA256 signature verification for Stripe webhooks (`Stripe.VerifyWebhookSignatureAsync`).
   - Runs identically under both Wasm and Native AOT.
 
-### 4. Cloudflare Platform Bindings
+### 4. Built-in Agent Engine (`Reptar.AI`)
+
+The framework ships a provider-agnostic AI agent engine — not an example, a core module (`framework/Reptar/AI/`):
+
+- **Streaming LLM clients** for OpenAI-compatible endpoints (incl. OpenRouter and Vercel AI Gateway), Anthropic, Gemini, and local Ollama — plus an offline **Echo** provider so `bun reptar agent` works with zero API keys.
+- **`StreamingAgentHarness`**: a ReAct loop that dispatches tool calls **in-process** via `app.ExecuteAiToolAsync` (full `Rule<T>` validation, zero HTTP overhead) with live events for terminal and SSE frontends.
+- **`app.UseWorkspaceTools(root)`**: one line mounts `read_file`, `write_file`, `edit_file`, `list_dir`, and `run_command` as normal `.AsAiTool(...)` routes with path-traversal protection.
+- **`TerminalAgent`**: the interactive loop behind `bun reptar agent` — ANSI markdown streaming, slash commands, Ctrl+C interrupt, SQLite session persistence across launches (`--session <id>`).
+- **AOT-clean session store**: `AgentSessionStore` with manually registered zero-reflection row mappers.
+
+```bash
+bun reptar agent                     # interactive agent in this workspace
+bun reptar agent --web 4040          # web companion: POST /api/chat SSE + React SPA
+bun reptar agent --self-test         # offline verification of the tool bridge
+```
+
+Showcase app: [`examples/agent-cli`](./examples/agent-cli) — file-based `app.cs` (no `.csproj`), single Native AOT binary (~12 MB, ~10–20 ms cold start). Build report and findings: [`plans/agent-engine.md`](./plans/agent-engine.md).
+
+### 5. Cloudflare Platform Bindings
 
 Inside the Cloudflare Worker isolate, C# interacts with Cloudflare platform primitives with zero network hops:
 

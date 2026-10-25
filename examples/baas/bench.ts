@@ -49,7 +49,9 @@ function cleanup() {
   rmSync(STORAGE_DIR, { force: true, recursive: true });
   for (const ext of ["", "-wal", "-shm"]) {
     const f = `${DB_FILE}${ext}`;
-    if (existsSync(f)) unlinkSync(f);
+    if (existsSync(f)) {
+      unlinkSync(f);
+    }
   }
 }
 
@@ -57,7 +59,9 @@ async function waitForServer(retries = 30): Promise<boolean> {
   for (let i = 0; i < retries; i++) {
     try {
       const res = await fetch(`${BASE_URL}/health`);
-      if (res.ok) return true;
+      if (res.ok) {
+        return true;
+      }
     } catch {}
     await new Promise((r) => setTimeout(r, 200));
   }
@@ -110,7 +114,9 @@ function runOha(
   try {
     return JSON.parse(proc.stdout) as OhaOutput;
   } catch {
-    throw new Error(`Failed to parse oha output: ${proc.stdout || proc.stderr}`);
+    throw new Error(
+      `Failed to parse oha output: ${proc.stdout || proc.stderr}`
+    );
   }
 }
 
@@ -126,8 +132,8 @@ async function main() {
     cwd: import.meta.dir,
     env: {
       ...process.env,
-      PORT: String(PORT),
       BAAS_DB: DB_FILE,
+      PORT: String(PORT),
       STORAGE_DIR: STORAGE_DIR,
     },
     stdio: "ignore",
@@ -143,36 +149,38 @@ async function main() {
 
   // 1. Register benchmark user
   const signupRes = await fetch(`${BASE_URL}/api/auth/signup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       email: "bench@reptarbase.local",
       password: "Password123!",
       name: "Bench Operator",
     }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
   });
-  if (!signupRes.ok) throw new Error("Failed to register benchmark user.");
+  if (!signupRes.ok) {
+    throw new Error("Failed to register benchmark user.");
+  }
 
   // 2. Sign in to get session cookie
   const signinRes = await fetch(`${BASE_URL}/api/auth/signin`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       email: "bench@reptarbase.local",
       password: "Password123!",
     }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
   });
   const cookie = signinRes.headers.get("set-cookie") ?? "";
   const sessionToken = cookie.match(/reptarbase_session=([^;]+)/)?.[1] ?? "";
 
   // 3. Generate Personal API Key
   const keyRes = await fetch(`${BASE_URL}/api/auth/api-keys`, {
-    method: "POST",
+    body: JSON.stringify({ name: "Benchmark-Key", expiresInDays: 30 }),
     headers: {
-      "Authorization": `Bearer ${sessionToken}`,
+      Authorization: `Bearer ${sessionToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ name: "Benchmark-Key", expiresInDays: 30 }),
+    method: "POST",
   });
   const keyData = await keyRes.json();
   const apiKey = keyData.key;
@@ -183,19 +191,21 @@ async function main() {
   let sampleDocId = "";
   for (let i = 1; i <= 50; i++) {
     const res = await fetch(`${BASE_URL}/api/documents`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
       body: JSON.stringify({
         title: `Benchmark Record ${i}`,
         content: `Synthetic load-testing payload representing document record index ${i}. Zero reflection AOT throughput.`,
         status: i % 2 === 0 ? "published" : "draft",
       }),
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
     });
     const d = await res.json();
-    if (i === 1) sampleDocId = d.id;
+    if (i === 1) {
+      sampleDocId = d.id;
+    }
   }
 
   // 5. Seed file
@@ -204,11 +214,15 @@ async function main() {
     "hex"
   );
   const formData = new FormData();
-  formData.append("file", new Blob([samplePng], { type: "image/png" }), "fixture.png");
+  formData.append(
+    "file",
+    new Blob([samplePng], { type: "image/png" }),
+    "fixture.png"
+  );
   const fileRes = await fetch(`${BASE_URL}/api/files/upload`, {
-    method: "POST",
-    headers: { "Authorization": `Bearer ${apiKey}` },
     body: formData,
+    headers: { Authorization: `Bearer ${apiKey}` },
+    method: "POST",
   });
   const fileData = await fileRes.json();
   const fileStorageKey = fileData.storageKey;
@@ -217,101 +231,114 @@ async function main() {
   const fileEtag = fileHeadRes.headers.get("etag") ?? "";
   console.log(`Seeded test file: ${fileStorageKey} (ETag: ${fileEtag})\n`);
 
-  console.log(`Running benchmarks (${DURATION_SEC}s duration, ${CONCURRENCY} concurrent connections each)...`);
+  console.log(
+    `Running benchmarks (${DURATION_SEC}s duration, ${CONCURRENCY} concurrent connections each)...`
+  );
 
   const results: BenchmarkMetric[] = [];
 
   // Tier 1: Baseline Health Check
-  console.log("→ Benchmarking Tier 1: GET /health (Baseline Engine Overhead)...");
+  console.log(
+    "→ Benchmarking Tier 1: GET /health (Baseline Engine Overhead)..."
+  );
   const t1 = runOha("/health");
   results.push({
-    tier: "T1",
-    name: "Baseline Engine",
-    method: "GET",
     endpoint: "/health",
-    rps: Math.round(t1.summary?.requestsPerSec ?? 0),
+    method: "GET",
+    name: "Baseline Engine",
     p50Ms: Number(((t1.latencyPercentiles?.p50 ?? 0) * 1000).toFixed(2)),
     p95Ms: Number(((t1.latencyPercentiles?.p95 ?? 0) * 1000).toFixed(2)),
     p99Ms: Number(((t1.latencyPercentiles?.p99 ?? 0) * 1000).toFixed(2)),
-    totalRequests: t1.summary?.total ?? 0,
+    rps: Math.round(t1.summary?.requestsPerSec ?? 0),
     successRate: Math.round((t1.summary?.successRate ?? 0) * 100),
+    tier: "T1",
+    totalRequests: t1.summary?.total ?? 0,
   });
 
   // Tier 2: Filtered Query Layer (ColumnRef<T> + SQLite Read Pool)
-  console.log("→ Benchmarking Tier 2: GET /api/documents?status=published (Typed ColumnRef Queries)...");
+  console.log(
+    "→ Benchmarking Tier 2: GET /api/documents?status=published (Typed ColumnRef Queries)..."
+  );
   const t2 = runOha("/api/documents?status=published&limit=20");
   results.push({
-    tier: "T2",
-    name: "Filtered Collection Query",
-    method: "GET",
     endpoint: "/api/documents?status=published",
-    rps: Math.round(t2.summary?.requestsPerSec ?? 0),
+    method: "GET",
+    name: "Filtered Collection Query",
     p50Ms: Number(((t2.latencyPercentiles?.p50 ?? 0) * 1000).toFixed(2)),
     p95Ms: Number(((t2.latencyPercentiles?.p95 ?? 0) * 1000).toFixed(2)),
     p99Ms: Number(((t2.latencyPercentiles?.p99 ?? 0) * 1000).toFixed(2)),
-    totalRequests: t2.summary?.total ?? 0,
+    rps: Math.round(t2.summary?.requestsPerSec ?? 0),
     successRate: Math.round((t2.summary?.successRate ?? 0) * 100),
+    tier: "T2",
+    totalRequests: t2.summary?.total ?? 0,
   });
 
   // Tier 3: Single Record Read + Atomic View Counter Increment
-  console.log(`→ Benchmarking Tier 3: GET /api/documents/${sampleDocId} (Atomic Counter Writes + Read)...`);
+  console.log(
+    `→ Benchmarking Tier 3: GET /api/documents/${sampleDocId} (Atomic Counter Writes + Read)...`
+  );
   const t3 = runOha(`/api/documents/${sampleDocId}`);
   results.push({
-    tier: "T3",
-    name: "Atomic Read + View Counter",
-    method: "GET",
     endpoint: `/api/documents/:id`,
-    rps: Math.round(t3.summary?.requestsPerSec ?? 0),
+    method: "GET",
+    name: "Atomic Read + View Counter",
     p50Ms: Number(((t3.latencyPercentiles?.p50 ?? 0) * 1000).toFixed(2)),
     p95Ms: Number(((t3.latencyPercentiles?.p95 ?? 0) * 1000).toFixed(2)),
     p99Ms: Number(((t3.latencyPercentiles?.p99 ?? 0) * 1000).toFixed(2)),
-    totalRequests: t3.summary?.total ?? 0,
+    rps: Math.round(t3.summary?.requestsPerSec ?? 0),
     successRate: Math.round((t3.summary?.successRate ?? 0) * 100),
+    tier: "T3",
+    totalRequests: t3.summary?.total ?? 0,
   });
 
   // Tier 4: Authenticated Writes (Bearer Auth + Insert + SSE Fan-out)
-  console.log("→ Benchmarking Tier 4: POST /api/documents (Authenticated Writes + WAL Batching)...");
+  console.log(
+    "→ Benchmarking Tier 4: POST /api/documents (Authenticated Writes + WAL Batching)..."
+  );
   const t4 = runOha("/api/documents", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({
       title: "Live Stress Record",
-      content: "Benchmarking write throughput with group commit batching and real-time SSE fanout.",
+      content:
+        "Benchmarking write throughput with group commit batching and real-time SSE fanout.",
       status: "published",
     }),
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    method: "POST",
   });
   results.push({
-    tier: "T4",
-    name: "Authenticated Writes",
-    method: "POST",
     endpoint: "/api/documents",
-    rps: Math.round(t4.summary?.requestsPerSec ?? 0),
+    method: "POST",
+    name: "Authenticated Writes",
     p50Ms: Number(((t4.latencyPercentiles?.p50 ?? 0) * 1000).toFixed(2)),
     p95Ms: Number(((t4.latencyPercentiles?.p95 ?? 0) * 1000).toFixed(2)),
     p99Ms: Number(((t4.latencyPercentiles?.p99 ?? 0) * 1000).toFixed(2)),
-    totalRequests: t4.summary?.total ?? 0,
+    rps: Math.round(t4.summary?.requestsPerSec ?? 0),
     successRate: Math.round((t4.summary?.successRate ?? 0) * 100),
+    tier: "T4",
+    totalRequests: t4.summary?.total ?? 0,
   });
 
   // Tier 5: Static File Serving with ETag 304 Validation
-  console.log(`→ Benchmarking Tier 5: GET /api/files/${fileStorageKey} (ETag 304 Caching)...`);
+  console.log(
+    `→ Benchmarking Tier 5: GET /api/files/${fileStorageKey} (ETag 304 Caching)...`
+  );
   const t5 = runOha(`/api/files/${fileStorageKey}`, {
     headers: { "If-None-Match": fileEtag },
   });
   results.push({
-    tier: "T5",
-    name: "Conditional ETag Caching",
-    method: "GET",
     endpoint: `/api/files/:key`,
-    rps: Math.round(t5.summary?.requestsPerSec ?? 0),
+    method: "GET",
+    name: "Conditional ETag Caching",
     p50Ms: Number(((t5.latencyPercentiles?.p50 ?? 0) * 1000).toFixed(2)),
     p95Ms: Number(((t5.latencyPercentiles?.p95 ?? 0) * 1000).toFixed(2)),
     p99Ms: Number(((t5.latencyPercentiles?.p99 ?? 0) * 1000).toFixed(2)),
-    totalRequests: t5.summary?.total ?? 0,
+    rps: Math.round(t5.summary?.requestsPerSec ?? 0),
     successRate: Math.round((t5.summary?.successRate ?? 0) * 100),
+    tier: "T5",
+    totalRequests: t5.summary?.total ?? 0,
   });
 
   // Kill server
@@ -354,7 +381,7 @@ ${tableRows.join("\n")}
   console.log(`\n💾 Saved detailed benchmark report to ${outPath}`);
 }
 
-main().catch((err) => {
-  console.error("Benchmark failed:", err);
+main().catch((error) => {
+  console.error("Benchmark failed:", error);
   process.exit(1);
 });

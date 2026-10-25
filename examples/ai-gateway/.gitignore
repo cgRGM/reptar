@@ -1,0 +1,4 @@
+gateway.db
+gateway.db-shm
+gateway.db-wal
+.bench-bodies.jsonl

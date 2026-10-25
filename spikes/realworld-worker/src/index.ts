@@ -151,17 +151,20 @@ export default {
       return new Response(null, { headers: cors });
     }
 
-    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/health")) {
+    if (
+      request.method === "GET" &&
+      (url.pathname === "/" || url.pathname === "/health")
+    ) {
       const body =
         url.pathname === "/health"
-          ? { status: "ok", service: "reptar-realworld-bench" }
+          ? { service: "reptar-realworld-bench", status: "ok" }
           : {
-              service: "reptar-realworld-bench",
-              status: "ok",
               api: "/api",
+              cacheSeconds: CACHE_SECONDS,
               health: "/health",
               runtime: "cloudflare-workers",
-              cacheSeconds: CACHE_SECONDS,
+              service: "reptar-realworld-bench",
+              status: "ok",
             };
       return withCors(Response.json(body), origin, env.CORS_ORIGINS);
     }

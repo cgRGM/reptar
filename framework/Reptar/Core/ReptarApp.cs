@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 
@@ -111,7 +112,10 @@ public sealed class ReptarApp
     private readonly Dictionary<string, WebSocketHandlers> _webSocketHandlers =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly List<WebSocketRoute> _webSocketParamRoutes = [];
-    private readonly Dictionary<string, (WebSocketConnection Connection, WebSocketHandlers Handlers)> _webSocketSessions =
+    // WebSocket sessions are touched concurrently by the host's request
+    // threads (open/message/close), so this must be the concurrent dictionary —
+    // a plain Dictionary corrupts under simultaneous opens.
+    private readonly ConcurrentDictionary<string, (WebSocketConnection Connection, WebSocketHandlers Handlers)> _webSocketSessions =
         new(StringComparer.Ordinal);
     private readonly ReptarConfig _config;
     private readonly (ReptarApp Parent, string Prefix)? _groupParent;
@@ -555,7 +559,7 @@ public sealed class ReptarApp
         {
             ctx.Log.Error(
                 $"[WebSocket:{sessionId}] Open failed: {exception.Message}");
-            _webSocketSessions.Remove(sessionId);
+            _webSocketSessions.TryRemove(sessionId, out _);
             Services.WebSocket.Close(sessionId, 1011, "WebSocket open failed.");
         }
     }
@@ -578,14 +582,14 @@ public sealed class ReptarApp
         {
             session.Connection.Ctx.Log.Error(
                 $"[WebSocket:{sessionId}] Message failed: {exception.Message}");
-            _webSocketSessions.Remove(sessionId);
+            _webSocketSessions.TryRemove(sessionId, out _);
             Services.WebSocket.Close(sessionId, 1011, "WebSocket message failed.");
         }
     }
 
     public async Task HandleWebSocketCloseAsync(string sessionId)
     {
-        if (!_webSocketSessions.Remove(sessionId, out var session))
+        if (!_webSocketSessions.TryRemove(sessionId, out var session))
             return;
 
         if (session.Handlers.Close is null)

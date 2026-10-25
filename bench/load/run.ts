@@ -162,7 +162,10 @@ const totalFromResult = (result: OhaResult): number => {
   return errors.reduce((sum, count) => sum + count, 0);
 };
 
-const fetchJson = async (requestPath: string, method = "GET"): Promise<unknown> => {
+const fetchJson = async (
+  requestPath: string,
+  method = "GET"
+): Promise<unknown> => {
   const response = await fetch(`${baseUrl}${requestPath}`, { method });
   if (response.status === 404) {
     return undefined;

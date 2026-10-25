@@ -208,9 +208,7 @@ add(
   "",
   `| Tier | Scenario | ${available.map((label) => display[label] ?? label).join(" | ")} | Reptar vs Minimal API |`
 );
-add(
-  `| :--- | :--- | ${available.map(() => "---:").join(" | ")} | ---: |`
-);
+add(`| :--- | :--- | ${available.map(() => "---:").join(" | ")} | ---: |`);
 
 for (const scenario of scenarioKeys) {
   const values = available.map((label) =>
@@ -300,9 +298,8 @@ const t7 = available
     label,
     scenario: getScenario(label, "T7", "create-task"),
   }))
-  .filter(
-    (entry): entry is { label: string; scenario: ScenarioResult } =>
-      Boolean(entry.scenario?.breakdown?.stages?.length)
+  .filter((entry): entry is { label: string; scenario: ScenarioResult } =>
+    Boolean(entry.scenario?.breakdown?.stages?.length)
   );
 
 if (t7.length === 0) {
@@ -386,7 +383,9 @@ const mixed: Record<
 for (const label of available) {
   const file = path.join(dir, `${label}-mixed.json`);
   if (existsSync(file)) {
-    mixed[label] = JSON.parse(readFileSync(file, "utf-8")) as (typeof mixed)[string];
+    mixed[label] = JSON.parse(
+      readFileSync(file, "utf-8")
+    ) as (typeof mixed)[string];
   }
 }
 

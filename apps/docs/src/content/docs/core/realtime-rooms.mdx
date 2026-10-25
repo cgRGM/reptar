@@ -1,0 +1,61 @@
+---
+title: Realtime Rooms & WebSockets
+description: High-concurrency WebSocket rooms with presence awareness, broadcast fanout, and SQLite group-commit write-behind persistence.
+---
+
+Reptar provides native, reflection-free WebSocket routing designed for real-time collaboration, cursor tracking, chat rooms, and multiplayer games.
+
+The pattern implemented in `examples/realtime-rooms` ports proven concurrency patterns from **PartyKit**, **y-websocket**, and **Liveblocks** onto .NET Native AOT and Kestrel.
+
+---
+
+## 1. Registering Parameterized WebSocket Routes
+
+Register WebSocket handlers with route parameter extraction using `app.OnWebSocket()`:
+
+```csharp
+app.OnWebSocket("/rooms/{roomId}", new WebSocketHandlers
+{
+    Open = async conn =>
+    {
+        var roomId = conn.Ctx.Req.Param("roomId");
+        await conn.SendAsync($"{{\"type\":\"connected\",\"room\":\"{roomId}\"}}");
+    },
+    Message = async (conn, message) =>
+    {
+        // Fanout message to other peers in room
+    },
+    Close = async conn =>
+    {
+        // Remove peer from roster and notify room
+    }
+});
+```
+
+---
+
+## 2. Key Architecture Primitives
+
+1. **Lock-Free Read Fanout**:
+   Room rosters use concurrent collections so broadcasts and cursor moves never block joins, leaves, or REST queries.
+
+2. **Per-Socket Bounded Channels**:
+   Kestrel transport uses bounded channels (`BoundedChannelFullMode.DropOldest`) to ensure slow or lagging clients cannot exhaust server memory or block the event loop.
+
+3. **Write-Behind Persistence**:
+   Chat messages are enqueued into a background SQLite channel batcher. Broadcast fanout to connected peers occurs with microsecond latency, while disk writes coalesce into batched SQLite transactions.
+
+---
+
+## Running the Realtime Rooms Hub
+
+```bash
+# Run server on http://localhost:8787
+bun rooms:dev
+
+# Run protocol smoke test
+bun rooms:smoke
+
+# Run 5,000-socket concurrency load test
+bun rooms:bench --clients 5000 --rooms 100 --peers 50
+```

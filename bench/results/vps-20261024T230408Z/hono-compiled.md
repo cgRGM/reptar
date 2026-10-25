@@ -1,7 +1,7 @@
 ## hono-compiled
 
 | Tier | Scenario | Req/s | p50 | p95 | p99 | Errors | CPU ms/req | RSS |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| :-- | :-- | --: | --: | --: | --: | --: | --: | --: |
 | T0 | plaintext | 48737 | 2.0 ms | 2.6 ms | 4.0 ms | 0 | 0.021 | 39.3 MB |
 | T1 | json | 39796 | 2.5 ms | 2.8 ms | 3.3 ms | 0 | 0.026 | 45.1 MB |
 | T2 | router-params | 35970 | 2.8 ms | 3.1 ms | 3.5 ms | 0 | 0.028 | 45.0 MB |

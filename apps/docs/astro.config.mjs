@@ -35,6 +35,7 @@ export default defineConfig({
         {
           items: [
             { label: "Routing, SSE & Caching", slug: "core/routing" },
+            { label: "Realtime Rooms & WebSockets", slug: "core/realtime-rooms" },
             { label: "Context Surface (Ctx)", slug: "core/context" },
             { label: "Validation & Rule<T>", slug: "core/validation" },
           ],
@@ -68,6 +69,7 @@ export default defineConfig({
         {
           items: [
             { label: "AI Tools & Agent Harness", slug: "ai/agent-harness" },
+            { label: "AI Gateway (Proxy & Failover)", slug: "ai/ai-gateway" },
           ],
           label: "AI & Agents",
         },

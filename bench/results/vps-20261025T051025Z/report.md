@@ -33,86 +33,87 @@ Generated: 2026-10-25T05:19:32.211Z
 ## Startup and binary size
 
 | Implementation | Startup to first 200 | Binary size |
-| :--- | ---: | ---: |
-| Reptar | 258 ms | 18.4 MB |
+| :------------- | -------------------: | ----------: |
+| Reptar         |               258 ms |     18.4 MB |
 
 ## Throughput (req/s)
 
-| Tier | Scenario | Reptar | Reptar vs Minimal API |
-| :--- | :--- | ---: | ---: |
-| T0 | plaintext | 43468 | n/a |
-| T1 | json | 42291 | n/a |
-| T2 | router-params | 40351 | n/a |
-| T3 | validate | 35370 | n/a |
-| T4 | task-detail | 12107 | n/a |
-| T5 | task-list | 5316 | n/a |
-| T6 | task-comments | 9846 | n/a |
-| T7 | create-task | 3316 | n/a |
-| T8 | me | 11720 | n/a |
-| T9 | login | 15 | n/a |
-| T10 | update-task | 3517 | n/a |
+| Tier | Scenario      | Reptar | Reptar vs Minimal API |
+| :--- | :------------ | -----: | --------------------: |
+| T0   | plaintext     |  43468 |                   n/a |
+| T1   | json          |  42291 |                   n/a |
+| T2   | router-params |  40351 |                   n/a |
+| T3   | validate      |  35370 |                   n/a |
+| T4   | task-detail   |  12107 |                   n/a |
+| T5   | task-list     |   5316 |                   n/a |
+| T6   | task-comments |   9846 |                   n/a |
+| T7   | create-task   |   3316 |                   n/a |
+| T8   | me            |  11720 |                   n/a |
+| T9   | login         |     15 |                   n/a |
+| T10  | update-task   |   3517 |                   n/a |
 
 ## Latency p50 (ms)
 
-| Tier | Scenario | Reptar |
-| :--- | :--- | ---: |
-| T0 | plaintext | 2.3 |
-| T1 | json | 2.4 |
-| T2 | router-params | 2.5 |
-| T3 | validate | 2.9 |
-| T4 | task-detail | 7.7 |
-| T5 | task-list | 18.5 |
-| T6 | task-comments | 9.2 |
-| T7 | create-task | 30.2 |
-| T8 | me | 7.7 |
-| T9 | login | 699.7 |
-| T10 | update-task | 27.5 |
+| Tier | Scenario      | Reptar |
+| :--- | :------------ | -----: |
+| T0   | plaintext     |    2.3 |
+| T1   | json          |    2.4 |
+| T2   | router-params |    2.5 |
+| T3   | validate      |    2.9 |
+| T4   | task-detail   |    7.7 |
+| T5   | task-list     |   18.5 |
+| T6   | task-comments |    9.2 |
+| T7   | create-task   |   30.2 |
+| T8   | me            |    7.7 |
+| T9   | login         |  699.7 |
+| T10  | update-task   |   27.5 |
 
 ## Latency p99 (ms)
 
-| Tier | Scenario | Reptar |
-| :--- | :--- | ---: |
-| T0 | plaintext | 3.0 |
-| T1 | json | 3.1 |
-| T2 | router-params | 3.4 |
-| T3 | validate | 3.9 |
-| T4 | task-detail | 13.0 |
-| T5 | task-list | 30.8 |
-| T6 | task-comments | 16.2 |
-| T7 | create-task | 63.8 |
-| T8 | me | 13.9 |
-| T9 | login | 1259.8 |
-| T10 | update-task | 43.2 |
+| Tier | Scenario      | Reptar |
+| :--- | :------------ | -----: |
+| T0   | plaintext     |    3.0 |
+| T1   | json          |    3.1 |
+| T2   | router-params |    3.4 |
+| T3   | validate      |    3.9 |
+| T4   | task-detail   |   13.0 |
+| T5   | task-list     |   30.8 |
+| T6   | task-comments |   16.2 |
+| T7   | create-task   |   63.8 |
+| T8   | me            |   13.9 |
+| T9   | login         | 1259.8 |
+| T10  | update-task   |   43.2 |
 
 ## CPU and memory
 
-| Tier | Scenario | Reptar CPU ms/req | Reptar RSS |
-| :--- | :--- | ---: | ---: |
-| T0 | plaintext | 0.023 | 47.3 MB |
-| T1 | json | 0.024 | 49.7 MB |
-| T2 | router-params | 0.026 | 51.9 MB |
-| T3 | validate | 0.028 | 52.0 MB |
-| T4 | task-detail | 0.084 | 52.8 MB |
-| T5 | task-list | 0.190 | 53.0 MB |
-| T6 | task-comments | 0.102 | 53.3 MB |
-| T7 | create-task | 0.261 | 75.2 MB |
-| T8 | me | 0.086 | 81.4 MB |
-| T9 | login | 74.406 | 81.5 MB |
-| T10 | update-task | 0.276 | 84.5 MB |
+| Tier | Scenario      | Reptar CPU ms/req | Reptar RSS |
+| :--- | :------------ | ----------------: | ---------: |
+| T0   | plaintext     |             0.023 |    47.3 MB |
+| T1   | json          |             0.024 |    49.7 MB |
+| T2   | router-params |             0.026 |    51.9 MB |
+| T3   | validate      |             0.028 |    52.0 MB |
+| T4   | task-detail   |             0.084 |    52.8 MB |
+| T5   | task-list     |             0.190 |    53.0 MB |
+| T6   | task-comments |             0.102 |    53.3 MB |
+| T7   | create-task   |             0.261 |    75.2 MB |
+| T8   | me            |             0.086 |    81.4 MB |
+| T9   | login         |            74.406 |    81.5 MB |
+| T10  | update-task   |             0.276 |    84.5 MB |
 
 ## T7 write-path breakdown (ms)
+
 ### Reptar
 
-| Stage | Count | Avg | p50 | p95 | p99 | Max |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| auth | 108611 | 0.088 | 0.036 | 0.142 | 1.214 | 91.271 |
+| Stage     |  Count |    Avg |    p50 |    p95 |    p99 |     Max |
+| :-------- | -----: | -----: | -----: | -----: | -----: | ------: |
+| auth      | 108611 |  0.088 |  0.036 |  0.142 |  1.214 |  91.271 |
 | writeGate | 108611 | 27.073 | 27.857 | 38.471 | 55.414 | 255.124 |
-| insert | 108611 | 0.228 | 0.064 | 0.744 | 2.331 | 44.110 |
-| assignee | 108611 | 0.093 | 0.032 | 0.068 | 2.144 | 102.093 |
-| handler | 108611 | 27.408 | 28.332 | 38.825 | 56.062 | 305.592 |
-
+| insert    | 108611 |  0.228 |  0.064 |  0.744 |  2.331 |  44.110 |
+| assignee  | 108611 |  0.093 |  0.032 |  0.068 |  2.144 | 102.093 |
+| handler   | 108611 | 27.408 | 28.332 | 38.825 | 56.062 | 305.592 |
 
 ## Headline
+
 - **T0 plaintext**: Reptar 43468 req/s. p50 2.3 ms, p99 3.0 ms.
 - **T1 json**: Reptar 42291 req/s. p50 2.4 ms, p99 3.1 ms.
 - **T2 router-params**: Reptar 40351 req/s. p50 2.5 ms, p99 3.4 ms.

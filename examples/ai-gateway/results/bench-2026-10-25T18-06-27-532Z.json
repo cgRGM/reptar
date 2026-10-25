@@ -1,0 +1,38 @@
+{
+  "concurrency": 500,
+  "ohaCached": {
+    "latencyP50": 17.163,
+    "latencyP99": 33.904,
+    "rps": 28499.21575427949,
+    "successRate": 1
+  },
+  "ohaUncached": {
+    "latencyP50": 22.067,
+    "latencyP99": 41.469,
+    "rps": 22044.006359929972,
+    "successRate": 1
+  },
+  "requests": 500,
+  "rssKb": 1780800,
+  "serverStats": {
+    "total_requests": 100445,
+    "prompt_tokens": 1500202,
+    "completion_tokens": 4821360,
+    "cache_hits": 0,
+    "cache_hit_rate": 0,
+    "avg_latency_ms": 0.11,
+    "prompt_cache_entries": 1501
+  },
+  "target": "http://127.0.0.1:8788",
+  "timestamp": "2026-10-25T18:06:27.534Z",
+  "ttftCacheHit": {
+    "mean": 35.182486830999956,
+    "p50": 35.88354099999924,
+    "p99": 44.53708299999926
+  },
+  "ttftMiss": {
+    "mean": 58.788593913999954,
+    "p50": 59.274249999998574,
+    "p99": 68.70016699999906
+  }
+}

@@ -1,7 +1,7 @@
 ## reptar-local-after
 
 | Tier | Scenario | Req/s | p50 | p95 | p99 | Errors | CPU ms/req | RSS |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| :-- | :-- | --: | --: | --: | --: | --: | --: | --: |
 | T0 | plaintext | 189916 | 0.4 ms | 1.0 ms | 2.1 ms | 0 | n/a | n/a |
 | T1 | json | 192266 | 0.5 ms | 0.9 ms | 1.4 ms | 0 | n/a | n/a |
 | T2 | router-params | 197554 | 0.5 ms | 0.9 ms | 1.4 ms | 0 | n/a | n/a |

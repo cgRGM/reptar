@@ -284,8 +284,7 @@ public static class AiToolExtensions
         Ctx? parentCtx = null,
         string? authorization = null)
     {
-        var tools = app.GetAiTools(AiToolFormat.OpenAi, onlyExplicit: false);
-        var tool = tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.OrdinalIgnoreCase));
+        var tool = app.ResolveAiTool(toolName);
 
         if (tool is null)
         {
@@ -357,7 +356,7 @@ public static class AiToolExtensions
             }
         }
 
-        var queryString = queryParams.Count > 0 ? "?" + string.Join("&", queryParams) : "";
+        var queryString = queryParams.Count > 0 ? string.Join("&", queryParams) : "";
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["content-type"] = "application/json"
@@ -443,6 +442,39 @@ public static class AiToolExtensions
         }
 
         return AiToolResult.Failure(response.Status, errorCode, errorMessage, issues);
+    }
+
+        // Tool definitions are static after startup, so each app caches a
+    // case-insensitive index. ConditionalWeakTable keeps test apps
+    // collectable and avoids adding mutable state to ReptarApp itself.
+    private sealed class ToolIndexBox
+    {
+        public Dictionary<string, AiToolDefinition> Index = [];
+    }
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<ReptarApp, ToolIndexBox>
+        ToolIndexCache = new();
+
+    /// <summary>
+    /// Resolves a tool definition by name. The first call builds a case-insensitive
+    /// index over the route table; subsequent agent-loop dispatches are dictionary
+    /// hits instead of full route scans. The index rebuilds if routes change.
+    /// </summary>
+    public static AiToolDefinition? ResolveAiTool(this ReptarApp app, string toolName)
+    {
+        if (string.IsNullOrEmpty(toolName))
+            return null;
+
+        var box = ToolIndexCache.GetValue(app, static _ => new ToolIndexBox());
+        if (box.Index.Count != app.RouteMetadata.Count)
+        {
+            var rebuilt = new Dictionary<string, AiToolDefinition>(StringComparer.OrdinalIgnoreCase);
+            foreach (var definition in app.GetAiTools(AiToolFormat.OpenAi, onlyExplicit: false))
+                rebuilt[definition.Name] = definition;
+            box.Index = rebuilt;
+        }
+
+        return box.Index.TryGetValue(toolName, out var tool) ? tool : null;
     }
 
     private static string GetToolName(RouteMeta route)

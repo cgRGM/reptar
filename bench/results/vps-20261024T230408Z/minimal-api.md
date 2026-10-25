@@ -1,7 +1,7 @@
 ## minimal-api
 
 | Tier | Scenario | Req/s | p50 | p95 | p99 | Errors | CPU ms/req | RSS |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| :-- | :-- | --: | --: | --: | --: | --: | --: | --: |
 | T0 | plaintext | 41340 | 2.4 ms | 2.9 ms | 3.3 ms | 0 | 0.024 | 40.5 MB |
 | T1 | json | 41030 | 2.4 ms | 2.9 ms | 3.2 ms | 0 | 0.025 | 42.2 MB |
 | T2 | router-params | 41009 | 2.4 ms | 2.9 ms | 3.2 ms | 0 | 0.024 | 42.2 MB |

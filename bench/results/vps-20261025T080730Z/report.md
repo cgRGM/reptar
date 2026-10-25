@@ -32,17 +32,17 @@ Generated: 2026-10-25T09:10:10.317Z
 
 ## Startup and binary size
 
-| Implementation | Startup to first 200 | Binary size |
-| :--- | ---: | ---: |
-| Reptar | 124 ms | 10.4 MB |
-| Minimal API | 127 ms | 10.4 MB |
-| Hono (JIT) | 240 ms | 104.3 MB |
-| Hono (compiled) | 134 ms | 104.3 MB |
+| Implementation  | Startup to first 200 | Binary size |
+| :-------------- | -------------------: | ----------: |
+| Reptar          |               124 ms |     10.4 MB |
+| Minimal API     |               127 ms |     10.4 MB |
+| Hono (JIT)      |               240 ms |    104.3 MB |
+| Hono (compiled) |               134 ms |    104.3 MB |
 
 ## Throughput (req/s)
 
 | Tier | Scenario | Reptar | Minimal API | Hono (JIT) | Hono (compiled) | Reptar vs Minimal API |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| :-- | :-- | --: | --: | --: | --: | --: |
 | T0 | plaintext | 41877 | 41852 | 49280 | 49540 | +0% |
 | T1 | json | 42239 | 41675 | 39289 | 39597 | +1% |
 | T2 | router-params | 41355 | 40954 | 34401 | 36135 | +1% |
@@ -57,40 +57,40 @@ Generated: 2026-10-25T09:10:10.317Z
 
 ## Latency p50 (ms)
 
-| Tier | Scenario | Reptar | Minimal API | Hono (JIT) | Hono (compiled) |
-| :--- | :--- | ---: | ---: | ---: | ---: |
-| T0 | plaintext | 2.4 | 2.4 | 2.0 | 1.9 |
-| T1 | json | 2.4 | 2.4 | 2.5 | 2.5 |
-| T2 | router-params | 2.4 | 2.4 | 2.8 | 2.7 |
-| T3 | validate | 2.8 | 3.0 | 5.4 | 5.5 |
-| T4 | task-detail | 6.7 | 7.9 | 5.5 | 5.5 |
-| T5 | task-list | 16.2 | 16.3 | 14.3 | 14.4 |
-| T6 | task-comments | 8.3 | 9.9 | 10.0 | 9.9 |
-| T7 | create-task | 15.1 | 29.2 | 25.1 | 24.6 |
-| T8 | me | 6.4 | 6.8 | 8.1 | 8.1 |
-| T9 | login | 693.8 | 732.9 | 444.2 | 445.0 |
-| T10 | update-task | 20.5 | 46.2 | 17.1 | 17.2 |
+| Tier | Scenario      | Reptar | Minimal API | Hono (JIT) | Hono (compiled) |
+| :--- | :------------ | -----: | ----------: | ---------: | --------------: |
+| T0   | plaintext     |    2.4 |         2.4 |        2.0 |             1.9 |
+| T1   | json          |    2.4 |         2.4 |        2.5 |             2.5 |
+| T2   | router-params |    2.4 |         2.4 |        2.8 |             2.7 |
+| T3   | validate      |    2.8 |         3.0 |        5.4 |             5.5 |
+| T4   | task-detail   |    6.7 |         7.9 |        5.5 |             5.5 |
+| T5   | task-list     |   16.2 |        16.3 |       14.3 |            14.4 |
+| T6   | task-comments |    8.3 |         9.9 |       10.0 |             9.9 |
+| T7   | create-task   |   15.1 |        29.2 |       25.1 |            24.6 |
+| T8   | me            |    6.4 |         6.8 |        8.1 |             8.1 |
+| T9   | login         |  693.8 |       732.9 |      444.2 |           445.0 |
+| T10  | update-task   |   20.5 |        46.2 |       17.1 |            17.2 |
 
 ## Latency p99 (ms)
 
-| Tier | Scenario | Reptar | Minimal API | Hono (JIT) | Hono (compiled) |
-| :--- | :--- | ---: | ---: | ---: | ---: |
-| T0 | plaintext | 3.1 | 3.2 | 3.9 | 3.9 |
-| T1 | json | 3.1 | 3.1 | 3.5 | 3.3 |
-| T2 | router-params | 3.3 | 3.2 | 4.6 | 3.4 |
-| T3 | validate | 3.7 | 3.9 | 6.4 | 7.4 |
-| T4 | task-detail | 11.6 | 13.0 | 7.7 | 6.3 |
-| T5 | task-list | 25.8 | 26.4 | 16.0 | 16.0 |
-| T6 | task-comments | 14.8 | 15.4 | 12.0 | 11.6 |
-| T7 | create-task | 34.2 | 40.9 | 37.2 | 36.3 |
-| T8 | me | 11.3 | 14.2 | 12.7 | 12.5 |
-| T9 | login | 1249.9 | 1248.0 | 879.3 | 800.0 |
-| T10 | update-task | 38.8 | 57.5 | 32.3 | 32.0 |
+| Tier | Scenario      | Reptar | Minimal API | Hono (JIT) | Hono (compiled) |
+| :--- | :------------ | -----: | ----------: | ---------: | --------------: |
+| T0   | plaintext     |    3.1 |         3.2 |        3.9 |             3.9 |
+| T1   | json          |    3.1 |         3.1 |        3.5 |             3.3 |
+| T2   | router-params |    3.3 |         3.2 |        4.6 |             3.4 |
+| T3   | validate      |    3.7 |         3.9 |        6.4 |             7.4 |
+| T4   | task-detail   |   11.6 |        13.0 |        7.7 |             6.3 |
+| T5   | task-list     |   25.8 |        26.4 |       16.0 |            16.0 |
+| T6   | task-comments |   14.8 |        15.4 |       12.0 |            11.6 |
+| T7   | create-task   |   34.2 |        40.9 |       37.2 |            36.3 |
+| T8   | me            |   11.3 |        14.2 |       12.7 |            12.5 |
+| T9   | login         | 1249.9 |      1248.0 |      879.3 |           800.0 |
+| T10  | update-task   |   38.8 |        57.5 |       32.3 |            32.0 |
 
 ## CPU and memory
 
 | Tier | Scenario | Reptar CPU ms/req | Minimal API CPU ms/req | Hono (JIT) CPU ms/req | Hono (compiled) CPU ms/req | Reptar RSS | Minimal API RSS | Hono (JIT) RSS | Hono (compiled) RSS |
-| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| :-- | :-- | --: | --: | --: | --: | --: | --: | --: | --: |
 | T0 | plaintext | 0.024 | 0.024 | 0.020 | 0.020 | 39.7 MB | 40.1 MB | 40.5 MB | 38.5 MB |
 | T1 | json | 0.024 | 0.024 | 0.026 | 0.025 | 39.9 MB | 41.9 MB | 44.1 MB | 36.8 MB |
 | T2 | router-params | 0.024 | 0.024 | 0.029 | 0.028 | 39.9 MB | 41.9 MB | 44.4 MB | 39.2 MB |
@@ -104,18 +104,19 @@ Generated: 2026-10-25T09:10:10.317Z
 | T10 | update-task | 0.205 | 0.362 | 0.173 | 0.173 | 103.2 MB | 81.2 MB | 62.7 MB | 56.9 MB |
 
 ## T7 write-path breakdown (ms)
+
 ### Reptar
 
-| Stage | Count | Avg | p50 | p95 | p99 | Max |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| auth | 196241 | 0.098 | 0.027 | 0.072 | 2.873 | 54.463 |
-| writeGate | 196241 | 2.784 | 2.023 | 7.764 | 17.017 | 65.295 |
-| insert | 196241 | 0.143 | 0.114 | 0.287 | 0.660 | 27.412 |
-| assignee | 196241 | 0.066 | 0.015 | 0.044 | 0.608 | 23.100 |
-| handler | 196241 | 11.541 | 11.243 | 23.777 | 31.921 | 99.871 |
-
+| Stage     |  Count |    Avg |    p50 |    p95 |    p99 |    Max |
+| :-------- | -----: | -----: | -----: | -----: | -----: | -----: |
+| auth      | 196241 |  0.098 |  0.027 |  0.072 |  2.873 | 54.463 |
+| writeGate | 196241 |  2.784 |  2.023 |  7.764 | 17.017 | 65.295 |
+| insert    | 196241 |  0.143 |  0.114 |  0.287 |  0.660 | 27.412 |
+| assignee  | 196241 |  0.066 |  0.015 |  0.044 |  0.608 | 23.100 |
+| handler   | 196241 | 11.541 | 11.243 | 23.777 | 31.921 | 99.871 |
 
 ## Headline
+
 - **T0 plaintext**: Reptar 41877 req/s, +0% vs Minimal API, -15% vs Hono (JIT). p50 2.4 ms, p99 3.1 ms.
 - **T1 json**: Reptar 42239 req/s, +1% vs Minimal API, +8% vs Hono (JIT). p50 2.4 ms, p99 3.1 ms.
 - **T2 router-params**: Reptar 41355 req/s, +1% vs Minimal API, +20% vs Hono (JIT). p50 2.4 ms, p99 3.3 ms.
@@ -131,7 +132,7 @@ Generated: 2026-10-25T09:10:10.317Z
 ## Mixed workload (T11)
 
 | Implementation | Req/s | p50 | p95 | p99 | Requests | Statuses |
-| :--- | ---: | ---: | ---: | ---: | ---: | :--- |
+| :-- | --: | --: | --: | --: | --: | :-- |
 | Reptar | 6143 | 16.0 ms | 21.7 ms | 32.5 ms | 92239 | 200:83172, 201:9067 |
 | Minimal API | 6242 | 15.8 ms | 22.0 ms | 31.9 ms | 93757 | 200:84336, 201:9421 |
 | Hono (JIT) | 7272 | 12.3 ms | 23.6 ms | 37.6 ms | 109188 | 200:98373, 201:10815 |

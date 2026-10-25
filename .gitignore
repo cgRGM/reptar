@@ -61,9 +61,9 @@ temp
 .reptar/
 **/bin/
 **/obj/
-*.db
-*.db-shm
-*.db-wal
+**/*.db
+**/*.db-shm
+**/*.db-wal
 
 # Benchmark build artifacts
 bench/out/

@@ -96,26 +96,17 @@ The runner:
 
 ## Latest results
 
-See [`bench/results/FINDINGS.md`](./results/FINDINGS.md) for the full
-before/after tables, the SWR cache tier, and the remaining bottlenecks.
+See [`bench/results/FINDINGS.md`](./results/FINDINGS.md) for the full before/after tables, the SWR cache tier, and the remaining bottlenecks.
 
 Headline (latest framework HEAD, 2 vCPU Lightsail, 100 connections):
 
-- HTTP/JSON/routing/validation: **41.9k / 42.2k / 41.4k / 36.3k req/s** — at or
-  above raw .NET Minimal API.
-- DB reads/writes: **13.8k** single-task, **5.9k** list, **10.7k** comments,
-  **6.2k** creates, **15.7k** `/me`, **4.9k** updates.
-- SWR-cached reads: **39.2k** task detail, **29.9k** list, **35.5k** comments
-  (3.4x–5.6x over uncached).
-- Mixed workload (70% read / 20% list / 10% write): **6,143 req/s**, -2% vs
-  .NET Minimal API (6,242); Hono on Bun is 7,272.
-- Startup **124 ms**, binary **10.4 MB** with `ReptarSqliteOnly=true` (vs
-  104 MB for the compiled Hono bundle).
-- T7 breakdown after group commit: write gate **2.8 ms avg / 2.0 ms p50** vs
-  insert **0.114 ms p50** — the queue is 10x shorter than before.
-- **Reptar wins 10 of 12 tiers vs .NET Minimal API** (T0 is a tie, T9 is
-  PBKDF2-bound, mixed is -2%). Hono still wins plaintext, single-row reads,
-  lists, login, updates, and the mixed blend.
+- HTTP/JSON/routing/validation: **41.9k / 42.2k / 41.4k / 36.3k req/s** — at or above raw .NET Minimal API.
+- DB reads/writes: **13.8k** single-task, **5.9k** list, **10.7k** comments, **6.2k** creates, **15.7k** `/me`, **4.9k** updates.
+- SWR-cached reads: **39.2k** task detail, **29.9k** list, **35.5k** comments (3.4x–5.6x over uncached).
+- Mixed workload (70% read / 20% list / 10% write): **6,143 req/s**, -2% vs .NET Minimal API (6,242); Hono on Bun is 7,272.
+- Startup **124 ms**, binary **10.4 MB** with `ReptarSqliteOnly=true` (vs 104 MB for the compiled Hono bundle).
+- T7 breakdown after group commit: write gate **2.8 ms avg / 2.0 ms p50** vs insert **0.114 ms p50** — the queue is 10x shorter than before.
+- **Reptar wins 10 of 12 tiers vs .NET Minimal API** (T0 is a tie, T9 is PBKDF2-bound, mixed is -2%). Hono still wins plaintext, single-row reads, lists, login, updates, and the mixed blend.
 
 ## Fairness notes
 

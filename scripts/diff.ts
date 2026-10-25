@@ -51,7 +51,7 @@ export interface MigrationPlan {
 const parseCompilerSchemaJson = (rawJson: string): ParsedTable[] | null => {
   try {
     const parsed = JSON.parse(rawJson) as {
-      tables?: Array<{
+      tables?: {
         name: string;
         primaryKey?: string[];
         indexes?: string[];
@@ -70,7 +70,7 @@ const parseCompilerSchemaJson = (rawJson: string): ParsedTable[] | null => {
           referencesColumn?: string | null;
           onDelete?: string | null;
         }>;
-      }>;
+      }[];
     };
     if (!Array.isArray(parsed.tables)) {
       return null;
@@ -135,7 +135,7 @@ export const loadCompilerTables = (
         });
         if (res.status === 0 && res.stdout) {
           const jsonStart = res.stdout.indexOf("{");
-          if (jsonStart >= 0) {
+          if (jsonStart !== -1) {
             const tables = parseCompilerSchemaJson(res.stdout.slice(jsonStart));
             if (tables && tables.length > 0) {
               return tables;
@@ -328,17 +328,20 @@ export const planMigrations = (
         if (!existingCols.has(col.name.toLowerCase())) {
           let colDef = `"${col.name}" ${col.type}`;
           if (col.notNull) {
-            if (col.defaultSql) colDef += ` NOT NULL DEFAULT ${col.defaultSql}`;
-            else if (col.defaultValue)
+            if (col.defaultSql) {
+              colDef += ` NOT NULL DEFAULT ${col.defaultSql}`;
+            } else if (col.defaultValue) {
               colDef += ` NOT NULL DEFAULT ${col.defaultValue}`;
-            else colDef += ` NOT NULL DEFAULT ''`;
+            } else {
+              colDef += ` NOT NULL DEFAULT ''`;
+            }
           }
           const addColSql = `ALTER TABLE "${targetTable.name}" ADD COLUMN ${colDef};`;
           changes.push({
-            type: "add_column",
-            table: targetTable.name,
             detail: `Add column ${col.name} (${col.type}) to ${targetTable.name}`,
             sql: addColSql,
+            table: targetTable.name,
+            type: "add_column",
           });
         }
       }
@@ -350,20 +353,20 @@ export const planMigrations = (
           const idxName = `${targetTable.name}_${col.name}_uq`;
           if (!existingIdx.has(idxName.toLowerCase())) {
             changes.push({
-              type: "create_index",
-              table: targetTable.name,
               detail: `Create unique index ${idxName}`,
               sql: `CREATE UNIQUE INDEX IF NOT EXISTS "${idxName}" ON "${targetTable.name}"("${col.name}");`,
+              table: targetTable.name,
+              type: "create_index",
             });
           }
         } else if (col.indexed) {
           const idxName = `${targetTable.name}_${col.name}_idx`;
           if (!existingIdx.has(idxName.toLowerCase())) {
             changes.push({
-              type: "create_index",
-              table: targetTable.name,
               detail: `Create index ${idxName}`,
               sql: `CREATE INDEX IF NOT EXISTS "${idxName}" ON "${targetTable.name}"("${col.name}");`,
+              table: targetTable.name,
+              type: "create_index",
             });
           }
         }
@@ -373,11 +376,20 @@ export const planMigrations = (
       const lines: string[] = [];
       for (const col of targetTable.columns) {
         let line = `  "${col.name}" ${col.type}`;
-        if (col.primaryKey) line += " PRIMARY KEY";
-        if (col.notNull && !col.primaryKey) line += " NOT NULL";
-        if (col.unique && !col.primaryKey) line += " UNIQUE";
-        if (col.defaultSql) line += ` DEFAULT ${col.defaultSql}`;
-        else if (col.defaultValue) line += ` DEFAULT ${col.defaultValue}`;
+        if (col.primaryKey) {
+          line += " PRIMARY KEY";
+        }
+        if (col.notNull && !col.primaryKey) {
+          line += " NOT NULL";
+        }
+        if (col.unique && !col.primaryKey) {
+          line += " UNIQUE";
+        }
+        if (col.defaultSql) {
+          line += ` DEFAULT ${col.defaultSql}`;
+        } else if (col.defaultValue) {
+          line += ` DEFAULT ${col.defaultValue}`;
+        }
         if (col.referencesTable) {
           line += ` REFERENCES "${col.referencesTable}"("${col.referencesCol ?? "id"}")`;
         }
@@ -386,10 +398,10 @@ export const planMigrations = (
 
       const createTableSql = `CREATE TABLE IF NOT EXISTS "${targetTable.name}" (\n${lines.join(",\n")}\n);`;
       changes.push({
-        type: "create_table",
-        table: targetTable.name,
         detail: `Create table ${targetTable.name} with ${targetTable.columns.length} columns`,
         sql: createTableSql,
+        table: targetTable.name,
+        type: "create_table",
       });
 
       // Indexes
@@ -397,18 +409,18 @@ export const planMigrations = (
         if (col.unique && !col.primaryKey) {
           const idxName = `${targetTable.name}_${col.name}_uq`;
           changes.push({
-            type: "create_index",
-            table: targetTable.name,
             detail: `Create unique index ${idxName}`,
             sql: `CREATE UNIQUE INDEX IF NOT EXISTS "${idxName}" ON "${targetTable.name}"("${col.name}");`,
+            table: targetTable.name,
+            type: "create_index",
           });
         } else if (col.indexed) {
           const idxName = `${targetTable.name}_${col.name}_idx`;
           changes.push({
-            type: "create_index",
-            table: targetTable.name,
             detail: `Create index ${idxName}`,
             sql: `CREATE INDEX IF NOT EXISTS "${idxName}" ON "${targetTable.name}"("${col.name}");`,
+            table: targetTable.name,
+            type: "create_index",
           });
         }
       }

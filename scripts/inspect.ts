@@ -346,29 +346,61 @@ export const inspectProject = (
   };
 };
 
+export const versionAtLeast = (actual: string, required: string): boolean => {
+  const left = actual.split(".").map(Number);
+  const right = required.split(".").map(Number);
+  const length = Math.max(left.length, right.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const a = left[index] ?? 0;
+    const b = right[index] ?? 0;
+    if (a !== b) {
+      return a > b;
+    }
+  }
+
+  return true;
+};
+
 export const doctorProject = (
   repoRoot: string,
   cwd: string = process.cwd()
 ): ReptarDoctorReport => {
   const checks: CheckItem[] = [];
 
-  // Check 1: .NET SDK
+  // Check 1: .NET SDK — prefer the portable SDK Reptar installs under
+  // .reptar/sdk, then DOTNET_ROOT, then anything on PATH.
+  const requiredSdk = "10.0.401";
   let sdkPassed = false;
   let sdkVersion = "not found";
+  let sdkSource = "PATH";
   try {
-    const dotnetRes = spawnSync("dotnet", ["--version"], { encoding: "utf-8" });
-    if (dotnetRes.status === 0) {
-      sdkVersion = dotnetRes.stdout.trim();
-      const major = Number.parseInt(sdkVersion.split(".")[0] ?? "0", 10);
-      sdkPassed = major >= 10;
+    const portable = path.join(repoRoot, ".reptar", "sdk", "dotnet");
+    const candidates = [
+      ...(existsSync(portable) ? [portable] : []),
+      ...(process.env.DOTNET_ROOT
+        ? [path.join(process.env.DOTNET_ROOT, "dotnet")]
+        : []),
+      "dotnet",
+    ];
+    for (const candidate of candidates) {
+      const dotnetRes = spawnSync(candidate, ["--version"], {
+        encoding: "utf-8",
+      });
+      if (dotnetRes.status === 0) {
+        sdkVersion = dotnetRes.stdout.trim();
+        sdkPassed = versionAtLeast(sdkVersion, requiredSdk);
+        sdkSource = candidate === "dotnet" ? "PATH" : candidate;
+        break;
+      }
     }
   } catch {}
 
   checks.push({
     advice: sdkPassed
       ? undefined
-      : "Run 'bun reptar' to automatically install the portable SDK into .reptar/sdk",
-    details: `Installed version: ${sdkVersion} (required: >= 10.0.401)`,
+      : "Run 'bun reptar <build-command>' to automatically install the portable SDK into .reptar/sdk",
+    details: `Installed version: ${sdkVersion} via ${sdkSource} (required: >= ${requiredSdk})`,
     name: "dotnet_sdk",
     passed: sdkPassed,
     title: ".NET 10 SDK Toolchain",
