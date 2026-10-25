@@ -148,6 +148,24 @@ A separate Cloudflare Workers + D1 deployment was also verified with the same Hu
 
 The Native AOT run surfaced and fixed AOT-unsafe anonymous parameter binding and reflection-only row mapping. `QueryMappedAsync` is now the AOT-safe row-mapping path, and `SqliteDbClient` binds deletes/gets with dictionaries.
 
+## Calibrated Benchmark (Reptar vs .NET Minimal API vs Hono)
+
+`bench/` contains a calibrated three-stack benchmark: the same multi-tenant
+issue-tracker API implemented in Reptar Native AOT, .NET 10 Minimal API Native
+AOT, and Hono on Bun. It runs a complexity ladder from plaintext and JSON
+through routing, validation, database reads/writes, JWT auth, and PBKDF2 login,
+so the report separates framework overhead from database I/O.
+
+```bash
+bun bench:seed                       # deterministic 50k-task SQLite database
+bun bench:load --base-url ...        # per-endpoint oha suite
+bun bench:mixed --base-url ...       # weighted realistic mix
+bun bench:report bench/results/<dir> # Markdown comparison report
+```
+
+See [bench/README.md](./bench/README.md) for the schema, tiers, fairness rules,
+VPS build/run scripts, and known AOT caveats.
+
 ## Production Deployment
 
 ### 1. Cloudflare Workers (Edge Serverless)

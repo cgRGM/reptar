@@ -1,0 +1,13 @@
+{
+  "name": "reptar-bench-hono",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run src/index.ts"
+  },
+  "dependencies": {
+    "@hono/zod-validator": "^0.9.1",
+    "hono": "^4.13.13",
+    "zod": "^4.6.7"
+  }
+}

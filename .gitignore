@@ -65,6 +65,9 @@ temp
 *.db-shm
 *.db-wal
 
+# Benchmark build artifacts
+bench/out/
+
 # Cloudflare local state
 .wrangler/
 spikes/**/.wrangler/
