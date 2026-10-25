@@ -2,13 +2,70 @@ import { randomBytes } from "node:crypto";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   statSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
+
+export const REPTAR_AGENTS_START = "<!-- reptar:agents:start -->";
+export const REPTAR_AGENTS_END = "<!-- reptar:agents:end -->";
+
+export const REPTAR_AGENTS_BLOCK = `${REPTAR_AGENTS_START}
+## Reptar Framework Context
+- Guidelines & C# routing/query patterns: \`node_modules/@reptar/client/AGENTS.md\`
+- Agent skill instructions: \`node_modules/@reptar/client/skills/reptar/SKILL.md\`
+- Inspect active schema, tables, and routes: \`bun reptar inspect --json\` or MCP server (\`bun reptar mcp\`)
+- When modifying C# endpoints or schemas: run \`bun reptar codegen\` and \`bun reptar db plan\`
+${REPTAR_AGENTS_END}`;
+
+export const upsertReptarAgentsContext = (projectDir: string): void => {
+  const agentsPath = path.join(projectDir, "AGENTS.md");
+  if (existsSync(agentsPath)) {
+    const existing = readFileSync(agentsPath, "utf-8");
+    const startIdx = existing.indexOf(REPTAR_AGENTS_START);
+    const endIdx = existing.indexOf(REPTAR_AGENTS_END);
+
+    if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+      const updated =
+        existing.slice(0, startIdx) +
+        REPTAR_AGENTS_BLOCK +
+        existing.slice(endIdx + REPTAR_AGENTS_END.length);
+      writeFileSync(agentsPath, updated, "utf-8");
+    } else {
+      const separator = existing.endsWith("\n") ? "\n" : "\n\n";
+      writeFileSync(
+        agentsPath,
+        `${existing}${separator}${REPTAR_AGENTS_BLOCK}\n`,
+        "utf-8"
+      );
+    }
+  } else {
+    writeFileSync(agentsPath, `${REPTAR_AGENTS_BLOCK}\n`, "utf-8");
+  }
+
+  const agentsSkillsDir = path.join(projectDir, ".agents/skills");
+  if (existsSync(agentsSkillsDir)) {
+    const symlinkPath = path.join(agentsSkillsDir, "reptar");
+    const targetRel = "../../node_modules/@reptar/client/skills/reptar";
+    try {
+      try {
+        const st = lstatSync(symlinkPath);
+        if (st.isSymbolicLink()) {
+          unlinkSync(symlinkPath);
+        }
+      } catch {}
+      if (!existsSync(symlinkPath)) {
+        symlinkSync(targetRel, symlinkPath, "dir");
+      }
+    } catch {}
+  }
+};
 
 export interface ScaffoldOptions {
   projectName: string;
@@ -130,4 +187,6 @@ export const scaffoldProject = (options: ScaffoldOptions): void => {
     );
     writeFileSync(apiEnv, envContent, "utf-8");
   }
+
+  upsertReptarAgentsContext(options.targetDir);
 };

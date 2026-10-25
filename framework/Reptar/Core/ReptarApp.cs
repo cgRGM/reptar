@@ -146,6 +146,8 @@ public sealed class ReptarApp
 
     public void RegisterSchema(params TableDef[] tables) => Tables.AddRange(tables);
 
+    public string ExportSchemaJson() => SchemaRegistry.ExportJson(Tables);
+
     public IDbClient Db => Services.Db;
     public IDbClient Database => Services.Db;
 

@@ -59,12 +59,34 @@ public sealed class ColumnDef
     public bool IsIndexed { get; internal set; }
 }
 
+public static class SchemaRegistry
+{
+    private static readonly List<TableDef> _tables = new();
+
+    public static IReadOnlyList<TableDef> All => _tables;
+
+    public static TableDef Register(TableDef table)
+    {
+        for (var i = 0; i < _tables.Count; i++)
+        {
+            if (string.Equals(_tables[i].Name, table.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                _tables[i] = table;
+                return table;
+            }
+        }
+        _tables.Add(table);
+        return table;
+    }
+}
+
 public sealed class TableDef
 {
     public TableDef(string name, ColumnDef[] columns)
     {
         Name = name;
         Columns = columns;
+        SchemaRegistry.Register(this);
     }
 
     public TableDef(string name, params ColumnBuilder[] builders)
@@ -76,6 +98,7 @@ public sealed class TableDef
             cols[i] = builders[i].Build();
         }
         Columns = cols;
+        SchemaRegistry.Register(this);
     }
 
     public string Name { get; }

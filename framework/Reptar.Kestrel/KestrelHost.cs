@@ -11,13 +11,33 @@ public static class KestrelHost
 {
     public static async Task RunAsync(this ReptarApp app, string[]? args = null)
     {
-        if (args is { Length: > 0 } &&
-            (string.Equals(args[0], "db", StringComparison.OrdinalIgnoreCase) ||
-             string.Equals(args[0], "--db", StringComparison.OrdinalIgnoreCase)))
+        if (args is { Length: > 0 })
         {
-            var exitCode = await app.RunMigrationCliAsync(args);
-            Environment.ExitCode = exitCode;
-            return;
+            if (args.Contains("--schema", StringComparer.OrdinalIgnoreCase))
+            {
+                var outIdx = Array.IndexOf(args, "--out");
+                if (outIdx >= 0 && outIdx + 1 < args.Length)
+                {
+                    var outPath = Path.GetFullPath(args[outIdx + 1]);
+                    var dir = Path.GetDirectoryName(outPath);
+                    if (!string.IsNullOrEmpty(dir))
+                        Directory.CreateDirectory(dir);
+                    File.WriteAllText(outPath, app.ExportSchemaJson());
+                }
+                else
+                {
+                    Console.WriteLine(app.ExportSchemaJson());
+                }
+                return;
+            }
+
+            if (string.Equals(args[0], "db", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(args[0], "--db", StringComparison.OrdinalIgnoreCase))
+            {
+                var exitCode = await app.RunMigrationCliAsync(args);
+                Environment.ExitCode = exitCode;
+                return;
+            }
         }
 
         var builder = WebApplication.CreateSlimBuilder(args ?? []);
@@ -292,7 +312,7 @@ public static class KestrelHost
         return (memory.ToArray(), false);
     }
 
-    private static async Task<ReptarRequest> ToReptarRequest(HttpContext http, long maxBodyBytes)
+    private static async Task<ReptarRequest> ToReptarRequest(HttpContext http, long maxBodyBytes = 0)
     {
         var (body, bodyTooLarge) = await ReadBodyAsync(
             http.Request.BodyReader,

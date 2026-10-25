@@ -29,6 +29,12 @@ app.Use(Cors("http://localhost:4321", "http://localhost:5173", "http://localhost
 
 Blog.Configure(app);
 
+if (args.Contains("--schema", StringComparer.OrdinalIgnoreCase))
+{
+    Console.WriteLine(app.ExportSchemaJson());
+    return;
+}
+
 if (args.Contains("--codegen"))
 {
     var outputIndex = Array.IndexOf(args, "--out");

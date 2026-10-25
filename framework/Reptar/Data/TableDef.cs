@@ -72,12 +72,175 @@ public sealed class ColumnDef
     public bool IsIndexed { get; internal set; }
 }
 
+public static class SchemaRegistry
+{
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, TableDef> _tables =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly List<string> _order = new();
+    private static readonly object _sync = new();
+
+    public static IReadOnlyList<TableDef> All
+    {
+        get
+        {
+            lock (_sync)
+            {
+                var list = new List<TableDef>(_order.Count);
+                foreach (var name in _order)
+                {
+                    if (_tables.TryGetValue(name, out var table))
+                        list.Add(table);
+                }
+                return list;
+            }
+        }
+    }
+
+    public static TableDef Register(TableDef table)
+    {
+        lock (_sync)
+        {
+            if (!_tables.ContainsKey(table.Name))
+                _order.Add(table.Name);
+            _tables[table.Name] = table;
+        }
+        return table;
+    }
+
+    public static string ExportJson(IEnumerable<TableDef>? appTables = null)
+    {
+        var merged = new Dictionary<string, TableDef>(StringComparer.OrdinalIgnoreCase);
+        var names = new List<string>();
+
+        if (appTables is not null)
+        {
+            foreach (var t in appTables)
+            {
+                if (merged.TryAdd(t.Name, t))
+                    names.Add(t.Name);
+            }
+        }
+
+        foreach (var t in All)
+        {
+            if (merged.TryAdd(t.Name, t))
+                names.Add(t.Name);
+        }
+
+        using var stream = new MemoryStream();
+        using (var writer = new System.Text.Json.Utf8JsonWriter(stream, new System.Text.Json.JsonWriterOptions { Indented = true }))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartArray("tables");
+
+            foreach (var name in names)
+            {
+                var table = merged[name];
+                writer.WriteStartObject();
+                writer.WriteString("name", table.Name);
+
+                writer.WriteStartArray("primaryKey");
+                if (table.PrimaryKeySql.Length > 0)
+                {
+                    foreach (var pk in table.PrimaryKeySql)
+                        writer.WriteStringValue(pk);
+                }
+                else
+                {
+                    foreach (var col in table.Columns)
+                    {
+                        if (col.IsPrimaryKey)
+                            writer.WriteStringValue(col.SqlName);
+                    }
+                }
+                writer.WriteEndArray();
+
+                writer.WriteStartArray("columns");
+                foreach (var col in table.Columns)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteString("name", col.SqlName);
+                    writer.WriteString("clrName", col.ClrName);
+                    writer.WriteString("type", col.SqlType);
+                    writer.WriteString("clrType", MapSqlToClrTypeName(col.SqlType));
+                    writer.WriteBoolean("primaryKey", col.IsPrimaryKey || table.PrimaryKeySql.Contains(col.SqlName, StringComparer.OrdinalIgnoreCase));
+                    writer.WriteBoolean("notNull", col.IsNotNull || col.IsPrimaryKey);
+                    writer.WriteBoolean("unique", col.IsUnique);
+                    writer.WriteBoolean("indexed", col.IsIndexed);
+
+                    if (col.DefaultValue is null)
+                        writer.WriteNull("defaultValue");
+                    else
+                        writer.WriteString("defaultValue", FormatDefaultLiteral(col.DefaultValue));
+
+                    if (col.DefaultSql is null)
+                        writer.WriteNull("defaultSql");
+                    else
+                        writer.WriteString("defaultSql", col.DefaultSql);
+
+                    if (col.ReferencesTable is null)
+                        writer.WriteNull("referencesTable");
+                    else
+                        writer.WriteString("referencesTable", col.ReferencesTable);
+
+                    if (col.ReferencesColumn is null)
+                        writer.WriteNull("referencesColumn");
+                    else
+                        writer.WriteString("referencesColumn", col.ReferencesColumn);
+
+                    if (col.OnDelete is null)
+                        writer.WriteNull("onDelete");
+                    else
+                        writer.WriteString("onDelete", col.OnDelete);
+
+                    writer.WriteEndObject();
+                }
+                writer.WriteEndArray();
+
+                writer.WriteStartArray("indexes");
+                foreach (var col in table.Columns)
+                {
+                    if (col.IsUnique && !col.IsPrimaryKey)
+                        writer.WriteStringValue($"{table.Name}_{col.SqlName}_uq");
+                    if (col.IsIndexed && !col.IsUnique)
+                        writer.WriteStringValue($"{table.Name}_{col.SqlName}_idx");
+                }
+                writer.WriteEndArray();
+
+                writer.WriteEndObject();
+            }
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private static string MapSqlToClrTypeName(string sqlType) =>
+        sqlType.ToUpperInvariant() switch
+        {
+            "INTEGER" or "INT" => "int",
+            "REAL" or "DOUBLE" or "FLOAT" => "double",
+            "BLOB" => "byte[]",
+            _ => "string"
+        };
+
+    private static string FormatDefaultLiteral(object value) => value switch
+    {
+        string text => $"'{text.Replace("'", "''")}'",
+        bool flag => flag ? "1" : "0",
+        _ => value.ToString() ?? "NULL"
+    };
+}
+
 public sealed class TableDef
 {
     private TableDef(string name, ColumnDef[] columns)
     {
         Name = name;
         Columns = columns;
+        SchemaRegistry.Register(this);
     }
 
     public string Name { get; }

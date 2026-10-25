@@ -1,0 +1,187 @@
+# Reptar Framework: Canonical LLM & Agent Reference
+
+Reptar is a high-performance, single-binary C# 13 web framework engineered for Native AOT and NetWasm (Cloudflare Workers). It features zero runtime reflection, compile-time validation, automatic OpenAPI / TypeScript codegen, native AI tool dispatch, and a lightweight typed query layer.
+
+---
+
+## 1. Machine-Readable Agent Commands & MCP Server
+
+Before writing code or assuming database schema, query the framework's machine-readable state:
+
+- `bun reptar inspect --json`: Complete project schema, active database dialect, tables, columns, indexes, routes, and migrations.
+- `bun reptar doctor --json`: Diagnoses SDK toolchain (>= 10.0.401), Bun runtime, database connectivity, and RPC status.
+- `bun reptar db plan --json`: Diffs C# `TableDef` schemas against the active database and returns planned SQL.
+- `bun reptar db generate [--name <name>]`: Generates a timestamped `.sql` migration from planned changes.
+- `bun reptar db migrate`: Applies all pending SQL migrations to the database.
+- `bun reptar codegen`: Regenerates `@reptar/client` TypeScript RPC contracts from the C# route tree.
+- `bun reptar mcp`: Launches the Model Context Protocol stdio server exposing `reptar_inspect`, `reptar_schema`, `reptar_routes`, `reptar_db_status`, `reptar_db_plan`, `reptar_check`, and `reptar_doctor`.
+
+---
+
+## 2. Defining Schemas and Typed Column Tokens
+
+Reptar separates storage schema definitions (`TableDef`) from projection DTOs (`record`). Never use heavy attribute-laden records for DDL.
+
+### Schema Definition (`schema/posts.cs`):
+```csharp
+using Reptar;
+using static Reptar.ReptarApi;
+
+public static partial class Schema
+{
+    public static readonly TableDef Posts = DefineTable("posts",
+        Col.Text("id").PrimaryKey(),
+        Col.Text("author_id").NotNull().Indexed(),
+        Col.Text("slug").NotNull().Unique(),
+        Col.Text("title").NotNull(),
+        Col.Text("content").NotNull(),
+        Col.Int("published").NotNull().Default(1),
+        Col.Text("created_at").NotNull().DefaultSql("CURRENT_TIMESTAMP")
+    );
+    // ReptarTableGenerator automatically emits Schema.PostsCols.Id, Schema.PostsCols.Slug, etc.
+    // (or directly Users.Email when the field is named `Table` on `public static partial class Users`).
+}
+```
+
+### Projection DTO:
+```csharp
+[ReptarEntity("posts")]
+public partial record PostDto(
+    string Id,
+    string AuthorId,
+    string Slug,
+    string Title,
+    string Content,
+    int Published,
+    string CreatedAt
+);
+```
+
+---
+
+## 3. Querying the Database
+
+### Type-Safe Filter Queries:
+```csharp
+// 1. List with filter, order by, and limit using Roslyn-generated ColumnRef<T> tokens
+var activePosts = await ctx.Db.ListAsync<PostDto>(
+    Schema.Posts,
+    Schema.PostsCols.Published.Eq(1) & Schema.PostsCols.AuthorId.Eq(authorId),
+    orderBy: Schema.PostsCols.CreatedAt.Desc(),
+    limit: 20
+);
+
+// 2. Fluent TableQuery
+var post = await ctx.Db.From<PostDto>(Schema.Posts)
+    .Where(Schema.PostsCols.Slug.Eq("my-slug") & Schema.PostsCols.Published.Eq(1))
+    .FirstOrDefaultAsync();
+
+// 3. Count and Exists
+var count = await ctx.Db.CountAsync(Schema.Posts, Schema.PostsCols.Published.Eq(1));
+var exists = await ctx.Db.From<PostDto>(Schema.Posts)
+    .Where(Schema.PostsCols.Slug.Eq("my-slug"))
+    .ExistsAsync();
+
+// 4. Delete Where
+var deleted = await ctx.Db.DeleteWhereAsync(
+    Schema.Posts,
+    Schema.PostsCols.Id.Eq("post_123")
+);
+```
+
+### Available ColumnRef Filter Methods:
+- `.Eq(value)`, `.NotEq(value)`
+- `.Gt(value)`, `.Gte(value)`, `.Lt(value)`, `.Lte(value)`
+- `.Like(pattern)` (e.g. `"%word%"`)
+- `.In(values)`, `.NotIn(values)`
+- `.IsNull()`, `.IsNotNull()`
+- Combinators: `filterA & filterB`, `filterA | filterB`, `!filter`
+- OrderBy: `column.Asc()`, `column.Desc()`
+
+### Raw SQL (First-Class Escape Hatch):
+When complex joins or CTEs are required, raw SQL remains fully supported:
+```csharp
+var rows = await ctx.Db.QueryAsync<PostDto>(
+    "SELECT p.* FROM posts p JOIN users u ON p.author_id = u.id WHERE u.email = @email ORDER BY p.created_at DESC LIMIT 20",
+    ("email", userEmail)
+);
+```
+
+---
+
+## 4. Route Handlers & Validation
+
+```csharp
+var app = ReptarApp.Create();
+
+// Synchronous JSON response
+app.Get("/api/health", ctx => ctx.Json(new { ok = true, timestamp = DateTime.UtcNow }));
+
+// Asynchronous handler with URL parameter
+app.Get("/api/posts/{slug}", async ctx =>
+{
+    var slug = ctx.Param("slug");
+    var post = await ctx.Db.From<PostDto>(Schema.Posts)
+        .Where(Schema.PostSlug.Eq(slug))
+        .FirstOrDefaultAsync();
+
+    return post is null
+        ? ctx.Status(404).Json(new { error = "Post not found" })
+        : ctx.Json(post);
+});
+
+// Validated POST request
+var createPostValidator = ReptarApi.Rule<CreatePostInput>()
+    .Prop(x => x.Title, r => r.NotNull().Min(3).Max(120))
+    .Prop(x => x.Content, r => r.NotNull().Min(10));
+
+app.Post("/api/posts", createPostValidator, async (ctx, input) =>
+{
+    var user = ctx.User!;
+    var id = Guid.NewGuid().ToString("n");
+    var slug = input.Title.ToLowerInvariant().Replace(' ', '-');
+
+    await ctx.Db.InsertAsync(Schema.Posts, new
+    {
+        Id = id,
+        AuthorId = user.Id,
+        Slug = slug,
+        Title = input.Title,
+        Content = input.Content,
+        Published = 1
+    });
+
+    return ctx.Status(201).Json(new { id, slug });
+}).AsAiTool("create_post", "Create and publish a new blog post");
+```
+
+---
+
+## 5. AI Tool Bridge & LLM Streaming
+
+Any Reptar route marked with `.AsAiTool(name, description)` automatically exports to OpenAI, Anthropic, and Gemini tool schemas without schema duplication:
+
+```csharp
+// Export tools as JSON schema:
+app.MapAiTools("/api/ai/tools"); // Returns OpenAI/Anthropic/Gemini compatible JSON
+
+// In-process tool execution (no extra network hop):
+var toolResult = await app.ExecuteAiToolAsync("create_post", argumentsJson, ctx);
+
+// Token streaming with cancellation (stops LLM generation when client disconnects):
+app.Post("/api/chat", async ctx =>
+{
+    IAsyncEnumerable<string> tokenStream = CallUpstreamLlmAsync(ctx.RequestAborted);
+    return await ctx.StreamLlmAsync(tokenStream);
+});
+```
+
+---
+
+## 6. Strict Agent Conventions
+
+1. **Check Before Assuming**: Always run `bun reptar inspect --json` or use `reptar_schema` to verify existing tables, columns, and routes.
+2. **Never Use Runtime Reflection**: Keep everything Native AOT and NetWasm compliant.
+3. **No Attribute Salad DDL**: Do not attach `[PrimaryKey]` or `[Unique]` attributes to DTO records. Use `TableDef` in `schema/`.
+4. **Always Use ColumnRef Over Strings**: Avoid `ctx.Db.ListAsync<T>(table, "where col = @val")` when `table.Col<T>("col").Eq(...)` is available.
+5. **Keep Raw SQL Available**: Never remove raw SQL escape hatches (`QueryAsync`, `ExecuteAsync`).

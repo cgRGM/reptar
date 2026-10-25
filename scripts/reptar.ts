@@ -15,6 +15,7 @@ import {
 import path from "node:path";
 
 import { patchNetWasmHost } from "../packages/host/src/patch";
+import { upsertReptarAgentsContext } from "../packages/create-reptar/src/scaffold";
 import { planMigrations, generateMigrationFile } from "./diff";
 import { inspectProject, doctorProject } from "./inspect";
 import { runMcpServer } from "./mcp";
@@ -169,6 +170,18 @@ const syncRpcContracts = (): void => {
     path.join(generated, "openapi.json"),
     path.join(repoRoot, "packages/rpc/openapi.json")
   );
+  if (existsSync(path.join(generated, "schema.json"))) {
+    copyFileSync(
+      path.join(generated, "schema.json"),
+      path.join(repoRoot, "packages/rpc/schema.json")
+    );
+  }
+  if (existsSync(path.join(repoRoot, "llms.txt"))) {
+    copyFileSync(
+      path.join(repoRoot, "llms.txt"),
+      path.join(repoRoot, "packages/rpc/llms.txt")
+    );
+  }
 };
 
 const [command, ...rest] = process.argv.slice(2);
@@ -454,7 +467,16 @@ if (command === "inspect") {
   process.exit(0);
 }
 
+if (command === "init") {
+  upsertReptarAgentsContext(process.cwd());
+  console.log("✓ Updated Reptar managed context block in AGENTS.md");
+  process.exit(0);
+}
+
 if (command === "doctor") {
+  if (rest.includes("--fix")) {
+    upsertReptarAgentsContext(process.cwd());
+  }
   const isJson = rest.includes("--json");
   const report = doctorProject(repoRoot, process.cwd());
   if (isJson) {

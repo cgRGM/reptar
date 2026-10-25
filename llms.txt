@@ -27,7 +27,7 @@ Reptar separates storage schema definitions (`TableDef`) from projection DTOs (`
 using Reptar;
 using static Reptar.ReptarApi;
 
-public static class Schema
+public static partial class Schema
 {
     public static readonly TableDef Posts = DefineTable("posts",
         Col.Text("id").PrimaryKey(),
@@ -38,21 +38,15 @@ public static class Schema
         Col.Int("published").NotNull().Default(1),
         Col.Text("created_at").NotNull().DefaultSql("CURRENT_TIMESTAMP")
     );
-
-    // Static ColumnRef tokens prevent string typos and enforce compile-time type safety
-    public static readonly ColumnRef<string> PostId = Posts.Col<string>("id");
-    public static readonly ColumnRef<string> PostAuthorId = Posts.Col<string>("author_id");
-    public static readonly ColumnRef<string> PostSlug = Posts.Col<string>("slug");
-    public static readonly ColumnRef<string> PostTitle = Posts.Col<string>("title");
-    public static readonly ColumnRef<int> PostPublished = Posts.Col<int>("published");
-    public static readonly ColumnRef<string> PostCreatedAt = Posts.Col<string>("created_at");
+    // ReptarTableGenerator automatically emits Schema.PostsCols.Id, Schema.PostsCols.Slug, etc.
+    // (or directly Users.Email when the field is named `Table` on `public static partial class Users`).
 }
 ```
 
 ### Projection DTO:
 ```csharp
-[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.PublicProperties)]
-public sealed record PostDto(
+[ReptarEntity("posts")]
+public partial record PostDto(
     string Id,
     string AuthorId,
     string Slug,
@@ -69,29 +63,29 @@ public sealed record PostDto(
 
 ### Type-Safe Filter Queries:
 ```csharp
-// 1. List with filter, order by, and limit
+// 1. List with filter, order by, and limit using Roslyn-generated ColumnRef<T> tokens
 var activePosts = await ctx.Db.ListAsync<PostDto>(
     Schema.Posts,
-    Schema.PostPublished.Eq(1) & Schema.PostAuthorId.Eq(authorId),
-    orderBy: Schema.PostCreatedAt.Desc(),
+    Schema.PostsCols.Published.Eq(1) & Schema.PostsCols.AuthorId.Eq(authorId),
+    orderBy: Schema.PostsCols.CreatedAt.Desc(),
     limit: 20
 );
 
 // 2. Fluent TableQuery
 var post = await ctx.Db.From<PostDto>(Schema.Posts)
-    .Where(Schema.PostSlug.Eq("my-slug") & Schema.PostPublished.Eq(1))
+    .Where(Schema.PostsCols.Slug.Eq("my-slug") & Schema.PostsCols.Published.Eq(1))
     .FirstOrDefaultAsync();
 
 // 3. Count and Exists
-var count = await ctx.Db.CountAsync(Schema.Posts, Schema.PostPublished.Eq(1));
+var count = await ctx.Db.CountAsync(Schema.Posts, Schema.PostsCols.Published.Eq(1));
 var exists = await ctx.Db.From<PostDto>(Schema.Posts)
-    .Where(Schema.PostSlug.Eq("my-slug"))
+    .Where(Schema.PostsCols.Slug.Eq("my-slug"))
     .ExistsAsync();
 
 // 4. Delete Where
 var deleted = await ctx.Db.DeleteWhereAsync(
     Schema.Posts,
-    Schema.PostId.Eq("post_123")
+    Schema.PostsCols.Id.Eq("post_123")
 );
 ```
 

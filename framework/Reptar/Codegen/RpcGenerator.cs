@@ -41,6 +41,10 @@ public static class RpcGenerator
         File.WriteAllText(
             Path.Combine(outputDirectory, "openapi.json"),
             OpenApiEmitter.Emit(routes, index));
+
+        File.WriteAllText(
+            Path.Combine(outputDirectory, "schema.json"),
+            app.ExportSchemaJson());
     }
 }
 

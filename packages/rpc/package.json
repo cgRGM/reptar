@@ -2,6 +2,12 @@
   "name": "@reptar/client",
   "version": "0.1.0",
   "private": true,
+  "files": [
+    "src",
+    "AGENTS.md",
+    "llms.txt",
+    "skills"
+  ],
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",

@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -12,20 +13,25 @@ import { inspectProject, resolveDbPath, resolveMigrationsDir } from "./inspect";
 
 export interface ParsedColumn {
   name: string;
+  clrName?: string;
   type: string;
+  clrType?: string;
   primaryKey: boolean;
   notNull: boolean;
   unique: boolean;
   indexed: boolean;
-  defaultValue?: string;
-  defaultSql?: string;
-  referencesTable?: string;
-  referencesCol?: string;
+  defaultValue?: string | null;
+  defaultSql?: string | null;
+  referencesTable?: string | null;
+  referencesCol?: string | null;
+  onDelete?: string | null;
 }
 
 export interface ParsedTable {
   name: string;
+  primaryKey?: string[];
   columns: ParsedColumn[];
+  indexes?: string[];
 }
 
 export interface SchemaChange {
@@ -37,9 +43,111 @@ export interface SchemaChange {
 
 export interface MigrationPlan {
   status: "in_sync" | "drift_detected";
+  source: "compiler" | "regex_fallback";
   changes: SchemaChange[];
   sql: string;
 }
+
+const parseCompilerSchemaJson = (rawJson: string): ParsedTable[] | null => {
+  try {
+    const parsed = JSON.parse(rawJson) as {
+      tables?: Array<{
+        name: string;
+        primaryKey?: string[];
+        indexes?: string[];
+        columns: Array<{
+          name: string;
+          clrName?: string;
+          type: string;
+          clrType?: string;
+          primaryKey: boolean;
+          notNull: boolean;
+          unique: boolean;
+          indexed: boolean;
+          defaultValue?: string | null;
+          defaultSql?: string | null;
+          referencesTable?: string | null;
+          referencesColumn?: string | null;
+          onDelete?: string | null;
+        }>;
+      }>;
+    };
+    if (!Array.isArray(parsed.tables)) {
+      return null;
+    }
+    return parsed.tables.map((t) => ({
+      columns: t.columns.map((c) => ({
+        clrName: c.clrName,
+        clrType: c.clrType,
+        defaultSql: c.defaultSql ?? undefined,
+        defaultValue: c.defaultValue ?? undefined,
+        indexed: Boolean(c.indexed),
+        name: c.name,
+        notNull: Boolean(c.notNull),
+        onDelete: c.onDelete ?? undefined,
+        primaryKey: Boolean(c.primaryKey),
+        referencesCol: c.referencesColumn ?? undefined,
+        referencesTable: c.referencesTable ?? undefined,
+        type: c.type || "TEXT",
+        unique: Boolean(c.unique),
+      })),
+      indexes: t.indexes ?? [],
+      name: t.name,
+      primaryKey: t.primaryKey ?? [],
+    }));
+  } catch {
+    return null;
+  }
+};
+
+export const loadCompilerTables = (
+  repoRoot: string,
+  cwd: string
+): ParsedTable[] | null => {
+  const schemaCandidates = [
+    path.join(cwd, "rpc/schema.json"),
+    path.join(cwd, "schema.json"),
+    path.join(repoRoot, "packages/rpc/schema.json"),
+    path.join(repoRoot, "examples/blog/rpc/schema.json"),
+  ];
+
+  for (const candidate of schemaCandidates) {
+    if (existsSync(candidate)) {
+      const tables = parseCompilerSchemaJson(readFileSync(candidate, "utf-8"));
+      if (tables && tables.length > 0) {
+        return tables;
+      }
+    }
+  }
+
+  // Try invoking the app with --schema if app.cs exists
+  const appCandidates = [
+    path.join(cwd, "app.cs"),
+    path.join(repoRoot, "examples/blog/app.cs"),
+  ];
+  for (const appCs of appCandidates) {
+    if (existsSync(appCs)) {
+      try {
+        const res = spawnSync("dotnet", ["run", appCs, "--", "--schema"], {
+          cwd: path.dirname(appCs),
+          encoding: "utf-8",
+          timeout: 15_000,
+        });
+        if (res.status === 0 && res.stdout) {
+          const jsonStart = res.stdout.indexOf("{");
+          if (jsonStart >= 0) {
+            const tables = parseCompilerSchemaJson(res.stdout.slice(jsonStart));
+            if (tables && tables.length > 0) {
+              return tables;
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+
+  return null;
+};
 
 const findCsFiles = (dir: string): string[] => {
   if (!existsSync(dir)) {
@@ -148,10 +256,15 @@ export const parseTableDefinitionsFromCs = (
   return tables;
 };
 
-export const discoverProjectTables = (
+export const discoverProjectTablesWithSource = (
   repoRoot: string,
   cwd: string
-): ParsedTable[] => {
+): { tables: ParsedTable[]; source: "compiler" | "regex_fallback" } => {
+  const compilerTables = loadCompilerTables(repoRoot, cwd);
+  if (compilerTables && compilerTables.length > 0) {
+    return { source: "compiler", tables: compilerTables };
+  }
+
   const searchDirs = [
     path.join(cwd, "schema"),
     path.join(cwd, "features"),
@@ -177,8 +290,13 @@ export const discoverProjectTables = (
     }
   }
 
-  return [...seenTables.values()];
+  return { source: "regex_fallback", tables: [...seenTables.values()] };
 };
+
+export const discoverProjectTables = (
+  repoRoot: string,
+  cwd: string
+): ParsedTable[] => discoverProjectTablesWithSource(repoRoot, cwd).tables;
 
 export const planMigrations = (
   repoRoot: string,
@@ -187,11 +305,14 @@ export const planMigrations = (
 ): MigrationPlan => {
   const dbPath = resolveDbPath(repoRoot, cwd, options?.dbPath);
   const inspection = inspectProject(repoRoot, cwd, options);
-  const codeTables = discoverProjectTables(repoRoot, cwd);
+  const { tables: codeTables, source } = discoverProjectTablesWithSource(
+    repoRoot,
+    cwd
+  );
 
   const changes: SchemaChange[] = [];
   const existingTableMap = new Map<string, (typeof inspection.tables)[0]>();
-  for (const t of inspection.tables) {
+  for (const t of inspection.databaseTables ?? inspection.tables) {
     existingTableMap.set(t.name.toLowerCase(), t);
   }
 
@@ -297,6 +418,7 @@ export const planMigrations = (
   const sql = changes.map((c) => c.sql).join("\n\n");
   return {
     changes,
+    source,
     sql,
     status: changes.length > 0 ? "drift_detected" : "in_sync",
   };

@@ -4,6 +4,15 @@ using Xunit;
 
 namespace Reptar.Tests;
 
+public static partial class GeneratedUsers
+{
+    public static readonly TableDef Table = ReptarApi.DefineTable("gen_users",
+        ReptarApi.Col.Text("id").PrimaryKey(),
+        ReptarApi.Col.Text("email").NotNull().Unique(),
+        ReptarApi.Col.Int("active").NotNull().Default(1),
+        ReptarApi.Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP"));
+}
+
 public sealed class ColumnRefTests
 {
     private static readonly TableDef TestUsers = ReptarApi.DefineTable("test_users",
@@ -120,5 +129,30 @@ public sealed class ColumnRefTests
         Assert.Equal(1, deleted);
         var remainingCount = await db.CountAsync(TestUsers);
         Assert.Equal(2, remainingCount);
+    }
+
+    [Fact]
+    public void Roslyn_Generates_ColumnRef_Tokens_And_Exports_SchemaJson()
+    {
+        // 1. Generated static ColumnRef<T> tokens on partial table class (GeneratedUsers.Email, GeneratedUsers.CreatedAt)
+        var filter = GeneratedUsers.Email.Eq("dev@reptar.dev") & GeneratedUsers.Active.Eq(1);
+        var (whereSql, parameters) = filter.ToWhereClause();
+        Assert.Equal("WHERE (\"gen_users\".\"email\" = @p0 AND \"gen_users\".\"active\" = @p1)", whereSql);
+        Assert.Equal("dev@reptar.dev", parameters["p0"]);
+        Assert.Equal(1, parameters["p1"]);
+        Assert.Equal("\"gen_users\".\"created_at\" DESC", GeneratedUsers.CreatedAt.Desc().Sql);
+
+        // 2. Generated static ColumnRef<T> tokens on [ReptarEntity] type (OrderEntity.Cols.CustomerId)
+        var entityFilter = OrderEntity.Cols.CustomerId.Eq(42L);
+        var (entityWhere, entityParams) = entityFilter.ToWhereClause();
+        Assert.Equal("WHERE \"order_entity\".\"customer_id\" = @p0", entityWhere);
+        Assert.Equal(42L, entityParams["p0"]);
+
+        // 3. SchemaRegistry.All & app.ExportSchemaJson()
+        var app = ReptarApp.Create();
+        var schemaJson = app.ExportSchemaJson();
+        Assert.Contains("\"name\": \"gen_users\"", schemaJson);
+        Assert.Contains("\"name\": \"test_users\"", schemaJson);
+        Assert.Contains("\"clrName\": \"Email\"", schemaJson);
     }
 }

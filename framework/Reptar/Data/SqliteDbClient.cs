@@ -100,7 +100,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
                 if (int.TryParse(envPool, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed) && parsed > 0)
                     maxReadConnections = parsed;
                 else
-                    maxReadConnections = Math.Clamp(Environment.ProcessorCount * 8, 8, 32);
+                    maxReadConnections = Math.Clamp(Environment.ProcessorCount * 2, 4, 16);
             }
 
             _readSemaphore = new SemaphoreSlim(maxReadConnections, maxReadConnections);
@@ -123,6 +123,40 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         using var command = connection.CreateCommand();
         command.CommandText = sql;
         command.ExecuteNonQuery();
+    }
+
+    private bool TryRentReadConnectionSync(string? sql, out RentedConnection rented)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+
+        if (_isMemory || (sql is not null && sql.Length <= 128 && sql.Contains("last_insert_rowid", StringComparison.OrdinalIgnoreCase)))
+        {
+            if (_writeGate.Wait(0))
+            {
+                rented = new RentedConnection(_writeConnection, isWriter: true, this);
+                return true;
+            }
+            rented = default;
+            return false;
+        }
+
+        if (!_readSemaphore.Wait(0))
+        {
+            rented = default;
+            return false;
+        }
+
+        if (!_readConnections.TryDequeue(out var connection))
+        {
+            connection = CreateReadConnection();
+            lock (_allConnections)
+            {
+                _allConnections.Add(connection);
+            }
+        }
+
+        rented = new RentedConnection(connection, isWriter: false, this);
+        return true;
     }
 
     private async ValueTask<RentedConnection> RentReadConnectionAsync(string? sql = null)
@@ -189,6 +223,45 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     public static bool IsTransientSqliteError(SqliteException ex) =>
         ex.SqliteErrorCode is 5 or 6; // SQLITE_BUSY (5) or SQLITE_LOCKED (6)
 
+    private static List<T> ReadAllRows<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        SqliteCommand command)
+    {
+        using var reader = command.ExecuteReader();
+        if (EntityMapper<T>.ResolveForSql(command.CommandText, reader) is { } map)
+        {
+            var results = new List<T>(24);
+            while (reader.Read())
+                results.Add(map(reader));
+            return results;
+        }
+
+        var fallbackMap = RowMapper.Resolve<T>(reader);
+        var fallbackResults = new List<T>(24);
+        while (reader.Read())
+            fallbackResults.Add(fallbackMap(reader));
+        return fallbackResults;
+    }
+
+    private static T? ReadSingleRow<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        SqliteCommand command)
+    {
+        using var reader = command.ExecuteReader();
+        if (!reader.Read())
+            return default;
+
+        if (EntityMapper<T>.ResolveForSql(command.CommandText, reader) is { } map)
+            return map(reader);
+
+        var fallbackMap = RowMapper.Resolve<T>(reader);
+        return fallbackMap(reader);
+    }
+
     private static async Task<List<T>> ExecuteReaderInternalAsync<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
@@ -201,20 +274,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             {
                 try
                 {
-                    using var reader = command.ExecuteReader();
-                    if (EntityMapper<T>.ResolveForSql(command.CommandText, reader) is { } map)
-                    {
-                        var results = new List<T>(24);
-                        while (reader.Read())
-                            results.Add(map(reader));
-                        return results;
-                    }
-
-                    var fallbackMap = RowMapper.Resolve<T>(reader);
-                    var fallbackResults = new List<T>(24);
-                    while (reader.Read())
-                        fallbackResults.Add(fallbackMap(reader));
-                    return fallbackResults;
+                    return ReadAllRows<T>(command);
                 }
                 catch (SqliteException ex) when (IsTransientSqliteError(ex) && attempt < MaxTransientRetries)
                 {
@@ -224,19 +284,70 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
-    public async Task<List<T>> QueryAsync<
+    public Task<List<T>> QueryAsync<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         string sql,
         object? param = null)
     {
+        if (TryRentReadConnectionSync(sql, out var rented))
+        {
+            using (rented)
+            using (var command = BuildCommand(rented.Connection, sql, param))
+            {
+                try
+                {
+                    return Task.FromResult(ReadAllRows<T>(command));
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex))
+                {
+                    // Fall through to async retry path
+                }
+            }
+        }
+
+        return QueryAsyncSlow<T>(sql, param);
+    }
+
+    private async Task<List<T>> QueryAsyncSlow<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        object? param)
+    {
         using var rented = await RentReadConnectionAsync(sql);
         var command = BuildCommand(rented.Connection, sql, param);
         return await ExecuteReaderInternalAsync<T>(command);
     }
 
-    public async Task<List<T>> QueryAsync<
+    public Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1)
+    {
+        if (TryRentReadConnectionSync(sql, out var rented))
+        {
+            using (rented)
+            using (var command = BuildCommand(rented.Connection, sql, p1))
+            {
+                try
+                {
+                    return Task.FromResult(ReadAllRows<T>(command));
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex))
+                {
+                }
+            }
+        }
+
+        return QueryAsyncSlow1<T>(sql, p1);
+    }
+
+    private async Task<List<T>> QueryAsyncSlow1<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
@@ -248,7 +359,33 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return await ExecuteReaderInternalAsync<T>(command);
     }
 
-    public async Task<List<T>> QueryAsync<
+    public Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1,
+        (string Name, object? Value) p2)
+    {
+        if (TryRentReadConnectionSync(sql, out var rented))
+        {
+            using (rented)
+            using (var command = BuildCommand(rented.Connection, sql, p1, p2))
+            {
+                try
+                {
+                    return Task.FromResult(ReadAllRows<T>(command));
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex))
+                {
+                }
+            }
+        }
+
+        return QueryAsyncSlow2<T>(sql, p1, p2);
+    }
+
+    private async Task<List<T>> QueryAsyncSlow2<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
@@ -290,12 +427,37 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return await ExecuteReaderInternalAsync<T>(command);
     }
 
-    public async Task<List<T>> QueryAsync<
+    public Task<List<T>> QueryAsync<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         string sql,
         params (string Name, object? Value)[] parameters)
+    {
+        if (TryRentReadConnectionSync(sql, out var rented))
+        {
+            using (rented)
+            using (var command = BuildCommand(rented.Connection, sql, parameters))
+            {
+                try
+                {
+                    return Task.FromResult(ReadAllRows<T>(command));
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex))
+                {
+                }
+            }
+        }
+
+        return QueryAsyncSlowArr<T>(sql, parameters);
+    }
+
+    private async Task<List<T>> QueryAsyncSlowArr<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value)[] parameters)
     {
         using var rented = await RentReadConnectionAsync(sql);
         var command = BuildCommand(rented.Connection, sql, parameters);
@@ -342,15 +504,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             {
                 try
                 {
-                    using var reader = command.ExecuteReader();
-                    if (!reader.Read())
-                        return default;
-
-                    if (EntityMapper<T>.ResolveForSql(command.CommandText, reader) is { } map)
-                        return map(reader);
-
-                    var fallbackMap = RowMapper.Resolve<T>(reader);
-                    return fallbackMap(reader);
+                    return ReadSingleRow<T>(command);
                 }
                 catch (SqliteException ex) when (IsTransientSqliteError(ex) && attempt < MaxTransientRetries)
                 {
@@ -360,19 +514,69 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
-    public async Task<T?> QuerySingleOrDefaultAsync<
+    public Task<T?> QuerySingleOrDefaultAsync<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         string sql,
         object? param = null)
     {
+        if (TryRentReadConnectionSync(sql, out var rented))
+        {
+            using (rented)
+            using (var command = BuildCommand(rented.Connection, sql, param))
+            {
+                try
+                {
+                    return Task.FromResult(ReadSingleRow<T>(command));
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex))
+                {
+                }
+            }
+        }
+
+        return QuerySingleOrDefaultSlowAsync<T>(sql, param);
+    }
+
+    private async Task<T?> QuerySingleOrDefaultSlowAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        object? param)
+    {
         using var rented = await RentReadConnectionAsync(sql);
         var command = BuildCommand(rented.Connection, sql, param);
         return await ExecuteSingleInternalAsync<T>(command);
     }
 
-    public async Task<T?> QuerySingleOrDefaultAsync<
+    public Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1)
+    {
+        if (TryRentReadConnectionSync(sql, out var rented))
+        {
+            using (rented)
+            using (var command = BuildCommand(rented.Connection, sql, p1))
+            {
+                try
+                {
+                    return Task.FromResult(ReadSingleRow<T>(command));
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex))
+                {
+                }
+            }
+        }
+
+        return QuerySingleOrDefaultSlow1Async<T>(sql, p1);
+    }
+
+    private async Task<T?> QuerySingleOrDefaultSlow1Async<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
@@ -384,7 +588,33 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return await ExecuteSingleInternalAsync<T>(command);
     }
 
-    public async Task<T?> QuerySingleOrDefaultAsync<
+    public Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        (string Name, object? Value) p1,
+        (string Name, object? Value) p2)
+    {
+        if (TryRentReadConnectionSync(sql, out var rented))
+        {
+            using (rented)
+            using (var command = BuildCommand(rented.Connection, sql, p1, p2))
+            {
+                try
+                {
+                    return Task.FromResult(ReadSingleRow<T>(command));
+                }
+                catch (SqliteException ex) when (IsTransientSqliteError(ex))
+                {
+                }
+            }
+        }
+
+        return QuerySingleOrDefaultSlow2Async<T>(sql, p1, p2);
+    }
+
+    private async Task<T?> QuerySingleOrDefaultSlow2Async<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(

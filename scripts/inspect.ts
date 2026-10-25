@@ -3,18 +3,28 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
+import { loadCompilerTables } from "./diff";
+
 export interface ColumnInfo {
   name: string;
+  clrName?: string;
   type: string;
+  clrType?: string;
   primaryKey: boolean;
   notNull: boolean;
+  unique?: boolean;
+  indexed?: boolean;
   defaultValue?: string | null;
+  defaultSql?: string | null;
+  referencesTable?: string | null;
+  referencesColumn?: string | null;
 }
 
 export interface TableInfo {
   name: string;
   columns: ColumnInfo[];
   indexes: string[];
+  source?: "compiler" | "sqlite";
 }
 
 export interface RouteInfo {
@@ -38,7 +48,9 @@ export interface ReptarInspection {
     connected: boolean;
     path: string;
   };
+  schemaSource: "compiler" | "sqlite";
   tables: TableInfo[];
+  databaseTables: TableInfo[];
   routes: RouteInfo[];
   migrations: {
     directory: string;
@@ -182,6 +194,7 @@ export const inspectProject = (
           columns,
           indexes,
           name: row.name,
+          source: "sqlite",
         });
       }
 
@@ -267,6 +280,43 @@ export const inspectProject = (
     genStatus = "up-to-date";
   }
 
+  const databaseTables = [...tables];
+  const compilerTables = loadCompilerTables(repoRoot, cwd);
+  let schemaSource: "compiler" | "sqlite" = "sqlite";
+
+  if (compilerTables && compilerTables.length > 0) {
+    schemaSource = "compiler";
+    const mergedMap = new Map<string, TableInfo>();
+    for (const ct of compilerTables) {
+      mergedMap.set(ct.name.toLowerCase(), {
+        columns: ct.columns.map((c) => ({
+          clrName: c.clrName,
+          clrType: c.clrType,
+          defaultSql: c.defaultSql ?? null,
+          defaultValue: c.defaultValue ?? null,
+          indexed: c.indexed,
+          name: c.name,
+          notNull: c.notNull,
+          primaryKey: c.primaryKey,
+          referencesColumn: c.referencesCol ?? null,
+          referencesTable: c.referencesTable ?? null,
+          type: c.type,
+          unique: c.unique,
+        })),
+        indexes: ct.indexes ?? [],
+        name: ct.name,
+        source: "compiler",
+      });
+    }
+    for (const dt of databaseTables) {
+      if (!mergedMap.has(dt.name.toLowerCase())) {
+        mergedMap.set(dt.name.toLowerCase(), dt);
+      }
+    }
+    tables.length = 0;
+    tables.push(...mergedMap.values());
+  }
+
   return {
     database: {
       connected: dbConnected,
@@ -274,6 +324,7 @@ export const inspectProject = (
       driver: "sqlite",
       path: dbPath,
     },
+    databaseTables,
     generated: {
       openapi: openApiPath ?? "packages/rpc/openapi.json",
       status: genStatus,
@@ -290,6 +341,7 @@ export const inspectProject = (
       version: pkgVersion,
     },
     routes,
+    schemaSource,
     tables,
   };
 };
