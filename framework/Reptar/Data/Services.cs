@@ -90,6 +90,18 @@ public interface IDbClient
 
         return changes;
     }
+
+    Task<int> BatchAsync(params DbStatement[] statements) =>
+        BatchAsync((IReadOnlyList<DbStatement>)statements);
+
+    Task<int> BatchAsync(params (string Sql, object? Param)[] statements) =>
+        BatchAsync(statements.Select(s => new DbStatement(s.Sql, s.Param)).ToArray());
+
+    Task TransactionAsync(Func<IDbClient, Task> action) =>
+        action(this);
+
+    Task<T> TransactionAsync<T>(Func<IDbClient, Task<T>> action) =>
+        action(this);
 }
 
 [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors | System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)]
@@ -285,6 +297,9 @@ public sealed record AiResult(string Model, string Text, int TokensIn, int Token
 public interface IAiClient
 {
     Task<AiResult> GenerateAsync(AiRequest request);
+
+    Task<AiResult> RunAsync(string model, string prompt, int maxTokens = 512) =>
+        GenerateAsync(new AiRequest(model, prompt, maxTokens));
 }
 
 public sealed class NoopAiClient : IAiClient
@@ -441,6 +456,14 @@ public sealed class NoopKvClient : IKvClient
 public interface IQueueClient
 {
     Task SendAsync(string queueName, string messageJson);
+
+    Task SendAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string queueName,
+        T message) =>
+        SendAsync(queueName, System.Text.Json.JsonSerializer.Serialize(message, ReptarJson.Options));
 }
 
 public sealed class NoopQueueClient : IQueueClient

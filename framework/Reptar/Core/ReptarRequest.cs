@@ -74,5 +74,8 @@ public sealed class ReptarRequest
         return null;
     }
 
+    public string QueryValue(string name, string defaultValue) =>
+        QueryValue(name) ?? defaultValue;
+
     public string? BodyText => Body is null ? null : Encoding.UTF8.GetString(Body);
 }

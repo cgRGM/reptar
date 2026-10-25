@@ -106,9 +106,14 @@ public sealed class ReptarApp
     private readonly Dictionary<string, (WebSocketConnection Connection, WebSocketHandlers Handlers)> _webSocketSessions =
         new(StringComparer.Ordinal);
     private readonly ReptarConfig _config;
+    private readonly (ReptarApp Parent, string Prefix)? _groupParent;
     private ServiceSet? _services;
 
-    internal ReptarApp(ReptarConfig config) => _config = config;
+    internal ReptarApp(ReptarConfig config, (ReptarApp Parent, string Prefix)? groupParent = null)
+    {
+        _config = config;
+        _groupParent = groupParent;
+    }
 
     public ReptarConfig Config => _config;
 
@@ -259,6 +264,14 @@ public sealed class ReptarApp
         ReptarMiddleware middleware,
         Func<Ctx, Task<ReptarResponse>> handler) =>
         AddRoute("DELETE", path, middleware, handler);
+
+    public ReptarApp Group(string basePath, Action<ReptarApp>? configure = null)
+    {
+        var prefix = Normalize(basePath);
+        var groupApp = new ReptarApp(_config, (this, prefix));
+        configure?.Invoke(groupApp);
+        return groupApp;
+    }
 
     public ReptarApp Route(string basePath, ReptarApp subApp)
     {
@@ -795,6 +808,17 @@ public sealed class ReptarApp
                 _paramRoutes[key] = list;
             }
             list.Add(entry);
+        }
+        if (_groupParent is (var parent, var prefix))
+        {
+            var prefixedPath = Combine(prefix, entry.Path);
+            var forwarded = CreateRouteEntry(
+                entry.Method,
+                prefixedPath,
+                entry.Middleware,
+                entry.Handler,
+                entry.Meta.CloneWithPath(prefixedPath));
+            parent.RegisterRouteEntry(forwarded);
         }
     }
 

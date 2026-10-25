@@ -126,6 +126,8 @@ public static class ReptarApi
 
 public static class Db
 {
+    public static IDbClient D1() => ReptarApi.D1();
+
 #if !NETWASM
     public static IDbClient Sqlite(string path = "local.db") => new SqliteDbClient(path);
     public static IDbClient MySql(string connectionString) => new MySqlDbClient(connectionString);

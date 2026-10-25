@@ -24,7 +24,7 @@ var api = app.Group("/api/v1");
 api.Get("/tasks/:id", async ctx =>
 {
     var id = ctx.Req.Param("id");
-    var includeComments = ctx.Req.Query("comments", defaultValue: "false");
+    var includeComments = ctx.Req.QueryValue("comments", defaultValue: "false");
     var authorization = ctx.Req.Header("Authorization");
 
     var task = await ctx.Db.QuerySingleOrDefaultAsync<TaskItem>(

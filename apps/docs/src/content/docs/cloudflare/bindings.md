@@ -25,8 +25,9 @@ await c.Db.DeleteAsync(PostsTable, "post_123");
 
 // 2. Direct Parameterized SQL
 var activeUsers = await c.Db.QueryAsync<User>(
-    "select * from users where is_active = ? and role = ?",
-    "1", "admin"
+    "select * from users where is_active = @active and role = @role",
+    ("active", 1),
+    ("role", "admin")
 );
 ```
 
@@ -93,7 +94,7 @@ Serverless GPU inference at the edge:
 
 ```csharp
 // Run inference on serverless open-source models
-string summaryJson = await c.AI.RunAsync(
+AiResult summary = await c.AI.RunAsync(
     "@cf/meta/llama-3-8b-instruct",
     prompt: "Summarize this article in two concise sentences:"
 );
@@ -108,8 +109,8 @@ Stateful coordination, real-time collaboration, and WebSocket routing:
 ```csharp
 // Route an edge request to a specific Durable Object instance
 string response = await c.Durable.FetchAsync(
-    namespaceBinding: "ROOMS",
-    instanceId: "room_north_america",
+    namespaceName: "ROOMS",
+    id: "room_north_america",
     path: "/broadcast",
     method: "POST",
     body: "{\"msg\":\"User joined\"}"
@@ -137,15 +138,12 @@ string signature = await c.Crypto.HmacSha256(secretKey, payload);
 
 ---
 
-## 8. Outbound HTTP Fetch (`WasmHttpClient`)
+## 8. Outbound HTTP Fetch (`c.Http`)
 
 Perform outbound HTTP requests to external APIs (e.g. Stripe, OpenAI, GitHub):
 
 ```csharp
-using Reptar;
-
-var client = new WasmHttpClient();
-var response = await client.FetchAsync(
+var response = await c.Http.FetchAsync(
     "https://api.external.com/v1/event",
     "POST",
     new Dictionary<string, string>

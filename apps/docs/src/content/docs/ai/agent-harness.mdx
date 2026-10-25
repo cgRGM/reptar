@@ -133,7 +133,7 @@ For ChatGPT-style web interfaces and mobile apps (React Native / Expo), stream t
 ```csharp
 app.Post("/api/chat", async ctx =>
 {
-    var prompt = ctx.Req.Query("message");
+    var prompt = ctx.Req.QueryValue("message", defaultValue: "");
     var tokenStream = OpenAiClient.StreamTokensAsync(prompt, ctx.CancellationToken);
 
     // Pipes tokens directly through Kestrel's PipeWriter or Cloudflare's TransformStream:
