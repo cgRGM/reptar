@@ -47,8 +47,26 @@ public sealed class AuthOptions
     public int RateLimitWindowMinutes { get; set; } = 15;
     public bool EnableRateLimiting { get; set; } = true;
 
+    /// <summary>
+    /// When true, login throttling may key off proxy headers (CF-Connecting-IP,
+    /// then the first X-Forwarded-For entry) instead of the socket peer
+    /// address. Enable only behind a trusted proxy that overwrites these
+    /// headers. Ignored on Workers, where CF-Connecting-IP is edge-injected.
+    /// Defaults to false: security decisions use the peer address, because
+    /// these headers are client-controlled when no trusted proxy strips them.
+    /// </summary>
+    public bool TrustProxyHeaders { get; set; } = false;
+
 #if !NETWASM
     public List<IOAuthProvider> OAuthProviders { get; set; } = [];
+
+    /// <summary>
+    /// Public origin used to build OAuth redirect URIs (e.g.
+    /// "https://app.example.com"). When set, redirect URIs are derived from
+    /// this value instead of Origin/Host/X-Forwarded-* request headers, which
+    /// are client-spoofable whenever the app is not behind a trusted proxy.
+    /// </summary>
+    public string? PublicBaseUrl { get; set; }
 
     public AuthOptions WithGoogle(string clientId, string clientSecret)
     {
@@ -147,6 +165,9 @@ public static class ReptarApi
 
     public static ReptarMiddleware Timeout(TimeSpan timeout) =>
         Middlewares.Timeout(timeout);
+
+    public static ReptarMiddleware ETag(ETagOptions? options = null) =>
+        Middlewares.ETag(options);
 
     public static ReptarMiddleware RateLimit(
         int limit = 60,

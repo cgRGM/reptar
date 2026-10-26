@@ -61,14 +61,34 @@ public static class BetterAuthProtocol
     private const string BetterAuthCookie = "better-auth.session_token";
     private const string StateCookie = "reptar_oauth_state";
 
+    private static readonly Validator<BetterAuthSignInInput> SignInEmailSchema = Rule<BetterAuthSignInInput>()
+        .Prop(x => x.Email, rules => rules.Email())
+        .Prop(x => x.Password, rules => rules.Min(1).Max(512));
+
     public static ReptarApp Routes(AuthOptions? options = null)
     {
         var authOptions = options ?? new AuthOptions();
         var app = ReptarApp.Create();
         app.RegisterSchema(Auth.Users, Auth.Sessions, Auth.OAuthAccounts);
 
-        app.Post<BetterAuthSignInInput>("/sign-in/email", async (ctx, input) =>
+        app.Post("/sign-in/email", SignInEmailSchema, async (ctx, input) =>
         {
+            // Same login throttling as the built-in routes, keyed on the socket
+            // peer address (or trusted proxy headers when explicitly enabled).
+            var throttleKey = authOptions.EnableRateLimiting
+                ? LoginThrottle.ClientKey(ctx, authOptions)
+                : null;
+            var window = TimeSpan.FromMinutes(authOptions.RateLimitWindowMinutes);
+
+            if (throttleKey is not null &&
+                LoginThrottle.IsLimited(throttleKey, authOptions.RateLimitMaxAttempts, window))
+            {
+                return ctx.Error(
+                    429,
+                    "rate_limited",
+                    "Too many failed login attempts. Please try again later.");
+            }
+
             var email = input.Email.Trim().ToLowerInvariant();
 
             var user = await ctx.Db.QuerySingleOrDefaultAsync<Auth.UserRow>(
@@ -78,8 +98,13 @@ public static class BetterAuthProtocol
             if (user is null || string.IsNullOrEmpty(user.PasswordHash) ||
                 !await ctx.Crypto.VerifyPassword(input.Password, user.PasswordHash))
             {
+                if (throttleKey is not null)
+                    LoginThrottle.RecordFailure(throttleKey, authOptions.RateLimitMaxAttempts, window);
                 return ctx.Unauthorized("Invalid email or password.");
             }
+
+            if (throttleKey is not null)
+                LoginThrottle.Reset(throttleKey);
 
             var token = ctx.Crypto.RandomToken(32);
             var expiresAt = ctx.Clock.IsoIn(TimeSpan.FromDays(authOptions.SessionDays));
@@ -248,7 +273,7 @@ public static class BetterAuthProtocol
             return ctx.Json(new Dictionary<string, bool> { ["success"] = true });
         });
 
-        app.Post<BetterAuthSocialInput>("/sign-in/social", async (ctx, input) =>
+        app.Post<BetterAuthSocialInput>("/sign-in/social", async (Ctx ctx, BetterAuthSocialInput input) =>
         {
             var provider = authOptions.OAuthProviders.FirstOrDefault(p =>
                 string.Equals(p.ProviderName, input.Provider, StringComparison.OrdinalIgnoreCase));
@@ -262,8 +287,16 @@ public static class BetterAuthProtocol
             var verifier = Pkce.GenerateCodeVerifier();
             var challenge = Pkce.GenerateCodeChallenge(verifier);
 
-            var redirectUri = BuildRedirectUri(ctx, provider.ProviderName);
+            var redirectUri = BuildRedirectUri(ctx, authOptions, provider.ProviderName);
             var targetCallback = input.CallbackURL ?? "/dashboard";
+
+            // Post-auth redirect targets must be site-relative paths: an
+            // attacker-supplied absolute URL would turn the callback into an
+            // open redirect (and its raw value into a header-injection probe).
+            if (!Auth.IsSiteRelativePath(targetCallback))
+            {
+                return ctx.BadRequest("Callback URL must be a site-relative path starting with '/'.");
+            }
 
             var statePayload = $"{state}|{verifier}|{targetCallback}";
             ctx.Cookies.Set(
@@ -311,7 +344,7 @@ public static class BetterAuthProtocol
                 return ctx.BadRequest($"OAuth provider '{providerName}' is not configured.");
             }
 
-            var redirectUri = BuildRedirectUri(ctx, provider.ProviderName);
+            var redirectUri = BuildRedirectUri(ctx, authOptions, provider.ProviderName);
             var userInfo = await provider.ExchangeCodeAsync(code, verifier, redirectUri);
 
             var accounts = await ctx.Db.QueryAsync<Auth.OAuthAccountRow>(
@@ -332,6 +365,14 @@ public static class BetterAuthProtocol
 
                 if (existingUsers.Count > 0)
                 {
+                    // Never attach an OAuth identity to a password account on a
+                    // provider email the IdP has not verified — that is the
+                    // unverified-email account-takeover path.
+                    if (!userInfo.EmailVerified)
+                    {
+                        return ctx.Conflict("Provider email is not verified. Sign in with your password, then link this provider from account settings.");
+                    }
+
                     userId = existingUsers[0].Id;
                 }
                 else
@@ -347,7 +388,7 @@ public static class BetterAuthProtocol
                         Role: "user",
                         CreatedAt: now,
                         Image: userInfo.Image,
-                        EmailVerified: 1);
+                        EmailVerified: userInfo.EmailVerified ? 1 : 0);
 
                     await ctx.Db.InsertAsync(Auth.Users, newUser);
                 }
@@ -405,8 +446,18 @@ public static class BetterAuthProtocol
         }
     }
 
-    private static string BuildRedirectUri(Ctx ctx, string providerName)
+    private static string BuildRedirectUri(Ctx ctx, AuthOptions options, string providerName)
     {
+        // A configured public origin wins: X-Forwarded-*/Host headers are
+        // client-spoofable whenever the app is not behind a trusted proxy.
+        var publicOrigin = options.PublicBaseUrl?.TrimEnd('/');
+        if (!string.IsNullOrEmpty(publicOrigin))
+        {
+            if (!publicOrigin.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                publicOrigin = "https://" + publicOrigin;
+            return $"{publicOrigin}/api/auth/callback/{providerName}";
+        }
+
         var scheme = ctx.Req.Header("X-Forwarded-Proto") ?? "http";
         var host = ctx.Req.Header("X-Forwarded-Host") ?? ctx.Req.Header("Host") ?? "localhost";
         return $"{scheme}://{host}/api/auth/callback/{providerName}";

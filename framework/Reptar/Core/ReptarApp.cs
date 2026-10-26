@@ -205,6 +205,9 @@ public sealed class ReptarApp
     /// </summary>
     public ReptarApp UseBodyLimit(long maxBytes) => Use(Middlewares.BodyLimit(maxBytes));
 
+    public ReptarApp UseETag(ETagOptions? options = null) =>
+        Use(Middlewares.ETag(options));
+
     /// <summary>
     /// Adds an application module. Configure runs immediately; Start/Stop run
     /// from hosts that support a lifecycle (Kestrel/Lambda).

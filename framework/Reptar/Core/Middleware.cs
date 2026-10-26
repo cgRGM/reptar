@@ -270,6 +270,71 @@ public static class Middlewares
         };
     }
 
+    /// <summary>
+    /// Adds a strong ETag to successful GET/HEAD JSON/text responses and
+    /// returns 304 when If-None-Match matches. Opt-in: hashing every response
+    /// costs CPU, so mount it only on cacheable read routes.
+    /// </summary>
+    public static ReptarMiddleware ETag(ETagOptions? options = null)
+    {
+        var opts = options ?? new ETagOptions();
+
+        return async (ctx, next) =>
+        {
+            var response = await next();
+
+            if (ctx.Req.Method is not ("GET" or "HEAD") ||
+                response.Status != 200 ||
+                response.Body is not { Length: > 0 } body ||
+                body.Length > opts.MaxBodyBytes ||
+                response.Headers.ContainsKey("ETag") ||
+                response.SetCookies.Count > 0)
+            {
+                return response;
+            }
+
+            var contentType = response.ContentType ?? "";
+            if (!opts.MimeTypePrefixes.Any(prefix =>
+                contentType.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)))
+            {
+                return response;
+            }
+
+            if (response.Headers.TryGetValue("Cache-Control", out var cacheControl) &&
+                cacheControl.Contains("no-store", StringComparison.OrdinalIgnoreCase))
+            {
+                return response;
+            }
+
+            var hash = await ctx.Crypto.Sha256(Convert.ToBase64String(body));
+            var etag = $"\"{hash[..16]}\"";
+            response.Headers["ETag"] = etag;
+
+            if (opts.MaxAgeSeconds > 0 &&
+                !response.Headers.ContainsKey("Cache-Control"))
+            {
+                response.Headers["Cache-Control"] = $"public, max-age={opts.MaxAgeSeconds}";
+            }
+
+            var ifNoneMatch = ctx.Req.Header("If-None-Match");
+            if (ifNoneMatch is null)
+                return response;
+
+            var normalized = ifNoneMatch.Trim();
+            if (normalized.StartsWith("W/", StringComparison.Ordinal))
+                normalized = normalized[2..].Trim();
+
+            if (!string.Equals(normalized, etag, StringComparison.Ordinal))
+                return response;
+
+            var notModified = new ReptarResponse { Status = 304 };
+            foreach (var (name, value) in response.Headers)
+                notModified.Headers[name] = value;
+
+            return notModified;
+        };
+    }
+
     private static bool Sample(double rate) =>
         rate >= 1 || (rate > 0 && Random.Shared.NextDouble() < rate);
 
@@ -439,6 +504,13 @@ public sealed class SecurityHeadersOptions
     public string? XssProtection { get; set; } = "0";
     public string? PermissionsPolicy { get; set; } = "camera=(), microphone=(), geolocation=()";
     public string? ContentSecurityPolicy { get; set; }
+}
+
+public sealed class ETagOptions
+{
+    public long MaxBodyBytes { get; set; } = 1_048_576;
+    public int MaxAgeSeconds { get; set; }
+    public string[] MimeTypePrefixes { get; set; } = ["application/json", "text/"];
 }
 
 public sealed class RateLimitOptions
