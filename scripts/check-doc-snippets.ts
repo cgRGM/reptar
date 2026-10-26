@@ -43,8 +43,9 @@ const FORBIDDEN_PATTERNS: ForbiddenPattern[] = [
       "IDurableBridge.FetchAsync uses parameter 'id:', not 'instanceId:'.",
   },
   {
-    pattern: /cgRGM\/reptar/iu,
-    reason: "Use canonical repository 'RocktownLabs/reptar'.",
+    pattern: /RocktownLabs\/reptar/iu,
+    reason:
+      "Use the verified repository 'cgRGM/reptar' (default branch: master).",
   },
 ];
 

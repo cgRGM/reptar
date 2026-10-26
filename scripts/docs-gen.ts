@@ -313,7 +313,7 @@ description: "Auto-generated reference for the blog example app's API — every 
 
 ${GENERATED_NOTICE}
 
-The [blog example app](https://github.com/RocktownLabs/reptar/tree/main/examples/blog) is Reptar's living reference application. This page is generated from its OpenAPI ${openapiVersion} contract — the same artifact emitted to \`packages/rpc/openapi.json\` by \`bun reptar codegen\` — so it cannot drift from the C# route tree. For your own app, run \`app.UseScalar()\` to serve an interactive version of this reference at \`/reference\`.
+The [blog example app](https://github.com/cgRGM/reptar/tree/master/examples/blog) is Reptar's living reference application. This page is generated from its OpenAPI ${openapiVersion} contract — the same artifact emitted to \`packages/rpc/openapi.json\` by \`bun reptar codegen\` — so it cannot drift from the C# route tree. For your own app, run \`app.UseScalar()\` to serve an interactive version of this reference at \`/reference\`.
 
 Contract: \`${specTitle}\` (OpenAPI ${openapiVersion}, ${operations.length} operations).
 
