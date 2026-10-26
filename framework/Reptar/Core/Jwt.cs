@@ -21,6 +21,11 @@ public sealed record JwtPayload(
 
 public static class Jwt
 {
+    // Bounded so no stack allocation is sized by attacker-controlled token
+    // length; a real HS256 JWT is a few hundred bytes.
+    private const int MaxTokenLength = 8 * 1024;
+    private const int MaxSecretBytes = 1024;
+
     public static async Task<string> SignAsync(
         ICrypto crypto,
         JwtOptions options,
@@ -28,6 +33,10 @@ public static class Jwt
     {
         if (string.IsNullOrWhiteSpace(options.Secret))
             throw new InvalidOperationException("JWT secret is not configured.");
+
+        if (Encoding.UTF8.GetByteCount(options.Secret) > MaxSecretBytes)
+            throw new InvalidOperationException(
+                $"JWT secret must not exceed {MaxSecretBytes} bytes.");
 
         var header = Base64Url(Encoding.UTF8.GetBytes(
             "{\"alg\":\"HS256\",\"typ\":\"JWT\"}"));
@@ -47,6 +56,11 @@ public static class Jwt
         string token)
     {
         if (string.IsNullOrWhiteSpace(options.Secret) || string.IsNullOrEmpty(token))
+            return null;
+
+        // Fail closed on oversized tokens before any buffer is sized by token
+        // length (the verify path stackallocs from these values).
+        if (token.Length > MaxTokenLength)
             return null;
 
         var firstDot = token.IndexOf('.');

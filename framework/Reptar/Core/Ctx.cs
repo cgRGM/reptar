@@ -177,6 +177,12 @@ public sealed partial class Ctx
 
     public ReptarResponse Redirect(string url, int status = 302)
     {
+        // Location must never carry control characters: CR/LF in a header value
+        // is the response-splitting/header-injection primitive.
+        if (url.AsSpan().IndexOfAny('\r', '\n', '\0') >= 0)
+            throw new ArgumentException(
+                "Redirect URL must not contain control characters.", nameof(url));
+
         var res = new ReptarResponse { Status = status };
         res.Headers["Location"] = url;
         return res;

@@ -250,11 +250,20 @@ public sealed class DevCrypto : ICrypto
     // Match the workerd WebCrypto cap so local and deployed hashes verify.
     private const int Iterations = 100_000;
 
+    // PBKDF2 input cap: longer passwords are pre-hashed (SHA-256, lowercase
+    // hex) before derivation. Mirrors packages/host/src/crypto.ts so hashes
+    // verify across native and Workers, and keeps buffers bounded by a
+    // constant instead of attacker-controlled password length.
+    private const int MaxPasswordBytes = 512;
+    private const int MaxStoredIterations = 1_000_000;
+    private const int MaxHashBytes = 128;
+
     public Task<string> HashPassword(string password)
     {
+        var normalized = NormalizePassword(password);
         var salt = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
         var hash = System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(
-            System.Text.Encoding.UTF8.GetBytes(password),
+            System.Text.Encoding.UTF8.GetBytes(normalized),
             salt,
             Iterations,
             System.Security.Cryptography.HashAlgorithmName.SHA256,
@@ -271,15 +280,31 @@ public sealed class DevCrypto : ICrypto
         if (parts.Length != 4 || parts[0] != "pbkdf2-sha256")
             return Task.FromResult(false);
 
-        if (!int.TryParse(parts[1], out var iterations))
+        if (!int.TryParse(parts[1], out var iterations) ||
+            iterations is < 1 or > MaxStoredIterations)
             return Task.FromResult(false);
 
-        var salt = Convert.FromBase64String(parts[2]);
-        var expected = Convert.FromBase64String(parts[3]);
+        byte[] salt;
+        byte[] expected;
+        try
+        {
+            salt = Convert.FromBase64String(parts[2]);
+            expected = Convert.FromBase64String(parts[3]);
+        }
+        catch (FormatException)
+        {
+            return Task.FromResult(false);
+        }
+
+        // Stored hashes are 32 bytes; anything outside this range is corrupt
+        // or hostile and is rejected before any buffer is sized by it.
+        if (expected.Length is < 16 or > MaxHashBytes)
+            return Task.FromResult(false);
+
+        var normalized = NormalizePassword(password);
+        var pwdBytes = System.Text.Encoding.UTF8.GetBytes(normalized);
 
         Span<byte> actual = stackalloc byte[expected.Length];
-        Span<byte> pwdBytes = stackalloc byte[System.Text.Encoding.UTF8.GetByteCount(password)];
-        System.Text.Encoding.UTF8.GetBytes(password, pwdBytes);
 
         System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(
             pwdBytes,
@@ -290,6 +315,18 @@ public sealed class DevCrypto : ICrypto
 
         return Task.FromResult(
             System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(actual, expected));
+    }
+
+    private static string NormalizePassword(string password)
+    {
+        if (System.Text.Encoding.UTF8.GetByteCount(password) <= MaxPasswordBytes)
+            return password;
+
+        // Pre-hash long inputs (standard PBKDF2/Argon2 pre-hash practice) so
+        // no buffer or work factor is driven by unbounded input length.
+        var digest = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(password));
+        return Convert.ToHexString(digest).ToLowerInvariant();
     }
 
     public Task<string> Sha256(string input)

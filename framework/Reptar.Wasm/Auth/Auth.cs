@@ -42,6 +42,11 @@ public static class Auth
     private static readonly Dictionary<string, (int Failures, DateTimeOffset WindowStart)> _loginAttempts = new();
     private static readonly object _loginLock = new();
 
+    // Upper bound on tracked keys so the throttle map cannot be used for
+    // memory exhaustion; beyond it, expired windows are swept and recording
+    // stops rather than growing without limit.
+    private const int MaxTrackedIps = 10_000;
+
     private static bool IsRateLimited(string clientIp)
     {
         if (!_options.EnableRateLimiting)
@@ -76,11 +81,32 @@ public static class Auth
                 now - existing.WindowStart <= window)
             {
                 _loginAttempts[clientIp] = (existing.Failures + 1, existing.WindowStart);
+                return;
             }
-            else
-            {
-                _loginAttempts[clientIp] = (1, now);
-            }
+
+            if (_loginAttempts.Count >= MaxTrackedIps)
+                SweepExpiredLoginAttempts(now, window);
+
+            if (_loginAttempts.Count >= MaxTrackedIps)
+                return;
+
+            _loginAttempts[clientIp] = (1, now);
+        }
+    }
+
+    private static void SweepExpiredLoginAttempts(DateTimeOffset now, TimeSpan window)
+    {
+        var expired = new List<string>();
+
+        foreach (var pair in _loginAttempts)
+        {
+            if (now - pair.Value.WindowStart > window)
+                expired.Add(pair.Key);
+        }
+
+        foreach (var key in expired)
+        {
+            _loginAttempts.Remove(key);
         }
     }
 
@@ -95,10 +121,11 @@ public static class Auth
         }
     }
 
+    // Workers: CF-Connecting-IP is injected by the Cloudflare edge. The request
+    // envelope carries no peer address and X-Forwarded-For is client-
+    // controllable, so only the platform-injected header is trusted.
     private static string GetClientIp(Ctx ctx) =>
-        ctx.Req.Header("CF-Connecting-IP")
-        ?? ctx.Req.Header("X-Forwarded-For")?.Split(',')[0].Trim()
-        ?? "127.0.0.1";
+        ctx.Req.Header("CF-Connecting-IP") ?? "loopback";
 
     public static ReptarApp Routes()
     {

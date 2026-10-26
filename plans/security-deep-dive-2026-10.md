@@ -477,3 +477,52 @@ Mirror the established `SecurityAndCacheTests` style (`app.HandleAsync` + raw `R
 Deferred (report-only, larger design work): WS auth/origin model (F-50/51), native SSRF guard (F-38/57),
 workspace-tools auth gate + gateway auth/model allowlist (F-56/58), Wasm R2 normalization (F-47),
 security-headers-default-on debate (S-2), CSRF token middleware (F-06) — each scoped in this doc for follow-up.
+
+---
+
+## Remediation log — 2026-10-26
+
+Status: **P1–P7 implemented and verified** (299/299 framework tests, netwasm lint clean, architecture check clean).
+Committed alongside this log as `fix(auth)` + regression suite `framework/Reptar.Tests/SecurityRegressions.cs`.
+
+| # | Status | Notes |
+|---|---|---|
+| P1 | ✅ | `/social` persists `state|verifier|callbackUrl` cookie; `/callback/:provider` enforces Ordinal state equality, fails 400 on missing/wrong state |
+| P2 | ✅ | `Auth.IsSiteRelativePath` gate at ingestion (native + BetterAuth); `Ctx.Redirect` rejects CR/LF/NUL in Location |
+| P3 | ✅ | New shared `LoginThrottle` (native) keyed on `RemoteIp` (`TrustProxyHeaders` opt-in); Wasm slice keys on `CF-Connecting-IP` only, drops XFF; both maps bounded (10k, expired-window sweep) |
+| P4 | ✅ | `Jwt.VerifyAsync` rejects tokens >8 KB pre-stackalloc, guards secret ≤1 KB; `DevCrypto` pre-hashes passwords >512 B (SHA-256 hex) and caps stored iterations/hash length; **mirrored in `packages/host/src/crypto.ts`** for cross-host hash parity |
+| P5 | ✅ | `CookieJar` validates names (RFC 6265 token) and rejects CR/LF/NUL/`;`/`,` in values |
+| P6 | ✅ | BetterAuth `/sign-in/email` gains `Rule<SignInInput>` validation + the same throttling; legacy rate-limit test rewritten to assert spoofed-header resistance; the BetterAuth wrong-password test isolated on its own RemoteIp |
+| P7 | ✅ | Linking gate: existing-account link requires `userInfo.EmailVerified`; new users get `EmailVerified = verified ? 1 : 0`; provider-link-first ordering preserved. **Follow-up:** GitHub provider should fetch `/user/emails` (primary+verified) to restore linking for GitHub users — currently all GitHub emails are treated as unverified (fail-safe) |
+
+**Concurrent-edit note:** a parallel agent's broad commit (`23323b6`) swept my in-flight edits of
+`BetterAuthRoutes.cs`/`ReptarApi.cs` plus their `OAuth.cs` `EmailVerified` change into that commit while
+`LoginThrottle.cs` and the `Auth.cs` helpers it references remained uncommitted — meaning commit `23323b6`
+alone does not compile. This was resolved by landing the remaining pieces immediately after; history was
+left intact because other agents were actively committing. Bisect through `23323b6` with that in mind.
+
+### Learnings
+
+1. **Multi-agent repos need cohesive-commit discipline (or worktrees).** A broad `git add` by one agent can
+   bisect-break history by capturing half-finished edits of another. Land security fixes as small, complete
+   units; prefer per-agent worktrees for invasive changes.
+2. **The framework's best security control was already internal — and bypassed by itself.** The generic
+   `RateLimit` middleware keyed on `RemoteIp` with `TrustProxyHeaders` opt-in (and had tests), yet the auth
+   module hand-rolled header-trusting keying. Parity between an internal secure primitive and every consumer
+   is itself a security property; the regression suite now pins it.
+3. **Dual slices double the attack surface of every fix.** Three auth implementations (native, Wasm, BetterAuth)
+   and two crypto providers meant each patch landed in 2–3 places with drift risk (the `#if NETWASM` Regex
+   no-op is the standing example). The systemic fix is the dual-host parity gate proposed in Phase 3.
+4. **Attack-sized `stackalloc` is an uncatchable-crash DoS class unique to C#.** One request with a large
+   JWT or password could kill a Kestrel process (`StackOverflowException` is not catchable). Rule of thumb
+   for the codebase: never `stackalloc` a size derived from request input without a constant bound first;
+   a future Roslyn/analyzer rule should enforce this.
+5. **Shared static state in tests is a flake factory.** The new shared throttle made the legacy rate-limit test
+   dependent on execution order via the `"loopback"` key. Deterministic per-test keys (unique `RemoteIp`) or
+   collection serialization are now required for any test touching `LoginThrottle`/`Auth` statics.
+6. **Cross-language crypto must change in lockstep.** The password pre-hash had to land in `DevCrypto` and
+   `crypto.ts` simultaneously or hashes hashed on one host would fail to verify on the other. Any future
+   crypto parameter change needs a checklist item per provider.
+7. **Verify-before-fix, test-after-fix.** Every patch was verified against the actual file immediately before
+   editing (anchors drifted twice mid-session due to concurrent edits — both caught because re-reads were
+   mandatory), and every fix was pinned by a named regression test so it cannot silently regress.

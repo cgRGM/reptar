@@ -1,0 +1,436 @@
+using System.Text;
+using Reptar;
+using Xunit;
+
+namespace Reptar.Tests;
+
+/// <summary>
+/// Security regression tests for the 2026-10 hardening pass. Each test pins a
+/// specific fix from plans/security-deep-dive-2026-10.md so it cannot silently
+/// regress:
+///   - OAuth state validation (built-in callback)
+///   - Site-relative OAuth callback URLs
+///   - Unverified-email account linking gate
+///   - Oversized-JWT / long-password crash resistance (bounded buffers)
+///   - CookieJar header-injection rejection
+///   - Redirect control-character rejection
+///   - Peer-keyed login throttling (built-in + BetterAuth) that ignores
+///     spoofed forwarding headers, with a bounded failure map
+/// </summary>
+[Collection("AuthStaticTests")]
+public sealed class SecurityRegressions
+{
+    private static ReptarRequest Json(
+        string method,
+        string path,
+        string json,
+        string? remoteIp = null) => new()
+    {
+        Method = method,
+        Path = path,
+        RemoteIp = remoteIp,
+        Headers = new Dictionary<string, string> { ["content-type"] = "application/json" },
+        Body = Encoding.UTF8.GetBytes(json),
+    };
+
+    private static string? CookieValue(ReptarResponse response, string name)
+    {
+        var prefix = $"{name}=";
+
+        foreach (var header in response.SetCookies)
+        {
+            if (header.StartsWith(prefix, StringComparison.Ordinal))
+                return header[prefix.Length..].Split(';')[0];
+        }
+
+        return null;
+    }
+
+    private sealed record FakeProvider(bool EmailVerified) : IOAuthProvider
+    {
+        public string ProviderName => "fake";
+
+        public string BuildAuthorizationUrl(string state, string codeChallenge, string redirectUri) =>
+            $"https://provider.example/auth?state={state}&code_challenge={codeChallenge}&redirect_uri={redirectUri}";
+
+        public Task<OAuthUserInfo> ExchangeCodeAsync(string code, string codeVerifier, string redirectUri) =>
+            Task.FromResult(new OAuthUserInfo(
+                "fake",
+                "fake-puid-1",
+                "oauth.user@example.com",
+                "OAuth User",
+                null,
+                EmailVerified));
+    }
+
+    private static (ReptarApp App, AuthOptions Options) CreateAuthApp(IOAuthProvider provider)
+    {
+        var authOpts = new AuthOptions();
+        authOpts.OAuthProviders.Add(provider);
+        Auth.Configure(authOpts);
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts,
+        });
+        app.Route("/auth", Auth.Routes());
+
+        return (app, authOpts);
+    }
+
+    private static async Task<string> StartSocialFlowAsync(ReptarApp app, string callbackUrl = "/after")
+    {
+        var socialRes = await app.HandleAsync(Json(
+            "POST",
+            "/auth/social",
+            $$"""{"provider":"fake","callbackUrl":"{{callbackUrl}}"}"""));
+
+        Assert.Equal(200, socialRes.Status);
+
+        var stateCookie = CookieValue(socialRes, "reptar_oauth_pkce_fake");
+        Assert.NotNull(stateCookie);
+        Assert.Contains('|', stateCookie);
+
+        return stateCookie!;
+    }
+
+    [Fact]
+    public async Task OAuth_BuiltIn_Callback_RejectsWrongOrMissingState()
+    {
+        var (app, _) = CreateAuthApp(new FakeProvider(EmailVerified: true));
+        await app.EnsureCreatedAsync();
+
+        var stateCookie = await StartSocialFlowAsync(app);
+        var state = stateCookie.Split('|')[0];
+        Assert.False(string.IsNullOrEmpty(state));
+
+        var cookieHeaders = new Dictionary<string, string>
+        {
+            ["reptar_oauth_pkce_fake"] = stateCookie,
+        };
+
+        // Missing state -> rejected
+        var missing = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/callback/fake",
+            Query = "code=abc",
+            Cookies = cookieHeaders,
+        });
+        Assert.Equal(400, missing.Status);
+
+        // Wrong state -> rejected
+        var wrong = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/callback/fake",
+            Query = "code=abc&state=attacker-forged-state",
+            Cookies = cookieHeaders,
+        });
+        Assert.Equal(400, wrong.Status);
+
+        // Correct state -> completes with the bound callback redirect
+        var ok = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/callback/fake",
+            Query = $"code=abc&state={state}",
+            Cookies = cookieHeaders,
+        });
+        Assert.Equal(302, ok.Status);
+        Assert.Equal("/after", ok.Headers["Location"]);
+        Assert.NotNull(CookieValue(ok, "reptar_session"));
+    }
+
+    [Fact]
+    public async Task OAuth_BuiltIn_Social_RejectsNonRelativeCallbackUrl()
+    {
+        var (app, _) = CreateAuthApp(new FakeProvider(EmailVerified: true));
+        await app.EnsureCreatedAsync();
+
+        var absolute = await app.HandleAsync(Json(
+            "POST",
+            "/auth/social",
+            """{"provider":"fake","callbackUrl":"https://evil.example/phish"}"""));
+        Assert.Equal(400, absolute.Status);
+
+        var protocolRelative = await app.HandleAsync(Json(
+            "POST",
+            "/auth/social",
+            """{"provider":"fake","callbackUrl":"//evil.example/phish"}"""));
+        Assert.Equal(400, protocolRelative.Status);
+
+        var crlf = await app.HandleAsync(Json(
+            "POST",
+            "/auth/social",
+            "{\"provider\":\"fake\",\"callbackUrl\":\"/ok\\r\\nSet-Cookie: evil=1\"}"));
+        Assert.Equal(400, crlf.Status);
+
+        // Site-relative still works
+        var valid = await app.HandleAsync(Json(
+            "POST",
+            "/auth/social",
+            """{"provider":"fake","callbackUrl":"/dashboard?next=/home"}"""));
+        Assert.Equal(200, valid.Status);
+    }
+
+    [Fact]
+    public async Task OAuth_BuiltIn_DoesNotLinkUnverifiedProviderEmail()
+    {
+        var (app, authOpts) = CreateAuthApp(new FakeProvider(EmailVerified: false));
+        await app.EnsureCreatedAsync();
+
+        // Victim already owns this email as a password account.
+        var signup = await app.HandleAsync(Json(
+            "POST",
+            "/auth/signup",
+            """{"email":"oauth.user@example.com","password":"password123","name":"Legit User"}"""));
+        Assert.Equal(201, signup.Status);
+
+        var stateCookie = await StartSocialFlowAsync(app);
+        var state = stateCookie.Split('|')[0];
+
+        // An attacker-controlled provider identity that merely claims the
+        // victim's email must not be attached to the victim's account.
+        var callback = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/callback/fake",
+            Query = $"code=abc&state={state}",
+            Cookies = new Dictionary<string, string> { ["reptar_oauth_pkce_fake"] = stateCookie },
+        });
+
+        Assert.Equal(409, callback.Status);
+        Assert.Null(CookieValue(callback, authOpts.CookieName));
+    }
+
+    [Fact]
+    public async Task OAuth_BuiltIn_LinksVerifiedProviderEmail()
+    {
+        var (app, _) = CreateAuthApp(new FakeProvider(EmailVerified: true));
+        await app.EnsureCreatedAsync();
+
+        var signup = await app.HandleAsync(Json(
+            "POST",
+            "/auth/signup",
+            """{"email":"oauth.user@example.com","password":"password123","name":"Legit User"}"""));
+        Assert.Equal(201, signup.Status);
+
+        var stateCookie = await StartSocialFlowAsync(app);
+        var state = stateCookie.Split('|')[0];
+
+        var callback = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/auth/callback/fake",
+            Query = $"code=abc&state={state}",
+            Cookies = new Dictionary<string, string> { ["reptar_oauth_pkce_fake"] = stateCookie },
+        });
+
+        Assert.Equal(302, callback.Status);
+        Assert.Equal("/after", callback.Headers["Location"]);
+    }
+
+    [Fact]
+    public async Task Jwt_VerifyRejectsOversizedTokenWithoutCrashing()
+    {
+        // Pre-fix: the verify path stackalloc'd a buffer sized by token
+        // length, so an oversized token crashed the process with an
+        // uncatchable StackOverflowException. It must fail closed instead.
+        var segment = new string('A', 512 * 1024);
+        var oversizedToken = $"{segment}.{segment}.{segment}";
+
+        var payload = await Jwt.VerifyAsync(
+            new DevCrypto(),
+            new JwtOptions { Secret = "regression-test-secret-0123456789" },
+            oversizedToken);
+
+        Assert.Null(payload);
+
+        // Sanity: a well-formed reject path still works (bad signature).
+        var header = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+        var body = "eyJzdWIiOiJ1c2VyMSIsImlhdCI6MTcwMDAwMDAwMH0";
+        var badSignature = "c2lnbmF0dXJl";
+        Assert.Null(await Jwt.VerifyAsync(
+            new DevCrypto(),
+            new JwtOptions { Secret = "regression-test-secret-0123456789" },
+            $"{header}.{body}.{badSignature}"));
+    }
+
+    [Fact]
+    public async Task DevCrypto_LongPassword_RoundTripsAfterNormalization()
+    {
+        var crypto = new DevCrypto();
+
+        // Long passwords are pre-hashed instead of crashing the verify path.
+        var longPassword = new string('x', 512 * 1024);
+        var hash = await crypto.HashPassword(longPassword);
+
+        Assert.True(await crypto.VerifyPassword(longPassword, hash));
+        Assert.False(await crypto.VerifyPassword(longPassword + "y", hash));
+
+        // Short passwords keep the original derivation (existing hashes stay
+        // verifiable).
+        var shortHash = await crypto.HashPassword("password123");
+        Assert.True(await crypto.VerifyPassword("password123", shortHash));
+        Assert.False(await crypto.VerifyPassword("password124", shortHash));
+
+        // Corrupt stored hashes fail closed instead of throwing.
+        Assert.False(await crypto.VerifyPassword("password123", "pbkdf2-sha256$100000$not-base64$$$"));
+        Assert.False(await crypto.VerifyPassword(
+            "password123",
+            $"pbkdf2-sha256$999999999999${Convert.ToBase64String(new byte[16])}${Convert.ToBase64String(new byte[32])}"));
+    }
+
+    [Fact]
+    public async Task CookieJar_RejectsHeaderInjectionValues()
+    {
+        var app = ReptarApp.Create(new ReptarConfig());
+
+        app.Get("/cookie-inject", ctx =>
+        {
+            ctx.Cookies.Set("reptar_session", "v\r\nSet-Cookie: evil=1");
+            return ctx.Status(200);
+        });
+        app.Get("/cookie-bad-name", ctx =>
+        {
+            ctx.Cookies.Set("bad name", "v");
+            return ctx.Status(200);
+        });
+        app.Get("/cookie-ok", ctx =>
+        {
+            ctx.Cookies.Set("reptar_session", "safe-token_value");
+            return ctx.Status(200);
+        });
+
+        // CR/LF in a cookie value is the Set-Cookie injection primitive: it
+        // must throw (surfacing as a 500 from the pipeline) rather than emit.
+        var inject = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/cookie-inject" });
+        Assert.Equal(500, inject.Status);
+        Assert.Empty(inject.SetCookies);
+
+        var invalidName = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/cookie-bad-name",
+        });
+        Assert.Equal(500, invalidName.Status);
+        Assert.Empty(invalidName.SetCookies);
+
+        var ok = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/cookie-ok" });
+        Assert.Equal(200, ok.Status);
+        Assert.Contains("reptar_session=safe-token_value", ok.SetCookies.Single());
+    }
+
+    [Fact]
+    public async Task Redirect_RejectsControlCharacterLocations()
+    {
+        var app = ReptarApp.Create(new ReptarConfig());
+
+        app.Get("/redirect-bad", ctx => ctx.Redirect("/ok\r\nSet-Cookie: x=1"));
+        app.Get("/redirect-ok", ctx => ctx.Redirect("/dashboard"));
+
+        var bad = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/redirect-bad" });
+        Assert.Equal(500, bad.Status);
+        Assert.False(bad.Headers.ContainsKey("Location"));
+
+        var ok = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/redirect-ok" });
+        Assert.Equal(302, ok.Status);
+        Assert.Equal("/dashboard", ok.Headers["Location"]);
+    }
+
+    [Fact]
+    public async Task BetterAuth_SignIn_IsThrottled_AndIgnoresSpoofedHeaders()
+    {
+        var authOpts = new AuthOptions { RateLimitMaxAttempts = 3 };
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = authOpts,
+        });
+        app.Route("/ba", BetterAuthProtocol.Routes(authOpts));
+        await app.EnsureCreatedAsync();
+
+        var signUp = await app.HandleAsync(Json(
+            "POST",
+            "/ba/sign-up/email",
+            """{"email":"ba.user@example.com","password":"password12345","name":"BA User"}"""));
+        Assert.Equal(201, signUp.Status);
+
+        // Invalid emails now fail validation before any DB/crypto work.
+        var invalidEmail = await app.HandleAsync(Json(
+            "POST",
+            "/ba/sign-in/email",
+            """{"email":"not-an-email","password":"password12345"}""",
+            remoteIp: "203.0.113.171"));
+        Assert.Equal(400, invalidEmail.Status);
+
+        // Failed attempts from one peer IP with rotating spoofed forwarding
+        // headers must share a single throttle bucket.
+        var spoofed = new[]
+        {
+            new Dictionary<string, string> { ["CF-Connecting-IP"] = "198.51.100.11" },
+            new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.12" },
+            new Dictionary<string, string>
+            {
+                ["CF-Connecting-IP"] = "198.51.100.13",
+                ["X-Forwarded-For"] = "198.51.100.14",
+            },
+        };
+
+        for (var i = 0; i < 3; i++)
+        {
+            var res = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "POST",
+                Path = "/ba/sign-in/email",
+                RemoteIp = "203.0.113.170",
+                Body = Encoding.UTF8.GetBytes("""{"email":"ba.user@example.com","password":"wrongpassword"}"""),
+                Headers = new Dictionary<string, string>(spoofed[i])
+                {
+                    ["content-type"] = "application/json",
+                }
+            });
+            Assert.Equal(401, res.Status);
+        }
+
+        var blocked = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/ba/sign-in/email",
+            RemoteIp = "203.0.113.170",
+            Body = Encoding.UTF8.GetBytes("""{"email":"ba.user@example.com","password":"wrongpassword"}"""),
+            Headers = new Dictionary<string, string> { ["content-type"] = "application/json" }
+        });
+        Assert.Equal(429, blocked.Status);
+
+        // Successful sign-in from a different peer is unaffected.
+        var success = await app.HandleAsync(Json(
+            "POST",
+            "/ba/sign-in/email",
+            """{"email":"ba.user@example.com","password":"password12345"}""",
+            remoteIp: "203.0.113.172"));
+        Assert.Equal(200, success.Status);
+    }
+
+    [Fact]
+    public async Task LoginThrottle_SweepsExpiredWindows_UnderDistinctKeyFlood()
+    {
+        // Flood the map past its bound with keys whose windows expire quickly,
+        // then verify expired windows are swept and fresh keys still record.
+        var shortWindow = TimeSpan.FromMilliseconds(20);
+
+        for (var i = 0; i < 11_000; i++)
+            LoginThrottle.RecordFailure($"sweep-regression-{i}", 1, shortWindow);
+
+        await Task.Delay(60);
+
+        LoginThrottle.RecordFailure("post-sweep-key", 1, shortWindow);
+
+        Assert.True(LoginThrottle.IsLimited("post-sweep-key", 1, shortWindow));
+        LoginThrottle.Reset("post-sweep-key");
+        Assert.False(LoginThrottle.IsLimited("post-sweep-key", 1, shortWindow));
+    }
+}

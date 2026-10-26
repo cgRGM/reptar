@@ -23,6 +23,7 @@ public sealed class CookieJar
         string? domain = null,
         bool secure = false)
     {
+        ValidateCookieParts(name, value);
         var parts = new List<string> { $"{name}={value}", "Path=/" };
 
         if (expiresIso is not null &&
@@ -52,6 +53,7 @@ public sealed class CookieJar
         string? domain = null,
         bool secure = false)
     {
+        ValidateCookieParts(name, value);
         var parts = new List<string>
         {
             $"{name}={value}",
@@ -174,6 +176,27 @@ public sealed class CookieJar
 
     public void Delete(string name, string? domain = null, bool secure = false) =>
         Set(name, "", TimeSpan.Zero, domain, secure);
+
+    /// <summary>
+    /// Rejects names and values that would corrupt the Set-Cookie header or
+    /// enable header injection. Names must be RFC 6265 tokens (no separators,
+    /// no whitespace, no '='), and values must never contain CR/LF/NUL or the
+    /// cookie delimiters ';' and ','.
+    /// </summary>
+    private static void ValidateCookieParts(string name, string value)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+
+        if (name.AsSpan().IndexOfAny(InvalidCookieNameChars.AsSpan()) >= 0)
+            throw new ArgumentException($"Invalid cookie name '{name}'.", nameof(name));
+
+        if (value.AsSpan().IndexOfAny(InvalidCookieValueChars.AsSpan()) >= 0)
+            throw new ArgumentException(
+                "Cookie value must not contain CR, LF, NUL, ';' or ','.", nameof(value));
+    }
+
+    private const string InvalidCookieNameChars = "\r\n\0;,\t =\"";
+    private const string InvalidCookieValueChars = "\r\n\0;,";
 
     private static bool FixedTimeEquals(byte[] a, byte[] b)
     {

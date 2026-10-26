@@ -2089,11 +2089,17 @@ public class BetterAuthTests
         Assert.Equal(200, signInRes.Status);
         Assert.NotNull(BetterAuthCookie(signInRes));
 
-        // 5. Sign in with invalid password
-        var failRes = await app.HandleAsync(Json(
-            "POST",
-            "/api/auth/sign-in/email",
-            """{"email":"better@example.dev","password":"wrongpassword"}"""));
+        // 5. Sign in with invalid password (unique RemoteIp so this recorded
+        // failure cannot pollute the shared LoginThrottle state other auth
+        // tests also key into)
+        var failRes = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/api/auth/sign-in/email",
+            RemoteIp = "203.0.113.160",
+            Headers = new Dictionary<string, string> { ["content-type"] = "application/json" },
+            Body = Encoding.UTF8.GetBytes("""{"email":"better@example.dev","password":"wrongpassword"}"""),
+        });
 
         Assert.Equal(401, failRes.Status);
 
@@ -2487,28 +2493,50 @@ public class BetterAuthTests
         await app.HandleAsync(Json("POST", "/auth/signup",
             """{"email":"ratelimit@example.com","password":"password123","name":"Rate Limit"}"""));
 
-        var ipHeader = new Dictionary<string, string> { ["CF-Connecting-IP"] = "192.168.1.100" };
+        // Failed attempts from one fixed peer IP, each carrying a different
+        // spoofed forwarding header: the throttle must key on the peer
+        // address (RemoteIp) and never on client-controlled headers.
+        var spoofedHeaderSets = new[]
+        {
+            new Dictionary<string, string> { ["CF-Connecting-IP"] = "198.51.100.1" },
+            new Dictionary<string, string> { ["X-Forwarded-For"] = "198.51.100.2" },
+            new Dictionary<string, string>
+            {
+                ["CF-Connecting-IP"] = "198.51.100.3",
+                ["X-Forwarded-For"] = "198.51.100.4",
+            },
+            new Dictionary<string, string>(),
+        };
 
-        // 3 failed login attempts
+        // 3 failed login attempts: rotating spoofed headers must not create
+        // fresh throttle buckets
         for (int i = 0; i < 3; i++)
         {
             var res = await app.HandleAsync(new ReptarRequest
             {
                 Method = "POST",
                 Path = "/auth/signin",
+                RemoteIp = "203.0.113.150",
                 Body = Encoding.UTF8.GetBytes("""{"email":"ratelimit@example.com","password":"wrongpassword"}"""),
-                Headers = new Dictionary<string, string>(ipHeader) { ["content-type"] = "application/json" }
+                Headers = new Dictionary<string, string>(spoofedHeaderSets[i])
+                {
+                    ["content-type"] = "application/json",
+                }
             });
             Assert.Equal(401, res.Status);
         }
 
-        // 4th attempt should be blocked with 429 Too Many Requests
+        // 4th attempt from the same peer is blocked with 429 Too Many Requests
         var blockedRes = await app.HandleAsync(new ReptarRequest
         {
             Method = "POST",
             Path = "/auth/signin",
+            RemoteIp = "203.0.113.150",
             Body = Encoding.UTF8.GetBytes("""{"email":"ratelimit@example.com","password":"wrongpassword"}"""),
-            Headers = new Dictionary<string, string>(ipHeader) { ["content-type"] = "application/json" }
+            Headers = new Dictionary<string, string>(spoofedHeaderSets[3])
+            {
+                ["content-type"] = "application/json",
+            }
         });
         Assert.Equal(429, blockedRes.Status);
         var errBody = Encoding.UTF8.GetString(blockedRes.Body!);

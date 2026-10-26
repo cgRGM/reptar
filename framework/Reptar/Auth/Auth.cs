@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using static Reptar.ReptarApi;
 
 namespace Reptar;
@@ -118,50 +117,6 @@ public static class Auth
     public static readonly Validator<CreateApiKeyInput> CreateApiKeySchema = Rule<CreateApiKeyInput>()
         .Prop(x => x.Name, rules => rules.Min(1).Max(64));
 
-    private static readonly ConcurrentDictionary<string, (int Failures, DateTimeOffset WindowStart)> _loginAttempts = new();
-
-    private static bool IsRateLimited(string clientIp)
-    {
-        if (!_options.EnableRateLimiting) return false;
-        if (_loginAttempts.TryGetValue(clientIp, out var attempt))
-        {
-            var window = TimeSpan.FromMinutes(_options.RateLimitWindowMinutes);
-            if (DateTimeOffset.UtcNow - attempt.WindowStart < window)
-            {
-                return attempt.Failures >= _options.RateLimitMaxAttempts;
-            }
-            _loginAttempts.TryRemove(clientIp, out _);
-        }
-        return false;
-    }
-
-    private static void RecordFailedLogin(string clientIp)
-    {
-        if (!_options.EnableRateLimiting) return;
-        var now = DateTimeOffset.UtcNow;
-        var window = TimeSpan.FromMinutes(_options.RateLimitWindowMinutes);
-        _loginAttempts.AddOrUpdate(
-            clientIp,
-            _ => (1, now),
-            (_, existing) =>
-            {
-                if (now - existing.WindowStart > window)
-                    return (1, now);
-                return (existing.Failures + 1, existing.WindowStart);
-            });
-    }
-
-    private static void ResetFailedLogins(string clientIp)
-    {
-        if (!_options.EnableRateLimiting) return;
-        _loginAttempts.TryRemove(clientIp, out _);
-    }
-
-    private static string GetClientIp(Ctx ctx) =>
-        ctx.Req.Header("CF-Connecting-IP")
-        ?? ctx.Req.Header("X-Forwarded-For")?.Split(',')[0].Trim()
-        ?? "127.0.0.1";
-
     public static ReptarApp Routes()
     {
         var app = ReptarApp.Create();
@@ -194,8 +149,16 @@ public static class Auth
 
         app.Post("/signin", SignInSchema, async (ctx, input) =>
         {
-            var clientIp = GetClientIp(ctx);
-            if (IsRateLimited(clientIp))
+            // Throttling keys on the socket peer address by default; proxy
+            // headers are client-controlled and only consulted behind an
+            // explicit TrustProxyHeaders opt-in.
+            var throttleKey = _options.EnableRateLimiting
+                ? LoginThrottle.ClientKey(ctx, _options)
+                : null;
+            var window = TimeSpan.FromMinutes(_options.RateLimitWindowMinutes);
+
+            if (throttleKey is not null &&
+                LoginThrottle.IsLimited(throttleKey, _options.RateLimitMaxAttempts, window))
             {
                 return ctx.Json(new AuthErrorResponse("Too many failed login attempts. Please try again later."), 429);
             }
@@ -208,11 +171,13 @@ public static class Auth
 
             if (user is null || user.PasswordHash is null || !await ctx.Crypto.VerifyPassword(input.Password, user.PasswordHash))
             {
-                RecordFailedLogin(clientIp);
+                if (throttleKey is not null)
+                    LoginThrottle.RecordFailure(throttleKey, _options.RateLimitMaxAttempts, window);
                 return ctx.Unauthorized("Invalid email or password.");
             }
 
-            ResetFailedLogins(clientIp);
+            if (throttleKey is not null)
+                LoginThrottle.Reset(throttleKey);
             await StartSession(ctx, user.Id);
 
             return ctx.Json(new SessionUser(user.Id, user.Email, user.Name, user.Role, user.Image, user.EmailVerified));
@@ -280,18 +245,27 @@ public static class Auth
                 return ctx.BadRequest($"OAuth provider '{input.Provider}' is not configured.");
             }
 
+            // Post-auth redirect targets must be site-relative paths: an
+            // attacker-supplied absolute URL would turn the callback into an
+            // open redirect (and its raw value into a header-injection probe).
+            var callbackUrl = input.CallbackUrl;
+            if (!IsSiteRelativePath(callbackUrl))
+            {
+                return ctx.BadRequest("Callback URL must be a site-relative path starting with '/'.");
+            }
+
             var verifier = Pkce.GenerateCodeVerifier();
             var challenge = Pkce.GenerateCodeChallenge(verifier);
             var state = ctx.Crypto.RandomToken(16);
 
-            var origin = ctx.Req.Header("Origin") ?? ctx.Req.Header("Host") ?? "http://localhost:8787";
-            if (!origin.StartsWith("http", StringComparison.OrdinalIgnoreCase)) origin = "http://" + origin;
-            var redirectUri = $"{origin}/auth/callback/{provider.ProviderName}";
+            var redirectUri = BuildRedirectUri(ctx, provider.ProviderName);
 
             var expires = ctx.Clock.IsoIn(TimeSpan.FromMinutes(10));
+            // The state binds the authorization round-trip: the callback
+            // compares it against this cookie before exchanging any code.
             ctx.Cookies.Set(
                 $"reptar_oauth_pkce_{provider.ProviderName}",
-                $"{verifier}|{input.CallbackUrl}",
+                $"{state}|{verifier}|{callbackUrl}",
                 expires,
                 domain: null,
                 secure: _options.SecureCookies);
@@ -313,17 +287,26 @@ public static class Auth
             if (string.IsNullOrEmpty(code))
                 return ctx.BadRequest("Authorization code missing.");
 
+            var state = ctx.Req.QueryValue("state");
             var pkceCookie = ctx.Cookies.Get($"reptar_oauth_pkce_{provider.ProviderName}");
             if (string.IsNullOrEmpty(pkceCookie))
                 return ctx.BadRequest("Missing or expired OAuth state.");
 
-            var parts = pkceCookie.Split('|', 2);
-            var verifier = parts[0];
-            var callbackUrl = parts.Length > 1 && !string.IsNullOrEmpty(parts[1]) ? parts[1] : "/";
+            // The state cookie binds this callback to the authorize request the
+            // user actually made; without it, any code could be replayed into
+            // this browser (login CSRF / account binding hijack).
+            var parts = pkceCookie.Split('|', 3);
+            if (parts.Length < 3 ||
+                string.IsNullOrEmpty(state) ||
+                !string.Equals(parts[0], state, StringComparison.Ordinal))
+            {
+                return ctx.BadRequest("Invalid OAuth state verification.");
+            }
 
-            var origin = ctx.Req.Header("Origin") ?? ctx.Req.Header("Host") ?? "http://localhost:8787";
-            if (!origin.StartsWith("http", StringComparison.OrdinalIgnoreCase)) origin = "http://" + origin;
-            var redirectUri = $"{origin}/auth/callback/{provider.ProviderName}";
+            var verifier = parts[1];
+            var callbackUrl = string.IsNullOrEmpty(parts[2]) ? "/" : parts[2];
+
+            var redirectUri = BuildRedirectUri(ctx, provider.ProviderName);
 
             OAuthUserInfo userInfo;
             try
@@ -336,46 +319,69 @@ public static class Auth
             }
 
             var email = userInfo.Email.Trim().ToLowerInvariant();
-            var user = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
-                "SELECT * FROM users WHERE email = @email",
-                new { email });
 
-            if (user is null)
-            {
-                var id = Ids.New("usr");
-                user = new UserRow(
-                    Id: id,
-                    Email: email,
-                    Name: string.IsNullOrEmpty(userInfo.Name) ? userInfo.Email : userInfo.Name,
-                    PasswordHash: null,
-                    IsAnonymous: 0,
-                    Role: _options.BootstrapAdmins.Contains(email) ? "admin" : "user",
-                    CreatedAt: ctx.Clock.IsoNow(),
-                    Image: userInfo.Image,
-                    EmailVerified: 1);
-
-                await ctx.Db.InsertAsync(Users, user);
-            }
-
-            var accountExists = await ctx.Db.ExistsAsync(OAuthAccounts,
-                "provider = @provider AND provider_user_id = @puid",
+            // An existing provider link wins: it was established at first
+            // sign-in and is bound to the provider identity, not the email.
+            var account = await ctx.Db.QuerySingleOrDefaultAsync<OAuthAccountRow>(
+                "SELECT id, user_id as UserId, provider, provider_user_id as ProviderUserId, created_at as CreatedAt FROM oauth_accounts WHERE provider = @provider AND provider_user_id = @puid",
                 new { provider = provider.ProviderName, puid = userInfo.ProviderUserId });
 
-            if (!accountExists)
+            string userId;
+
+            if (account is not null)
             {
+                userId = account.UserId;
+            }
+            else
+            {
+                var existing = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
+                    "SELECT * FROM users WHERE email = @email",
+                    new { email });
+
+                if (existing is not null && !userInfo.EmailVerified)
+                {
+                    // Never attach an OAuth identity to a password account on a
+                    // provider email the IdP has not verified — that is the
+                    // unverified-email account-takeover path.
+                    return ctx.Conflict("Provider email is not verified. Sign in with your password, then link this provider from account settings.");
+                }
+
+                if (existing is null)
+                {
+                    var id = Ids.New("usr");
+                    existing = new UserRow(
+                        Id: id,
+                        Email: email,
+                        Name: string.IsNullOrEmpty(userInfo.Name) ? userInfo.Email : userInfo.Name,
+                        PasswordHash: null,
+                        IsAnonymous: 0,
+                        Role: _options.BootstrapAdmins.Contains(email) ? "admin" : "user",
+                        CreatedAt: ctx.Clock.IsoNow(),
+                        Image: userInfo.Image,
+                        EmailVerified: userInfo.EmailVerified ? 1 : 0);
+
+                    await ctx.Db.InsertAsync(Users, existing);
+                }
+
+                userId = existing.Id;
+
                 await ctx.Db.InsertAsync(OAuthAccounts, new OAuthAccountRow(
                     Id: Ids.New("acc"),
-                    UserId: user.Id,
+                    UserId: userId,
                     Provider: provider.ProviderName,
                     ProviderUserId: userInfo.ProviderUserId,
                     CreatedAt: ctx.Clock.IsoNow()));
             }
 
+            var linkedUser = await FindUserById(ctx, userId);
+            if (linkedUser is null)
+                return ctx.Unauthorized("Linked account no longer exists.");
+
             ctx.Cookies.Delete(
                 $"reptar_oauth_pkce_{provider.ProviderName}",
                 domain: null,
                 secure: _options.SecureCookies);
-            await StartSession(ctx, user.Id);
+            await StartSession(ctx, userId);
 
             return ctx.Redirect(callbackUrl);
         });
@@ -654,6 +660,36 @@ public static class Auth
             TimeSpan.FromMinutes(options.LifetimeMinutes));
 
         return await Jwt.SignAsync(ctx.Crypto, options, payload);
+    }
+
+    /// <summary>
+    /// OAuth callback targets must be site-relative paths ("/dashboard"), never
+    /// absolute or protocol-relative URLs (open redirect / phishing), and never
+    /// control characters (header injection).
+    /// </summary>
+    internal static bool IsSiteRelativePath(string? url) =>
+        url is not null &&
+        url.Length <= 512 &&
+        url.StartsWith('/') &&
+        !url.StartsWith("//", StringComparison.Ordinal) &&
+        !url.StartsWith("/\\", StringComparison.Ordinal) &&
+        url.AsSpan().IndexOfAny('\r', '\n', '\0') < 0;
+
+    internal static string BuildRedirectUri(Ctx ctx, string providerName)
+    {
+        // A configured public origin wins: Origin/Host headers are client-
+        // spoofable whenever the app is not behind a header-rewriting proxy.
+        var publicOrigin = _options.PublicBaseUrl?.TrimEnd('/');
+        if (!string.IsNullOrEmpty(publicOrigin))
+        {
+            if (!publicOrigin.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                publicOrigin = "https://" + publicOrigin;
+            return $"{publicOrigin}/auth/callback/{providerName}";
+        }
+
+        var origin = ctx.Req.Header("Origin") ?? ctx.Req.Header("Host") ?? "http://localhost:8787";
+        if (!origin.StartsWith("http", StringComparison.OrdinalIgnoreCase)) origin = "http://" + origin;
+        return $"{origin}/auth/callback/{providerName}";
     }
 
     public static Task<SessionUser?> FindUserById(Ctx ctx, string id) =>
