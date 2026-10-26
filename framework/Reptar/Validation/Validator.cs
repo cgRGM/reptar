@@ -90,6 +90,7 @@ public sealed class Validator<
         return this;
     }
 
+#if !NETWASM
     private static Func<T, TProp> CreateAotGetter<TProp>(PropertyInfo propertyInfo)
     {
         try
@@ -111,6 +112,7 @@ public sealed class Validator<
             ? default!
             : (TProp)propertyInfo.GetValue(value)!;
     }
+#endif
 
     public Validator<T> Prop<TProp>(
         string name,
