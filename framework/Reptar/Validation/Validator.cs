@@ -183,6 +183,16 @@ public abstract class PropertyRules
         string path,
         ref List<ValidationIssue>? issues);
 
+    /// <summary>
+    /// Typed fast path used by <see cref="Validator{T}"/>; the default falls
+    /// back to the object overload for uncommon property types.
+    /// </summary>
+    internal virtual void Check<TProp>(
+        TProp value,
+        string path,
+        ref List<ValidationIssue>? issues) =>
+        Check((object?)value, path, ref issues);
+
     internal static void AddIssue(
         ref List<ValidationIssue>? issues,
         string message,
@@ -285,6 +295,20 @@ public sealed class StringRules : PropertyRules
         return this;
     }
 
+    internal override void Check<TProp>(
+        TProp value,
+        string path,
+        ref List<ValidationIssue>? issues)
+    {
+        if (value is string text)
+        {
+            CheckText(text, path, ref issues);
+            return;
+        }
+
+        Check((object?)value, path, ref issues);
+    }
+
     internal override void Check(
         object? value,
         string path,
@@ -298,8 +322,14 @@ public sealed class StringRules : PropertyRules
             return;
         }
 
-        var text = (string)value;
+        CheckText((string)value, path, ref issues);
+    }
 
+    private void CheckText(
+        string text,
+        string path,
+        ref List<ValidationIssue>? issues)
+    {
         if (_min is { } min && text.Length < min)
             AddIssue(ref issues, $"Must be at least {min} characters.", [path]);
 
@@ -370,6 +400,34 @@ public sealed class NumberRules : PropertyRules
         return this;
     }
 
+    internal override void Check<TProp>(
+        TProp value,
+        string path,
+        ref List<ValidationIssue>? issues)
+    {
+        double number;
+
+        if (value is int intValue)
+            number = intValue;
+        else if (value is long longValue)
+            number = longValue;
+        else if (value is short shortValue)
+            number = shortValue;
+        else if (value is double doubleValue)
+            number = doubleValue;
+        else if (value is float floatValue)
+            number = floatValue;
+        else if (value is decimal decimalValue)
+            number = (double)decimalValue;
+        else
+        {
+            Check((object?)value, path, ref issues);
+            return;
+        }
+
+        CheckNumber(number, path, ref issues);
+    }
+
     internal override void Check(
         object? value,
         string path,
@@ -383,8 +441,14 @@ public sealed class NumberRules : PropertyRules
             return;
         }
 
-        var number = Convert.ToDouble(value);
+        CheckNumber(Convert.ToDouble(value), path, ref issues);
+    }
 
+    private void CheckNumber(
+        double number,
+        string path,
+        ref List<ValidationIssue>? issues)
+    {
         if (_min is { } min && number < min)
             AddIssue(ref issues, $"Must be at least {min}.", [path]);
 
@@ -403,6 +467,15 @@ public sealed class BasicRules : PropertyRules
     {
         MarkOptional();
         return this;
+    }
+
+    internal override void Check<TProp>(
+        TProp value,
+        string path,
+        ref List<ValidationIssue>? issues)
+    {
+        if (value is null && ShouldRequire)
+            AddIssue(ref issues, "Required.", [path]);
     }
 
     internal override void Check(

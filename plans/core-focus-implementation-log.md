@@ -16,7 +16,9 @@
 - Existing tests pass; validation semantics unchanged.
 - Verified with a real Native AOT publish (`PublishAot=true`, osx-arm64): `Rule<T>` validates correctly (`ok=0 bad=2`) and the `IL2091` trim warning was fixed by annotating `ReptarApi.Rule<T>`.
 
-**Still open:** value types still box at `PropertyRules.Check(object?)`; the next step is a generic `PropertyRules<TProp>` or source-generated typed checks.
+- Added a generic `PropertyRules.Check<TProp>` fast path: strings and common numeric types no longer box through `object?`; uncommon types fall back to the object path.
+
+**Still open:** benchmark the typed path against the manual-validation tier.
 
 ### 1b. Build-time JSON context generation
 
@@ -161,6 +163,6 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 3. DB/HTTP cancellation + command timeouts.
 4. Migration locks and dry-run/check mode (checksums landed).
 5. Cache metrics and shared/distributed cache adapters (single-flight, ETag, compression landed).
-6. `Rule<T>` generic value path (remove boxing) + benchmark tier.
+6. Benchmark the new `Rule<T>` typed path against the manual-validation tier.
 7. Move `make:*` into the project-local CLI; add scaffold smoke test.
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
