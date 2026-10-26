@@ -58,6 +58,9 @@ internal sealed class RouteEntry
     public required bool[] IsParamSegment { get; init; }
     public required string[] ParamNames { get; init; }
     public required int[] ParamIndices { get; init; }
+    public bool IsCatchAll { get; init; }
+    public string? CatchAllName { get; init; }
+    public int CatchAllIndex { get; init; } = -1;
     public ReptarMiddleware? Middleware { get; init; }
     public required Func<Ctx, Task<ReptarResponse>> Handler { get; init; }
     public required RouteMeta Meta { get; init; }
@@ -109,6 +112,7 @@ public sealed class ReptarApp
     private readonly Dictionary<string, RouteEntry> _staticPatch = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, RouteEntry> _staticOther = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<(string Method, int SegmentCount), List<RouteEntry>> _paramRoutes = new();
+    private readonly Dictionary<string, List<RouteEntry>> _catchAllRoutes = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<ReptarMiddleware> _middlewares = new();
     private readonly Dictionary<string, Func<Ctx, QueueMessage, Task>> _queueHandlers =
         new(StringComparer.OrdinalIgnoreCase);
@@ -209,6 +213,23 @@ public sealed class ReptarApp
 
     public ReptarApp UseETag(ETagOptions? options = null) =>
         Use(Middlewares.ETag(options));
+
+    /// <summary>
+    /// Adds stale-while-revalidate caching. Cache outcomes are reported to the
+    /// app's metrics registry by default.
+    /// </summary>
+    public ReptarApp UseSWR(
+        int ttlSeconds = 15,
+        int swrSeconds = 30,
+        Action<SwrOptions>? configure = null) =>
+        Use(Middlewares.SWR(
+            ttlSeconds,
+            swrSeconds,
+            options =>
+            {
+                options.Metrics ??= Metrics;
+                configure?.Invoke(options);
+            }));
 
     /// <summary>
     /// Adds an application module. Configure runs immediately; Start/Stop run
@@ -552,6 +573,13 @@ public sealed class ReptarApp
 
         for (var i = 0; i < segments.Length; i++)
         {
+            if (segments[i].StartsWith('*'))
+            {
+                throw new ArgumentException(
+                    "Catch-all segments are not supported for WebSocket routes.",
+                    nameof(path));
+            }
+
             if (TryParseParamSegment(segments[i], out var name))
             {
                 isParamSegment[i] = true;
@@ -1116,15 +1144,45 @@ public sealed class ReptarApp
         var isParamSegment = new bool[segments.Length];
         var paramNames = new List<string>();
         var paramIndices = new List<int>();
+        var isCatchAll = false;
+        string? catchAllName = null;
+        var catchAllIndex = -1;
 
         for (var i = 0; i < segments.Length; i++)
         {
-            if (segments[i].StartsWith(':'))
+            var segment = segments[i];
+
+            if (segment.StartsWith(':'))
             {
                 isParamSegment[i] = true;
-                paramNames.Add(segments[i][1..]);
+                paramNames.Add(segment[1..]);
                 paramIndices.Add(i);
+                continue;
             }
+
+            if (!segment.StartsWith('*'))
+                continue;
+
+            if (i != segments.Length - 1)
+            {
+                throw new ArgumentException(
+                    $"Catch-all segment '{segment}' must be the final route segment.",
+                    nameof(path));
+            }
+
+            if (segment.Length == 1)
+            {
+                throw new ArgumentException(
+                    "Catch-all segments must be named, e.g. '/files/*path'.",
+                    nameof(path));
+            }
+
+            isCatchAll = true;
+            catchAllName = segment[1..];
+            catchAllIndex = i;
+            isParamSegment[i] = true;
+            paramNames.Add(catchAllName);
+            paramIndices.Add(i);
         }
 
         return new RouteEntry
@@ -1136,6 +1194,9 @@ public sealed class ReptarApp
             IsParamSegment = isParamSegment,
             ParamNames = paramNames.ToArray(),
             ParamIndices = paramIndices.ToArray(),
+            IsCatchAll = isCatchAll,
+            CatchAllName = catchAllName,
+            CatchAllIndex = catchAllIndex,
             Middleware = middleware,
             Handler = handler,
             Meta = meta,
@@ -1192,7 +1253,17 @@ public sealed class ReptarApp
     {
         _routes.Add(entry);
 
-        if (!entry.HasParams)
+        if (entry.IsCatchAll)
+        {
+            var upperMethod = NormalizeMethod(entry.Method);
+            if (!_catchAllRoutes.TryGetValue(upperMethod, out var catchAll))
+            {
+                catchAll = new List<RouteEntry>();
+                _catchAllRoutes[upperMethod] = catchAll;
+            }
+            catchAll.Add(entry);
+        }
+        else if (!entry.HasParams)
         {
             var dict = GetStaticDict(entry.Method);
             dict[entry.Path] = entry;
@@ -1271,6 +1342,49 @@ public sealed class ReptarApp
                 for (var p = 0; p < entry.ParamNames.Length; p++)
                 {
                     routeParams[entry.ParamNames[p]] = segments[entry.ParamIndices[p]];
+                }
+
+                return (entry, routeParams);
+            }
+        }
+
+        // 3. Catch-all Routes (e.g. /files/*path). Static and single-segment
+        // parameter routes always win, so catch-alls are the last resort.
+        if (_catchAllRoutes.TryGetValue(upperMethod, out var catchAllCandidates))
+        {
+            for (var c = 0; c < catchAllCandidates.Count; c++)
+            {
+                var entry = catchAllCandidates[c];
+                if (segments.Length <= entry.CatchAllIndex)
+                    continue;
+
+                var matched = true;
+                for (var i = 0; i < entry.CatchAllIndex; i++)
+                {
+                    if (!entry.IsParamSegment[i] &&
+                        !string.Equals(
+                            entry.Segments[i],
+                            segments[i],
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        matched = false;
+                        break;
+                    }
+                }
+
+                if (!matched)
+                    continue;
+
+                var routeParams = new Dictionary<string, string>(
+                    entry.ParamNames.Length,
+                    StringComparer.OrdinalIgnoreCase);
+
+                for (var p = 0; p < entry.ParamNames.Length; p++)
+                {
+                    var index = entry.ParamIndices[p];
+                    routeParams[entry.ParamNames[p]] = index == entry.CatchAllIndex
+                        ? string.Join("/", segments[index..])
+                        : segments[index];
                 }
 
                 return (entry, routeParams);

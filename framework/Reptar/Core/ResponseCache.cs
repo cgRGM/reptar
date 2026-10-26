@@ -16,6 +16,7 @@ public sealed class SwrOptions
     public Func<Ctx, string>? KeyBuilder { get; set; }
     public Func<Ctx, bool>? ShouldCache { get; set; }
     public Action<string, string>? OnInvalidate { get; set; }
+    public MetricsRegistry? Metrics { get; set; }
 }
 
 public static class CacheControl
@@ -52,6 +53,7 @@ public static class CacheControl
                     options.OnInvalidate?.Invoke(ctx.Req.Method, ctx.Req.Path);
                 }
                 writeRes.Headers["X-Cache"] = "BYPASS";
+                options.Metrics?.RecordCache("BYPASS");
                 return writeRes;
             }
 
@@ -60,6 +62,7 @@ public static class CacheControl
             {
                 var bypassRes = await next();
                 bypassRes.Headers["X-Cache"] = "BYPASS";
+                options.Metrics?.RecordCache("BYPASS");
                 return bypassRes;
             }
 
@@ -71,6 +74,7 @@ public static class CacheControl
                 {
                     var authRes = await next();
                     authRes.Headers["X-Cache"] = "BYPASS";
+                    options.Metrics?.RecordCache("BYPASS");
                     return authRes;
                 }
             }
@@ -80,6 +84,7 @@ public static class CacheControl
             {
                 var skippedRes = await next();
                 skippedRes.Headers["X-Cache"] = "BYPASS";
+                options.Metrics?.RecordCache("BYPASS");
                 return skippedRes;
             }
 
@@ -155,6 +160,7 @@ public static class CacheControl
                 missRes.Headers["X-Cache"] = "BYPASS";
             }
 
+            options.Metrics?.RecordCache(missRes.Headers["X-Cache"]);
             return missRes;
 #else
             // Single-flight the upstream call so a burst of concurrent misses
@@ -191,6 +197,7 @@ public static class CacheControl
                     missRes.Headers["X-Cache"] = "BYPASS";
                 }
 
+                options.Metrics?.RecordCache(missRes.Headers["X-Cache"]);
                 return missRes;
             }
             finally
@@ -390,6 +397,7 @@ public static class CacheControl
         res.Headers["X-Cache"] = cacheStatus;
         res.Headers["Age"] = ageSeconds.ToString();
         res.Headers["Cache-Control"] = $"public, max-age={options.TtlSeconds}, stale-while-revalidate={options.SwrSeconds}";
+        options.Metrics?.RecordCache(cacheStatus);
 
         return res;
     }

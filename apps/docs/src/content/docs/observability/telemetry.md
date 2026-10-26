@@ -100,6 +100,9 @@ It exposes `reptar_http_requests_total` (method/route/status) and
 Route labels use the matched template, not the raw path. Protect `/metrics`
 with `Auth.RequireRole("admin")` or a private listener when exposed publicly.
 
+`UseSWR()` reports cache outcomes as `reptar_cache_requests_total{status="HIT|MISS|STALE|BYPASS"}`
+through the same registry; mount `UseMetrics()` before `UseSWR()`.
+
 ## 5. Sampling and Overhead
 
 - `SampleRate` applies to successful, non-slow requests.

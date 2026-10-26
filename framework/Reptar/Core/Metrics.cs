@@ -17,8 +17,19 @@ public sealed class MetricsRegistry
     private readonly ConcurrentDictionary<string, long> _counters =
         new(StringComparer.Ordinal);
 
+    private readonly ConcurrentDictionary<string, long> _cacheCounters =
+        new(StringComparer.Ordinal);
+
     private readonly ConcurrentDictionary<string, Histogram> _histograms =
         new(StringComparer.Ordinal);
+
+    public void RecordCache(string status)
+    {
+        _cacheCounters.AddOrUpdate(
+            $"reptar_cache_requests_total{{status=\"{Escape(status)}\"}}",
+            1,
+            static (_, value) => value + 1);
+    }
 
     public void Record(string method, string route, int status, double durationMs)
     {
@@ -44,6 +55,16 @@ public sealed class MetricsRegistry
 
         foreach (var (key, value) in _counters.OrderBy(pair => pair.Key, StringComparer.Ordinal))
             builder.AppendLine($"{key} {value.ToString(CultureInfo.InvariantCulture)}");
+
+        builder.AppendLine("# HELP reptar_cache_requests_total SWR cache outcomes.");
+        builder.AppendLine("# TYPE reptar_cache_requests_total counter");
+
+        foreach (var (key, value) in _cacheCounters.OrderBy(
+            pair => pair.Key,
+            StringComparer.Ordinal))
+        {
+            builder.AppendLine($"{key} {value.ToString(CultureInfo.InvariantCulture)}");
+        }
 
         builder.AppendLine("# HELP reptar_http_request_duration_ms Request duration in milliseconds.");
         builder.AppendLine("# TYPE reptar_http_request_duration_ms histogram");
