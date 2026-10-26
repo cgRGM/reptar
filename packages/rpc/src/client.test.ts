@@ -3,6 +3,19 @@ import { expect, test } from "bun:test";
 import type { Endpoint } from "./client";
 import { createClient } from "./client";
 
+test("scaffold ships the same verified client as the RPC package", async () => {
+  const canonical = await Bun.file(
+    new URL("client.ts", import.meta.url)
+  ).text();
+  const template = await Bun.file(
+    new URL(
+      "../../../templates/fullstack/packages/client/src/client.ts",
+      import.meta.url
+    )
+  ).text();
+  expect(template).toBe(canonical);
+});
+
 interface QueryApp {
   statusProbe: {
     $get: Endpoint<
