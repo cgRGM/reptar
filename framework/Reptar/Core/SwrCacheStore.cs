@@ -118,9 +118,23 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
         Directory.CreateDirectory(_directory);
     }
 
-    public int Count => Directory.Exists(_directory)
-        ? Directory.EnumerateFiles(_directory, $"*{Extension}").Count()
-        : 0;
+    public int Count
+    {
+        get
+        {
+            if (!Directory.Exists(_directory))
+                return 0;
+
+            try
+            {
+                return Directory.EnumerateFiles(_directory, $"*{Extension}").Count();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return 0;
+            }
+        }
+    }
 
     public IReadOnlyCollection<string> Keys
     {
@@ -131,21 +145,29 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
             if (!Directory.Exists(_directory))
                 return keys;
 
-            foreach (var file in Directory.EnumerateFiles(_directory, $"*{Extension}"))
+            try
             {
-                try
+                foreach (var file in Directory.EnumerateFiles(_directory, $"*{Extension}"))
                 {
-                    using var stream = File.OpenRead(file);
-                    using var reader = new BinaryReader(stream, Encoding.UTF8);
-                    if (reader.ReadInt32() != Magic || reader.ReadByte() != Version)
-                        continue;
+                    try
+                    {
+                        using var stream = File.OpenRead(file);
+                        using var reader = new BinaryReader(stream, Encoding.UTF8);
+                        if (reader.ReadInt32() != Magic || reader.ReadByte() != Version)
+                            continue;
 
-                    keys.Add(reader.ReadString());
+                        keys.Add(reader.ReadString());
+                    }
+                    catch (Exception ex) when (
+                        ex is IOException or UnauthorizedAccessException or EndOfStreamException)
+                    {
+                        // A concurrent writer or a partially written file.
+                    }
                 }
-                catch (IOException)
-                {
-                    // A concurrent writer or a partially written file.
-                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // The directory disappeared between the check and enumeration.
             }
 
             return keys;
@@ -285,8 +307,15 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
         if (!Directory.Exists(_directory))
             return;
 
-        foreach (var file in Directory.EnumerateFiles(_directory, $"*{Extension}"))
-            TryDelete(file);
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(_directory, $"*{Extension}"))
+                TryDelete(file);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // The directory disappeared between the check and enumeration.
+        }
     }
 
     private void Trim()
@@ -294,10 +323,19 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
         if (!Directory.Exists(_directory))
             return;
 
-        var files = Directory.EnumerateFiles(_directory, $"*{Extension}")
-            .Select(file => new FileInfo(file))
-            .OrderBy(file => file.LastWriteTimeUtc)
-            .ToList();
+        List<FileInfo> files;
+
+        try
+        {
+            files = Directory.EnumerateFiles(_directory, $"*{Extension}")
+                .Select(file => new FileInfo(file))
+                .OrderBy(file => file.LastWriteTimeUtc)
+                .ToList();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
 
         var excess = files.Count - _maxEntries;
 
