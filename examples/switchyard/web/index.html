@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Switchyard / Rollout control</title>
+    <link rel="stylesheet" href="/style.css" />
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <header>
+      <a class="wordmark" href="/">S<span>↗</span> SWITCHYARD</a
+      ><span class="tag">REPTAR FIELD LAB / 001</span
+      ><span id="connection" role="status">CONNECTING</span>
+    </header>
+    <main>
+      <section class="intro">
+        <p class="eyebrow">FEATURE DELIVERY / CONTROL ROOM</p>
+        <h1>Small switches.<br />Measured releases.</h1>
+        <p>
+          Draft a change. Publish an immutable version.<br />Know exactly who
+          gets what.
+        </p>
+        <div class="rail" aria-hidden="true">
+          <span></span><span></span><span></span>
+        </div>
+      </section>
+      <section class="auth panel" id="auth-panel">
+        <p class="eyebrow">01 / OPERATOR ACCESS</p>
+        <h2>Take the controls</h2>
+        <form id="auth-form">
+          <label
+            >Operator name<input
+              id="name"
+              autocomplete="name"
+              value="Operator"
+              required
+              maxlength="80" /></label
+          ><label
+            >Email<input
+              id="email"
+              type="email"
+              autocomplete="email"
+              required /></label
+          ><label
+            >Password<input
+              id="password"
+              type="password"
+              autocomplete="current-password"
+              minlength="8"
+              required
+          /></label>
+          <div class="actions">
+            <button name="action" value="signin">Sign in ↗</button
+            ><button class="secondary" name="action" value="signup">
+              Create account
+            </button>
+          </div>
+        </form>
+      </section>
+      <section id="workspace" hidden>
+        <div class="workspace-head">
+          <div>
+            <p class="eyebrow">01 / WORKSPACE</p>
+            <h2 id="operator">Your switchyard</h2>
+          </div>
+          <button id="signout" class="secondary">Sign out</button>
+        </div>
+        <div class="grid">
+          <section class="panel">
+            <p class="eyebrow">02 / PROJECT & SIGNAL</p>
+            <label>Project<select id="project"></select></label>
+            <form id="project-form" class="inline">
+              <label
+                >New project<input
+                  id="project-name"
+                  maxlength="80"
+                  required
+                  placeholder="Payments platform" /></label
+              ><button>Create</button>
+            </form>
+            <form id="flag-form">
+              <div class="split">
+                <label
+                  >Flag key<input
+                    id="flag-key"
+                    required
+                    pattern="[a-z][a-z0-9-]{0,63}"
+                    placeholder="checkout-v2" /></label
+                ><label
+                  >Environment<select id="environment">
+                    <option>development</option>
+                    <option>staging</option>
+                    <option>production</option>
+                  </select></label
+                >
+              </div>
+              <button class="secondary">Add signal +</button>
+            </form>
+            <label>Active signal<select id="flag"></select></label>
+            <p id="flag-meta" class="mono">No signal selected</p>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">03 / DRAFT → LIVE</p>
+            <form id="draft-form">
+              <label class="toggle"
+                ><input id="enabled" type="checkbox" />Enable this flag</label
+              ><label for="rollout"
+                >Percentage rollout <output id="rollout-value">0%</output
+                ><input id="rollout" type="range" min="0" max="100" value="0"
+              /></label>
+              <div id="buckets" class="buckets" aria-hidden="true"></div>
+              <label
+                >Always-in subjects
+                <small
+                  >One key per line; disabled overrides all targeting.</small
+                ><textarea
+                  id="targets"
+                  rows="3"
+                  placeholder="internal-tester"
+                ></textarea>
+              </label>
+              <div class="actions">
+                <button>Save draft</button
+                ><button id="publish" type="button" class="secondary">
+                  Publish version ↗
+                </button>
+              </div>
+            </form>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">04 / EVALUATION PROBE</p>
+            <h2>Follow the signal.</h2>
+            <form id="evaluate-form" class="inline">
+              <label
+                >Subject key<input
+                  id="subject"
+                  required
+                  maxlength="200"
+                  value="customer-42" /></label
+              ><button>Evaluate</button>
+            </form>
+            <output id="decision" class="decision">AWAITING SIGNAL</output>
+            <p id="decision-meta" class="mono">
+              Deterministic UTF-8 bucketing / 100 lanes
+            </p>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">05 / RELEASE LEDGER</p>
+            <div class="ledger-title">
+              <h2>Every release, recorded.</h2>
+              <button id="refresh" class="secondary">Refresh</button>
+            </div>
+            <ol id="ledger"></ol>
+          </section>
+        </div>
+      </section>
+      <p id="message" role="status" aria-live="polite"></p>
+    </main>
+    <footer>
+      <span>BUILT WITH REPTAR / C# → TYPED TYPESCRIPT</span
+      ><span>SQLITE + NATIVE AOT / VPS LAB</span>
+    </footer>
+  </body>
+</html>

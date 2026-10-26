@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ESNext", "DOM"],
+    "strict": true,
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "paths": { "@reptar/client": ["../../packages/rpc/src/client.ts"] },
+    "types": ["bun"]
+  },
+  "include": ["*.ts", "web/*.ts", "rpc/app-type.d.ts", "rpc/types.ts"]
+}

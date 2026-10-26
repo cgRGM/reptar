@@ -85,6 +85,15 @@ jobs:
       - name: Framework tests
         run: bun reptar test
 
+      - name: Host boundary tests
+        run: bun test packages/host/src
+
+      - name: Host contract and artifact hashes
+        run: bun reptar check:host
+
+      - name: Worker size budget
+        run: bun reptar check:worker
+
       - name: Provider matrix (SQLite, Postgres, MySQL, D1)
         env:
           POSTGRES_TEST: "1"

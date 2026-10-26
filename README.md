@@ -42,7 +42,7 @@ Due to NetWasm `0.10.0` Binaryen's single-`[JSExport]` constraint (`Program.Hand
 | **Database (`c.Db`)** | C# `D1DbClient` (`[JSImport]`) / Postgres | C# `SqliteDbClient` / `PostgresDbClient` / `MySqlDbClient` | C# `SqliteDbClient` / `PostgresDbClient` / `MySqlDbClient` |
 | **Storage (`c.Storage`) & `Files.Check`** | C# `R2Client` (`[JSImport]`) | C# `LocalStorage` / `S3Storage` (SigV4) | C# `S3Storage` (SigV4) / `LocalStorage` |
 | **SSE (`Sse.cs`), WebSockets, Static Files** | TS `@reptar/host` Worker layer (`#if !NETWASM` in C#) | Native C# (`KestrelHost` / `ProductionExtensions`) | Buffered HTTP / API Gateway |
-| **Queue & Cron Consumers (`OnQueue`, `OnScheduled`)** | TS `@reptar/host` `queue`/`scheduled` bridge | Native C# (`HandleQueueBatchAsync`, `HandleScheduledAsync`) | Lambda Event Adapter |
+| **Queue & Cron Consumers (`OnQueue`, `OnScheduled`)** | TS `@reptar/host` `queue`/`scheduled` bridge | Native C# poller + cron scheduler (`DbQueueClient`, SQS, Azure Storage Queues, Pub/Sub adapters) | SQS event adapter (`ReportBatchItemFailures`) |
 
 ---
 
@@ -58,7 +58,7 @@ reptar/
 │   ├── Reptar.Wasm/     # netwasm0.1 target: D1, R2, KV, Queues, AI, DO bridges
 │   ├── Reptar.Kestrel/  # Native ASP.NET Core Kestrel host for Native AOT
 │   ├── Reptar.Lambda/   # AWS Lambda custom runtime host (provided.al2023)
-│   └── Reptar.Tests/    # Framework unit and integration tests (215 tests)
+│   └── Reptar.Tests/    # Framework unit and integration tests (388 tests)
 ├── examples/
 │   └── blog/            # File-based C# reference app (no .csproj)
 ├── packages/
@@ -93,7 +93,7 @@ bun reptar check:architecture   # Enforce the core/AI/terminal module boundary
 bun bench:gate --results <json> --baseline bench/perf-baseline.json  # Performance regression gate
 bun rpc:gen          # Generate contracts from C# route tree and sync packages/rpc
 bun rpc:check        # Typecheck the generated client contracts
-bun api:test         # Run all 215 framework unit tests
+bun api:test         # Run all 388 framework unit tests
 bun api:bench        # Run high-concurrency benchmarks (--target, -c, -d)
 bun e2e              # Run end-to-end integration tests
 bun run check        # Run Ultracite linter and formatter check
@@ -146,7 +146,7 @@ Showcase app: [`examples/agent-cli`](./examples/agent-cli) — file-based `app.c
 
 Inside the Cloudflare Worker isolate, C# interacts with Cloudflare platform primitives with zero network hops:
 
-- **Storage (`ctx.Storage`)**: R2 / S3 / local object store with metadata (`HeadAsync`), byte ranges (`GetRangeAsync`), cursor listing (`ListAsync`), presigned uploads and downloads, server-side copy/move, batch delete, streaming/multipart uploads, public CDN URLs, typed `StorageException` errors, and `ctx.File` / `ctx.Attachment` for `ETag`/`304`, `Range`/`206`, and `HEAD` responses.
+- **Storage (`ctx.Storage`)**: R2 / S3 / local object store with metadata (`HeadAsync`), byte ranges (`GetRangeAsync`), cursor listing (`ListAsync`), presigned uploads and downloads, server-side copy/move, batch delete, end-to-end streaming (`StreamBody` + `PutAsync(Stream)`), S3/R2 multipart with configurable part sizes, public CDN URLs, typed `StorageException` errors, and `ctx.File` / `ctx.Attachment` for `ETag`/`304`, `Range`/`206`, and `HEAD` responses.
 - **Cache (`ctx.Cache`)**: KV key-value store with TTL support.
 - **Queues (`ctx.Queue`)**: Message queue producer.
 - **Workers AI (`ctx.AI`)**: Edge LLM inferences (`@cf/meta/llama-3.2-1b-instruct`).

@@ -329,6 +329,40 @@ const run = async (): Promise<void> => {
       fail("PNG upload round-trip changed the bytes");
     }
 
+    // Streaming path: >8 MiB forces R2 multipart, and the route consumes
+    // ctx.Req.BodyStream instead of the buffered ctx.Req.Body.
+    const largePng = new Uint8Array((8 * 1024 * 1024) + 4096);
+    largePng.set(pngBytes, 0);
+    largePng[largePng.length - 1] = 0xff;
+
+    const streamUpload = await assertStatus(
+      "PUT /upload/stream (9 MiB multipart)",
+      await fetch(`${baseUrl}/upload/stream`, {
+        body: largePng,
+        headers: {
+          "content-type": "image/png",
+          cookie: anonymousCookie,
+        },
+        method: "PUT",
+      }),
+      201
+    );
+    const streamUploaded = await json<{ key: string; url: string }>(
+      streamUpload
+    );
+    const streamImage = await assertStatus(
+      `GET /images/${streamUploaded.key} (9 MiB)`,
+      await fetch(`${baseUrl}/images/${streamUploaded.key}`),
+      200
+    );
+    const streamBytes = new Uint8Array(await streamImage.arrayBuffer());
+    if (
+      streamBytes.length !== largePng.length ||
+      largePng.some((value, index) => streamBytes[index] !== value)
+    ) {
+      fail("streaming multipart upload round-trip changed the bytes");
+    }
+
     await assertStatus(
       "POST /auth/signout",
       await fetch(`${baseUrl}/auth/signout`, {

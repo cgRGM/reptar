@@ -138,7 +138,7 @@ public async Task UpdatePost_UnauthorizedUser_ReturnsForbidden()
 
 ## Testing Background Tasks (`ctx.WaitUntil`)
 
-When handlers enqueue background tasks with `ctx.WaitUntil(Func<Task>)`, the `ReptarTestClient` executes the handler, flushes the HTTP response, and automatically awaits all background tasks before completing `HandleAsync`.
+When handlers enqueue background tasks with `ctx.WaitUntil(Func<Task>)`, the `ReptarTestClient` executes the handler, flushes the HTTP response, and automatically awaits all background tasks before completing the request. A failing background task surfaces to the test instead of being silently dropped.
 
 This ensures background work runs deterministically in your test assertions without flaky `Thread.Sleep` or arbitrary polling delays:
 

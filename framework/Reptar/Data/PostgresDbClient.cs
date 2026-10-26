@@ -1077,5 +1077,6 @@ public sealed class PostgresTransactionContext
         }
         return await batch.ExecuteNonQueryAsync();
     }
+
 }
 #endif

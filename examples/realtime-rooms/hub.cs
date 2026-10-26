@@ -638,11 +638,19 @@ public sealed class RoomMessagePersister
         catch (System.Exception exception)
         {
             Interlocked.Increment(ref _persistFailed);
-            // Note: exception.Message can itself throw under NetWasm JS
-            // interop, so only the type name is surfaced.
-            Volatile.Write(
-                ref _lastPersistError,
-                exception.GetType().FullName ?? "unknown");
+            // exception.Message can itself throw under NetWasm JS interop;
+            // fall back to the type name when reading it fails.
+            string message;
+            try
+            {
+                message = exception.Message;
+            }
+            catch
+            {
+                message = exception.GetType().FullName ?? "unknown";
+            }
+
+            Volatile.Write(ref _lastPersistError, message);
         }
     }
 
@@ -667,9 +675,17 @@ public sealed class RoomMessagePersister
         catch (System.Exception exception)
         {
             Interlocked.Increment(ref _persistFailed);
-            Volatile.Write(
-                ref _lastPersistError,
-                exception.GetType().FullName ?? "unknown");
+            string message;
+            try
+            {
+                message = exception.Message;
+            }
+            catch
+            {
+                message = exception.GetType().FullName ?? "unknown";
+            }
+
+            Volatile.Write(ref _lastPersistError, message);
         }
     }
 }

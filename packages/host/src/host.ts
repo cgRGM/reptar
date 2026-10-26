@@ -1,5 +1,5 @@
 import { d1Batch, d1Execute, d1Query } from "./bindings";
-import type { QueueLike, ReptarBindings } from "./bindings";
+import type { QueueLike, ReptarBindings, SendEmailLike } from "./bindings";
 import {
   hashPassword,
   hmacSha256,
@@ -173,6 +173,30 @@ interface ReptarScope {
   __REPTAR_R2_DELETE?: (key: string) => Promise<void>;
   __REPTAR_R2_DELETE_MANY?: (keys: string) => Promise<void>;
   __REPTAR_R2_EXISTS?: (key: string) => Promise<boolean>;
+  __REPTAR_R2_MULTIPART_ABORT?: (
+    key: string,
+    uploadId: string
+  ) => Promise<void>;
+  __REPTAR_R2_MULTIPART_COMPLETE?: (
+    key: string,
+    uploadId: string,
+    parts: string
+  ) => Promise<void>;
+  __REPTAR_R2_MULTIPART_CREATE?: (
+    key: string,
+    contentType: string,
+    cacheControl: string,
+    contentDisposition: string,
+    contentEncoding: string,
+    contentLanguage: string,
+    metadataJson: string
+  ) => Promise<string>;
+  __REPTAR_R2_MULTIPART_PART?: (
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    bytes: Uint8Array
+  ) => Promise<string>;
   __REPTAR_R2_GET?: (key: string) => Promise<Uint8Array | null>;
   __REPTAR_R2_GET_RANGE?: (
     key: string,
@@ -195,12 +219,19 @@ interface ReptarScope {
     bytes: Uint8Array,
     contentType: string,
     cacheControl: string,
+    contentDisposition: string,
+    contentEncoding: string,
+    contentLanguage: string,
     metadataJson: string,
     onlyIfAbsent: boolean
   ) => Promise<string>;
   __REPTAR_RESPOND?: (requestId: string, value: string) => void;
   __REPTAR_RESPOND_QUEUE?: (batchId: string, value: string) => void;
   __REPTAR_RESPOND_SCHEDULED?: (scheduleId: string, value: string) => void;
+  __REPTAR_SEND_EMAIL?: (
+    binding: string,
+    messageJson: string
+  ) => Promise<string>;
   __REPTAR_STREAM_CHUNK?: (requestId: string, base64: string) => void;
   __REPTAR_STREAM_END?: (requestId: string) => void;
   __REPTAR_STREAM_ERROR?: (requestId: string, message: string) => void;
@@ -263,7 +294,7 @@ const randomHex = (bytes: number): string => {
   let out = "";
 
   for (const byte of data) {
-    out += HEX[byte >> 4] + HEX[byte & 0x0f];
+    out += HEX[Math.floor(byte / 16)] + HEX[byte % 16];
   }
 
   return out;
@@ -299,7 +330,7 @@ const parseTraceParent = (value: string | null): ParsedTraceParent | null => {
   }
 
   return {
-    sampled: (Number.parseInt(parts[3], 16) & 1) === 1,
+    sampled: Number.parseInt(parts[3], 16) % 2 === 1,
     spanId: parts[2],
     traceId: parts[1],
   };
@@ -389,10 +420,19 @@ const r2ObjectData = (object: {
   size?: number;
   etag?: string;
   uploaded?: Date;
-  httpMetadata?: { contentType?: string; cacheControl?: string };
+  httpMetadata?: {
+    contentType?: string;
+    cacheControl?: string;
+    contentDisposition?: string;
+    contentEncoding?: string;
+    contentLanguage?: string;
+  };
   customMetadata?: Record<string, string>;
 }) => ({
   cacheControl: object.httpMetadata?.cacheControl ?? "",
+  contentDisposition: object.httpMetadata?.contentDisposition ?? "",
+  contentEncoding: object.httpMetadata?.contentEncoding ?? "",
+  contentLanguage: object.httpMetadata?.contentLanguage ?? "",
   contentType: object.httpMetadata?.contentType ?? "",
   etag: (object.etag ?? "").replaceAll('"', ""),
   key: object.key,
@@ -497,6 +537,9 @@ const registerR2Bindings = (
     bytes,
     contentType,
     cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
     metadataJson,
     onlyIfAbsent
   ) => {
@@ -510,14 +553,29 @@ const registerR2Bindings = (
     const metadata = JSON.parse(metadataJson || "{}") as Record<string, string>;
     const options: {
       customMetadata?: Record<string, string>;
-      httpMetadata?: { contentType?: string; cacheControl?: string };
+      httpMetadata?: {
+        contentType?: string;
+        cacheControl?: string;
+        contentDisposition?: string;
+        contentEncoding?: string;
+        contentLanguage?: string;
+      };
       onlyIf?: { etagDoesNotMatch?: string };
     } = {};
 
-    if (contentType || cacheControl) {
+    if (
+      contentType ||
+      cacheControl ||
+      contentDisposition ||
+      contentEncoding ||
+      contentLanguage
+    ) {
       options.httpMetadata = {
         ...(contentType ? { contentType } : {}),
         ...(cacheControl ? { cacheControl } : {}),
+        ...(contentDisposition ? { contentDisposition } : {}),
+        ...(contentEncoding ? { contentEncoding } : {}),
+        ...(contentLanguage ? { contentLanguage } : {}),
       };
     }
     if (Object.keys(metadata).length > 0) {
@@ -529,6 +587,98 @@ const registerR2Bindings = (
 
     await bucket.put(key, bytes, options);
     return key;
+  };
+
+  scope.__REPTAR_R2_MULTIPART_CREATE ??= async (
+    key,
+    contentType,
+    cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
+    metadataJson
+  ) => {
+    if (!bucket?.createMultipartUpload) {
+      throw new Error("R2 multipart requires bindings.r2.bucket");
+    }
+
+    const metadata = JSON.parse(metadataJson || "{}") as Record<string, string>;
+    const options: {
+      customMetadata?: Record<string, string>;
+      httpMetadata?: {
+        contentType?: string;
+        cacheControl?: string;
+        contentDisposition?: string;
+        contentEncoding?: string;
+        contentLanguage?: string;
+      };
+    } = {};
+
+    if (
+      contentType ||
+      cacheControl ||
+      contentDisposition ||
+      contentEncoding ||
+      contentLanguage
+    ) {
+      options.httpMetadata = {
+        ...(contentType ? { contentType } : {}),
+        ...(cacheControl ? { cacheControl } : {}),
+        ...(contentDisposition ? { contentDisposition } : {}),
+        ...(contentEncoding ? { contentEncoding } : {}),
+        ...(contentLanguage ? { contentLanguage } : {}),
+      };
+    }
+    if (Object.keys(metadata).length > 0) {
+      options.customMetadata = metadata;
+    }
+
+    const upload = await bucket.createMultipartUpload(key, options);
+    return upload.uploadId;
+  };
+
+  scope.__REPTAR_R2_MULTIPART_PART ??= async (
+    key,
+    uploadId,
+    partNumber,
+    bytes
+  ) => {
+    if (!bucket?.resumeMultipartUpload) {
+      throw new Error("R2 multipart requires bindings.r2.bucket");
+    }
+
+    const upload = bucket.resumeMultipartUpload(key, uploadId);
+    const part = await upload.uploadPart(partNumber, bytes);
+    return part.etag;
+  };
+
+  scope.__REPTAR_R2_MULTIPART_COMPLETE ??= async (key, uploadId, parts) => {
+    if (!bucket?.resumeMultipartUpload) {
+      throw new Error("R2 multipart requires bindings.r2.bucket");
+    }
+
+    const parsed = parts
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("\t");
+        return {
+          etag: line.slice(separator + 1),
+          partNumber: Number(line.slice(0, separator)),
+        };
+      });
+
+    const upload = bucket.resumeMultipartUpload(key, uploadId);
+    await upload.complete(parsed);
+  };
+
+  scope.__REPTAR_R2_MULTIPART_ABORT ??= async (key, uploadId) => {
+    if (!bucket?.resumeMultipartUpload) {
+      return;
+    }
+
+    const upload = bucket.resumeMultipartUpload(key, uploadId);
+    await upload.abort();
   };
 };
 
@@ -582,7 +732,42 @@ const registerQueuesBinding = (
       return;
     }
     for (const message of messages) {
-      await queue.send(message);
+      await queue.send(message); // eslint-disable-line no-await-in-loop -- sequential fallback preserves order
+    }
+  };
+};
+
+const registerEmailBinding = (
+  scope: ReptarScope,
+  email: ReptarBindings["email"]
+): void => {
+  if (!email) {
+    return;
+  }
+  const resolveBinding = (bindingName: string): SendEmailLike => {
+    const binding = email[bindingName];
+    if (!binding) {
+      throw new Error(`Email binding '${bindingName}' not found`);
+    }
+    return binding;
+  };
+  scope.__REPTAR_SEND_EMAIL ??= async (bindingName, messageJson) => {
+    try {
+      const result = await resolveBinding(bindingName).send(
+        JSON.parse(messageJson)
+      );
+      return JSON.stringify({
+        messageId:
+          (result as { messageId?: string } | undefined)?.messageId ?? null,
+      });
+    } catch (error) {
+      // Cloudflare throws standard Error objects carrying a platform code
+      // (E_SENDER_NOT_VERIFIED, E_RATE_LIMIT_EXCEEDED, ...).
+      const err = error as { code?: string; message?: string };
+      return JSON.stringify({
+        code: err.code ?? "E_SEND_FAILED",
+        message: err.message ?? "Email send failed",
+      });
     }
   };
 };
@@ -984,6 +1169,7 @@ export const createReptarHost = <TEnv>(
     registerR2Bindings(scope, bindings.r2);
     registerKvBindings(scope, bindings.kv);
     registerQueuesBinding(scope, bindings.queues);
+    registerEmailBinding(scope, bindings.email);
     registerAiBinding(scope, bindings.ai);
     registerDurableBinding(scope, bindings.durable);
     registerHttpFetch(scope, options.httpAllowedHosts);
@@ -1340,6 +1526,38 @@ export const createReptarHost = <TEnv>(
     );
   };
 
+  /**
+   * Maps a Reptar batch result onto the Workers ack/retry primitives:
+   * successful messages ack, failures retry, and RetryIn delays flow
+   * through message.retry({ delaySeconds }).
+   */
+  const applyBatchResult = (
+    batch: MessageBatch<unknown>,
+    result: {
+      failedMessageIds?: string[];
+      retries?: { delaySeconds?: number; messageId: string }[];
+    }
+  ): void => {
+    const failed = new Set(result.failedMessageIds);
+    const retryDelays = new Map<string, number>();
+    for (const retry of result.retries ?? []) {
+      if (typeof retry.delaySeconds === "number" && retry.delaySeconds > 0) {
+        retryDelays.set(retry.messageId, retry.delaySeconds);
+      }
+    }
+
+    for (const message of batch.messages) {
+      if (failed.has(message.id)) {
+        const delaySeconds = retryDelays.get(message.id);
+        message.retry?.(
+          delaySeconds === undefined ? undefined : { delaySeconds }
+        );
+      } else {
+        message.ack?.();
+      }
+    }
+  };
+
   const handleQueue = async (
     batch: MessageBatch<unknown>,
     env: TEnv,
@@ -1452,24 +1670,7 @@ export const createReptarHost = <TEnv>(
         retries?: { delaySeconds?: number; messageId: string }[];
         success?: boolean;
       };
-      const failed = new Set(result.failedMessageIds);
-      const retryDelays = new Map<string, number>();
-      for (const retry of result.retries ?? []) {
-        if (typeof retry.delaySeconds === "number" && retry.delaySeconds > 0) {
-          retryDelays.set(retry.messageId, retry.delaySeconds);
-        }
-      }
-
-      for (const message of batch.messages) {
-        if (failed.has(message.id)) {
-          const delaySeconds = retryDelays.get(message.id);
-          message.retry?.(
-            delaySeconds === undefined ? undefined : { delaySeconds }
-          );
-        } else {
-          message.ack?.();
-        }
-      }
+      applyBatchResult(batch, result);
     } catch {
       // Fall back to batch completion.
     }

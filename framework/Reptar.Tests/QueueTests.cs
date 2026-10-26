@@ -666,6 +666,80 @@ public class PubSubAdapterTests
     }
 }
 
+public class AlarmTests
+{
+    [Fact]
+    public async Task OnAlarm_dispatches_through_the_reserved_path()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+        var ran = 0;
+        app.OnAlarm(ctx =>
+        {
+            ran++;
+            return Task.CompletedTask;
+        });
+
+        var response = await app.HandleAsync(
+            new ReptarRequest { Method = "POST", Path = "/_reptar/alarm" });
+
+        Assert.Equal(200, response.Status);
+        Assert.Equal(1, ran);
+
+        // The reserved path is an internal dispatch, not a route: it must
+        // stay out of RouteMetadata / OpenAPI / generated contracts.
+        Assert.DoesNotContain(app.RouteMetadata, meta => meta.Path == "/_reptar/alarm");
+    }
+
+    [Fact]
+    public async Task Alarm_failure_returns_500_and_the_app_stays_up()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+        app.OnAlarm(_ => throw new InvalidOperationException("boom"));
+
+        var response = await app.HandleAsync(
+            new ReptarRequest { Method = "POST", Path = "/_reptar/alarm" });
+        Assert.Equal(500, response.Status);
+
+        // Subsequent traffic is unaffected.
+        var after = await app.HandleAsync(
+            new ReptarRequest { Method = "GET", Path = "/definitely-not-registered" });
+        Assert.Equal(404, after.Status);
+    }
+
+    [Fact]
+    public async Task Without_a_handler_the_reserved_path_is_a_normal_404()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+
+        var response = await app.HandleAsync(
+            new ReptarRequest { Method = "POST", Path = "/_reptar/alarm" });
+
+        Assert.Equal(404, response.Status);
+    }
+
+    [Fact]
+    public async Task Alarm_context_gets_background_task_draining()
+    {
+        var app = ReptarApp.Create(new ReptarConfig { Database = Db.Sqlite(":memory:") });
+        var done = new TaskCompletionSource();
+        app.OnAlarm(ctx =>
+        {
+            ctx.WaitUntil(() =>
+            {
+                done.TrySetResult();
+                return Task.CompletedTask;
+            });
+            return Task.CompletedTask;
+        });
+
+        var response = await app.HandleAsync(
+            new ReptarRequest { Method = "POST", Path = "/_reptar/alarm" });
+
+        Assert.Equal(200, response.Status);
+        await done.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+}
+
 public class LambdaSqsTests
 {
     private const string SqsEvent = """

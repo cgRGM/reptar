@@ -1,8 +1,8 @@
 import { openPage } from "./netwasm.page.mjs";
 
 const startup = Object.freeze({
-  buildFingerprint: "bed62f8b22cd5b0c855a2003cf87250fe18dadd35191774fed4e0ff2ceeebfbe",
-  manifestSha256: "ad89175c3e0cb889c644503b5f1a7dfe1b28ad20fa826216cc5ce44c3304455b",
+  buildFingerprint: "803e045969933191af29e771b87e1c784d7574cc5edbc83a15c3d9feda6cf6eb",
+  manifestSha256: "5bebd6a5ed63229e7e38e0751766e82f182f51b54839856024a6e2d38caa633f",
 });
 const exports = Object.freeze(["handle","handleWebSocketClose","handleWebSocketMessage","handleWebSocketOpen","supportsWsMessageDone"]);
 export function open(options) {

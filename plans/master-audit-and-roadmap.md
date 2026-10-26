@@ -12,16 +12,16 @@ An independent architectural and developer experience (DX) scan identified 10 st
 
 | # | Domain | Finding | Verified Status | Target Resolution |
 |---|---|---|---|---|
-| **1** | **Scaffolding** | `bun reptar new` generates apps that fail to build; template ignores `--template`; `{{ PROJECT_TITLE }}` unreplaced; uses anonymous `ctx.Json(new { ... })`. | 🔶 **Partially Resolved** (`PROJECT_PASCAL` added, but spaced title, SDK inheritance, and anonymous types remain). | **Phase 1** (High) |
-| **2** | **Doctor & Trust** | `doctor` passes database check even if DB is missing or unreachable; treats `postgres://` as SQLite path; ignores schema drift. | ❌ **Open & Verified** (Line 532 in `scripts/inspect.ts` checks `connected || tables.length > 0`). | **Phase 1** (High) |
-| **3** | **Multi-App Context** | Repo root commands hardcode `examples/blog` for codegen/diff, while `inspect` targets `spikes/netwasm-worker`. | ❌ **Open & Verified** (`scripts/reptar.ts` hardcodes `examples/blog` in `codegen` and `dev`). | **Phase 2** (Med) |
-| **4** | **Multi-Agent Locks** | `dotnet run` orphans hold `bin/obj` locks (MSB4018); `dev:status` detects them but build/test doesn't use it. | 🔶 **Mitigated, Needs Hook** (`scripts/dev-status.ts` exists; needs automated preflight kill in `scripts/reptar.ts test`). | **Phase 2** (Med) |
-| **5** | **CI & C# Gates** | No GitHub Actions CI, no C# format gate equivalent to Ultracite, no locked NuGet package assets. | ❌ **Open & Verified** (No `.github/workflows/ci.yml` in repository). | **Phase 3** (Med) |
-| **6** | **Docs Drift** | README claims 37 tests (actual: 212); quickstart uses `Db.D1()` on Kestrel; phantom `Clerk`/`Custom` adapters; "scrypt" vs PBKDF2. | ❌ **Open & Verified** (`README.md:12` says 37 tests; `adapters.md` documents unimplemented `Clerk()`). | **Phase 2** (High) |
-| **7** | **AOT JSON Trap** | Anonymous types in routes throw at runtime under Native AOT; Dockerfile masks failed publish with `mv ... \|\| true`. | 🔶 **Partially Documented** (Known in `plans/agent-engine.md`, but templates and examples still use anonymous objects). | **Phase 1** (High) |
-| **8** | **Auth Security** | Two separate `Auth.cs` files (`Reptar` vs `Reptar.Wasm`); cookies lack `Secure` attribute; rate limiting guarded by `!NETWASM`. | ❌ **Open & Verified** (`framework/Reptar/Auth/` vs `framework/Reptar.Wasm/Auth/` exist concurrently). | **Phase 3** (Med) |
-| **9** | **Agent Safety** | `GetAiTools` defaults to `onlyExplicit: false`; `run_command` has no allowlist; `WorkspaceRoot` doesn't resolve symlinks; `inspect` emits `toolName` for non-AI routes. | ❌ **Open & Verified** (`AiTools.cs:201` sets `onlyExplicit: false`; `scripts/inspect.ts:294` assigns `toolName` unconditionally). | **Phase 1** (High) |
-| **10** | **Bench Footnote** | RealWorld VPS numbers hide 22× difference between SWR-cached (5.3k rps) and uncached (236 rps) throughput. | ❌ **Open & Verified** (Benchmark markdown highlights warm RPS without side-by-side cold comparison). | **Phase 3** (Low) |
+| **1** | **Scaffolding** | `bun reptar new` generates apps that fail to build; template ignores `--template`; `{{ PROJECT_TITLE }}` unreplaced; uses anonymous `ctx.Json(new { ... })`. | ✅ **Resolved** (Phase 1: template resolution, spaced placeholders, pinned SDK, typed records, scaffold E2E). | **Phase 1** (High) |
+| **2** | **Doctor & Trust** | `doctor` passes database check even if DB is missing or unreachable; treats `postgres://` as SQLite path; ignores schema drift. | ✅ **Resolved** (Phase 1: fail-closed probe, PostgreSQL TCP probe, `--strict`). | **Phase 1** (High) |
+| **3** | **Multi-App Context** | Repo root commands hardcode `examples/blog` for codegen/diff, while `inspect` targets `spikes/netwasm-worker`. | ✅ **Resolved** (Phase 2: `--app` for `dev`/`codegen`/`db`, app-local discovery). | **Phase 2** (Med) |
+| **4** | **Multi-Agent Locks** | `dotnet run` orphans hold `bin/obj` locks (MSB4018); `dev:status` detects them but build/test doesn't use it. | ✅ **Resolved** (Phase 2: preflight on `test`/`build`/`codegen`/`self-check`, `--kill-orphans`). | **Phase 2** (Med) |
+| **5** | **CI & C# Gates** | No GitHub Actions CI, no C# format gate equivalent to Ultracite, no locked NuGet package assets. | ✅ **Resolved** (Phase 3: `.github/workflows/ci.yml`, provider matrix, docs build, contract drift). | **Phase 3** (Med) |
+| **6** | **Docs Drift** | README claims 37 tests (actual: 212); quickstart uses `Db.D1()` on Kestrel; phantom `Clerk`/`Custom` adapters; "scrypt" vs PBKDF2. | ✅ **Resolved** (Phase 2: counts, PBKDF2, roadmap banners, cache caveat). | **Phase 2** (High) |
+| **7** | **AOT JSON Trap** | Anonymous types in routes throw at runtime under Native AOT; Dockerfile masks failed publish with `mv ... \|\| true`. | ✅ **Resolved** (Phase 1/3: typed template records, source-gen contexts, AOT publish assertions). | **Phase 1** (High) |
+| **8** | **Auth Security** | Two separate `Auth.cs` files (`Reptar` vs `Reptar.Wasm`); cookies lack `Secure` attribute; rate limiting guarded by `!NETWASM`. | ✅ **Resolved** (Phase 3: `SecureCookies` default true, Wasm throttle, deduped cookies). | **Phase 3** (Med) |
+| **9** | **Agent Safety** | `GetAiTools` defaults to `onlyExplicit: false`; `run_command` has no allowlist; `WorkspaceRoot` doesn't resolve symlinks; `inspect` emits `toolName` for non-AI routes. | ✅ **Resolved** (Phase 1/3: explicit tools, opt-in shell + allowlist, symlink guard, `toolName` only for AI). | **Phase 1** (High) |
+| **10** | **Bench Footnote** | RealWorld VPS numbers hide 22× difference between SWR-cached (5.3k rps) and uncached (236 rps) throughput. | ✅ **Resolved** (Phase 2: README cache caveat). | **Phase 3** (Low) |
 
 ---
 
@@ -37,8 +37,8 @@ Before starting on the remaining gaps, note what has already landed in the codeb
    - Replaced `.NET`'s internal `Console.ReadKey` parser with [`TerminalInput.cs`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/framework/Reptar/AI/TerminalInput.cs) running termios raw-mode and dedicated background parsing for arrows, bracketed paste, and OSC 52 clipboard queries.
    - Automated 9-scenario PTY navigation test suite in `scratch/test_pty_navigation.py` passing 100%.
 3. **Core Test Baseline**:
-   - All **212 unit tests** in [`framework/Reptar.Tests`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/framework/Reptar.Tests) pass cleanly.
-   - `bun reptar self-check` passes all 4 stages: Doctor, Framework Tests, NetWasm Lint, and Dual-Host Realtime Smokes (Workerd/DO/D1 + Kestrel/SQLite).
+   - All **388 unit tests** in [`framework/Reptar.Tests`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/framework/Reptar.Tests) pass cleanly.
+   - `bun reptar self-check` passes all 7 stages: Doctor, Framework Tests, Host Boundary, Host Contract, Generated Contracts, NetWasm Lint, and Dual-Host Realtime Smokes (Workerd/DO/D1 + Kestrel/SQLite).
 
 ---
 
@@ -180,15 +180,15 @@ When picking up any task from this roadmap, run the following verification gate 
 
 1. **Build & Unit Tests**:
    ```bash
-   dotnet test framework/Reptar.Tests
+   bun reptar test
    ```
-   *(Must pass all 212 tests with 0 failures).*
+   *(Must pass all 388 tests with 0 failures).*
 
 2. **Toolchain Self-Check**:
    ```bash
    bun reptar self-check
    ```
-   *(Must report `self-check: ALL GREEN` across Doctor, Tests, NetWasm Lint, and dual-host smokes).*
+   *(Must report `self-check: ALL GREEN` across Doctor, Tests, Host Boundary, Host Contract, Generated Contracts, NetWasm Lint, and dual-host smokes).*
 
 3. **Interactive Terminal TUI Smoke**:
    ```bash
@@ -219,3 +219,35 @@ and `bun scripts/test-scaffold.ts` passes. Still open from this document:
 `AllowRunCommand` default/allowlist, real `minimal-api`/`agent` templates,
 AOT publish assertion, CI workflow, docs truth pass, and multi-app `--app`
 targeting for `codegen`/`db`.
+
+---
+
+## 7. Phase 2 & 3 Execution Update (2026-10-26)
+
+Phase 2 (Items 3, 4, 6, 10) and Phase 3 (Items 5, 7, 8) are implemented and
+verified. See [`phase2-3-remediation-log.md`](./phase2-3-remediation-log.md)
+for the change list and the failures the gates uncovered.
+
+- **Multi-app:** `dev`, `codegen`, and `db` accept `--app`; app-local database
+  and contract discovery; no blog/realworld schema leakage into other apps.
+- **Concurrency:** build-lock preflight with `--kill-orphans`, stale-port
+  reaping in realtime/E2E, and pinned-SDK usage in docs checks.
+- **Docs truth:** 388 tests, PBKDF2, roadmap banners for Clerk/Custom,
+  cached-vs-uncached benchmark caveat, NetWasm JSON context guidance.
+- **Security:** `SecureCookies` defaults to true (template disables only under
+  `#if DEBUG`), Wasm login throttling, duplicate `Set-Cookie` removed,
+  `run_command` off by default with an optional prefix allowlist.
+- **AOT/Workers:** Docker publish assertions, NetWasm context/options
+  correctness, D1 dictionary writes, and skipping the wasm static-asset fetch
+  (the module is compiled from the imported `WebAssembly.Module`).
+- **CI:** GitHub Actions runs framework tests, host boundary/contract, provider
+  matrix (SQLite/Postgres/MySQL/D1), NetWasm lint, architecture, strict doctor,
+  two-host realtime, scaffold E2E, contracts, docs snippets, docs build, and
+  generated-reference drift.
+
+Current gate: **388 unit tests pass**, `bun reptar self-check` is **ALL GREEN**,
+`bun e2e`, `bun reptar test:realtime`, `bun scripts/test-scaffold.ts`,
+`bun reptar check:worker`, docs build/snippets, and contract checks pass.
+Remaining product gaps are tracked in the Phase 2/3 log: real
+`minimal-api`/`agent` templates, first CI run on GitHub, and the NetWasm
+optimizer workaround.

@@ -265,7 +265,14 @@ export default {
     env: Env,
     ctx: ExecutionContext
   ) {
-    await host.queue(batch, env, ctx);
+    // Workerd delivers the PHYSICAL queue name ("reptar-events"); the C#
+    // handlers register LOGICAL names ("events" — matching the producer
+    // binding). Map before dispatch so OnQueue("events") receives it.
+    await host.queue(
+      { ...batch, queue: "events" },
+      env,
+      ctx
+    );
   },
   async scheduled(
     event: { cron: string; scheduledTime: number | Date },

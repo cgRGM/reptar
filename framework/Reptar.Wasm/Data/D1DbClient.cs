@@ -93,7 +93,13 @@ public sealed class D1DbClient : IDbClient
     }
 
     public Task<int> InsertAsync<T>(TableDef table, T values) where T : class =>
-        InsertAsync(table, (object)values);
+        // Dictionaries bypass JSON entirely (see the object overload). Keep T
+        // in the generic call for DTOs so their source-generated metadata is
+        // used; casting those to object would ask the resolver for `object`
+        // and fail under NetWasm.
+        values is IDictionary
+            ? InsertAsync(table, (object)values)
+            : InsertFromJsonAsync(table, _json.Serialize(values));
 
     public Task<int> InsertAsync(TableDef table, object values)
     {
@@ -158,14 +164,37 @@ public sealed class D1DbClient : IDbClient
         return ExecuteAsync(sql, SerializeParams(paramValues));
     }
 
-    public Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class
-    {
-        var json = _json.Serialize(values);
-        return UpdateFromJsonAsync(table, json, id);
-    }
+    public Task<int> UpdateAsync<T>(TableDef table, T values, object id) where T : class =>
+        values is IDictionary
+            ? UpdateAsync(table, (object)values, id)
+            : UpdateFromJsonAsync(table, _json.Serialize(values), id);
 
     public Task<int> UpdateAsync(TableDef table, object values, object id)
     {
+        if (values is IDictionary dictionary)
+        {
+            var pk = table.SinglePrimaryKey;
+            var setClauses = new List<string>();
+            var paramValues = new List<object?>();
+
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                var column = ResolveColumnName(table, entry.Key?.ToString() ?? "");
+                if (string.Equals(column, pk, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(column, "created_at", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                setClauses.Add($"\"{column}\" = ?");
+                paramValues.Add(entry.Value);
+            }
+
+            paramValues.Add(id);
+            var sql = $"update \"{table.Name}\" set {string.Join(", ", setClauses)} where \"{pk}\" = ?";
+            return ExecuteAsync(sql, SerializeParams(paramValues));
+        }
+
         var json = values is string s && s.TrimStart().StartsWith("{")
             ? s
             : _json.Serialize(values);

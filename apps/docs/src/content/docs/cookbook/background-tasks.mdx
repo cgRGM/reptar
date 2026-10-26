@@ -42,7 +42,7 @@ app.Post("/api/signup", async ctx =>
 
 | Environment | Behavior |
 | :-- | :-- |
-| **Cloudflare Workers (`netwasm0.1`)** | Passes the asynchronous task to `ctx.executionCtx.waitUntil(promise)`. The Worker isolate remains warm and executing until all tasks resolve. |
+| **Cloudflare Workers (`netwasm0.1`)** | The generated `WorkerEntrypoint` returns the asynchronous task with the export; `@reptar/host` sends the response, then passes the task to `ctx.executionCtx.waitUntil(promise)`. The isolate remains warm until all tasks resolve. |
 | **Kestrel & Linux Native AOT (`net10.0`)** | Dispatches to the .NET thread pool via `Task.Run()` immediately following response header flush, automatically logging any unhandled task exceptions to `ctx.Log`. |
 
 ---

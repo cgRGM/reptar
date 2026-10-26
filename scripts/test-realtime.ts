@@ -73,6 +73,16 @@ const killTree = (pid: number | undefined, port: number): void => {
       spawnSync("pkill", ["-P", String(pid)]);
     } catch {}
   }
+  // Kill the wrangler parent too; otherwise it respawns workerd on the port
+  // after the listener is killed.
+  try {
+    spawnSync("pkill", ["-f", `wrangler.*--port ${port}`], {
+      stdio: "ignore",
+    });
+  } catch {
+    // pkill unavailable
+  }
+
   // Belt and braces: kill whatever still listens on the port (the orphaned
   // runfile app process survives its muxer).
   try {

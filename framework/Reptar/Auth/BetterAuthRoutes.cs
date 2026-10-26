@@ -202,7 +202,7 @@ public static class BetterAuthProtocol
 
             if (string.IsNullOrEmpty(token))
             {
-                return ctx.Json<object?>(null);
+                return ctx.JsonRaw("null");
             }
 
             var hash = await ctx.Crypto.Sha256(token);
@@ -222,7 +222,7 @@ public static class BetterAuthProtocol
 
             if (rows.Count == 0)
             {
-                return ctx.Json<object?>(null);
+                return ctx.JsonRaw("null");
             }
 
             var row = rows[0];

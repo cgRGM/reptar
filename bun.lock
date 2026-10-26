@@ -66,6 +66,9 @@
       "dependencies": {
         "@reptar/host": "workspace:*",
       },
+      "devDependencies": {
+        "wrangler": "^4.152.0",
+      },
     },
     "packages/adapter-lambda": {
       "name": "@reptar/adapter-lambda",

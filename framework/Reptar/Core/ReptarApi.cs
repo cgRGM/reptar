@@ -14,6 +14,8 @@ public sealed class ReptarConfig
     public IKvClient? Cache { get; set; }
     public IQueueClient? Queues { get; set; }
     public IQueueObserver? QueueObserver { get; set; }
+    public IMailClient? Mail { get; set; }
+    public IMailObserver? MailObserver { get; set; }
     public IDurableBridge? Durable { get; set; }
     public IHttpClient? Http { get; set; }
     public ICrypto? Crypto { get; set; }
@@ -141,10 +143,13 @@ public static class ReptarApi
         throw new PlatformNotSupportedException(
             "D1 is provided by the Workers shim. Use Db.Sqlite(...) for local development.");
 
-    public static IR2Client R2(string? publicBaseUrl = null)
+    public static IR2Client R2(string? publicBaseUrl = null) =>
+        R2(new R2StorageOptions { PublicBaseUrl = publicBaseUrl });
+
+    public static IR2Client R2(R2StorageOptions options)
     {
 #if NETWASM
-        return new R2Client(publicBaseUrl);
+        return new R2Client(options);
 #else
         return new NoopR2Client();
 #endif

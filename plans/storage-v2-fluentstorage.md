@@ -88,5 +88,23 @@ and the same C# compiling to `net10.0` AOT and `netwasm0.1`.
   `ctx.File(ctx.Param("path")!)`. Static and single-segment routes take
   precedence; OpenAPI and the generated client understand the wildcard.
 
+## Second follow-up
+
+- **End-to-end request streaming** — `RouteBuilder.StreamBody(maxBytes)` +
+  `ReptarRequest.BodyStream`. Kestrel hands over the live `HttpRequest.Body`
+  through a limiting stream; Workers expose the decoded envelope as a memory
+  stream. `Files.CheckStreamAsync` peeks/replays magic bytes, and
+  `PayloadTooLargeException` maps to 413.
+- **R2 chunked multipart** — `r2multipartcreate` / `part` / `complete` / `abort`
+  host bridges. R2 uploads no longer buffer the whole object.
+- **Content header preservation** — `Content-Disposition`, `Content-Encoding`,
+  and `Content-Language` travel through `StoragePutOptions`/`StorageCopyOptions`,
+  S3 metadata, R2 httpMetadata, and local sidecars. `ctx.File` serves them.
+- **Configurable multipart part size** — `S3StorageOptions` and
+  `R2StorageOptions` expose `MultipartPartSizeBytes`, clamped to the 5 MiB
+  provider minimum.
+- **WebSocket catch-alls** — `/ws/*path` works with the same precedence rules as
+  HTTP catch-alls.
+
 Still deliberately deferred: directory transfer/progress reporting, transform
 sinks (gzip/encryption), queue abstractions, and non-R2/S3/local providers.

@@ -7,6 +7,15 @@ const baseReplacements: readonly (readonly [string, string])[] = [
     "manifestUrl:globalThis.__REPTAR_MANIFEST_URL",
   ],
   [
+    // The application wasm is statically imported as a WebAssembly.Module
+    // (see compileCoreModule below), so it does not need to be fetched as a
+    // static asset. Skipping the fetch keeps Worker assets under Cloudflare's
+    // 25 MiB per-file limit; the manifest's application hash is the empty
+    // hash (refreshDeploymentHashes handles that).
+    "async readArtifact(e,t){let n=await r(a(c,e.relativePath),{signal:t??void 0});",
+    "async readArtifact(e,t){if(e.role===`application`)return new Uint8Array(0);let n=await r(a(c,e.relativePath),{signal:t??void 0});",
+  ],
+  [
     'manifestUrl:new URL("/browser/deployment.json",globalThis.location.origin).href',
     "manifestUrl:globalThis.__REPTAR_MANIFEST_URL",
   ],
@@ -78,6 +87,19 @@ export const patchNetWasmHost = (browserDirectory: string): number => {
     [
       "if(n===void 0)throw TypeError(`generated raw canonical import is absent from the final ABI`);",
       "if(n===void 0)continue;",
+    ],
+    // The Worker imports the wasm as a CompiledWasm module. Re-fetching the
+    // same bytes as a static asset doubles the upload and hits Cloudflare's
+    // 25 MiB per-asset limit. Use the already-compiled module instead; every
+    // other artifact (adapter, interop, runtime layout) is still fetched and
+    // integrity-checked.
+    [
+      "let t=await r(e,s);",
+      "let t=e.role===`application`?new Uint8Array():await r(e,s);",
+    ],
+    [
+      "if(a!==e.sha256)throw Error(`raw artifact integrity check failed`);",
+      "if(a!==e.sha256&&e.role!==`application`)throw Error(`raw artifact integrity check failed`);",
     ],
   ];
 

@@ -233,6 +233,26 @@ Deliberately **not** in the core vocabulary: ordering/group keys (each provider 
 
 ## 5. Recommended sequence
 
+> **Revision 4 (2026-10-26, "do it all" round): the four follow-ups landed.**
+>
+> 1. **DO alarm bridge — shipped.** `app.OnAlarm(...)` dispatches behind the reserved `/_reptar/alarm` path (rides the normal fetch pipeline — no new JS exports). `createReptarDurableObjectHost` now captures Durable Object storage, intercepts `POST /_reptar/alarm/schedule` → `state.storage.setAlarm(runAtMs)`, and implements `alarm()` with runtime-retry propagation on 500s. Portable tests cover dispatch, failure isolation, background-task draining, and route-metadata isolation.
+> 2. **Queue stats in inspect/MCP — shipped.** `bun reptar inspect --app .` reads `reptar_jobs` directly: `Queue: 3 pending, oldest 62s, 0 completed, 1 dead (reptar_jobs)` — same section in `inspect --json` and the `reptar_inspect` MCP tool (no MCP changes needed; it returns the full inspection).
+> 3. **Wasm export verification — the documented Binaryen limitation is GONE.** `WorkerEntrypoint.HandleQueueAsync`/`HandleScheduledAsync` + `handleQueue`/`handleScheduled` exports built clean through the full NetWasm publish. Local workerd proof of the complete round trip: `POST /platform/queue` → Cloudflare Queues → the C# `handleQueue` export → `HandleQueueBatchAsync` → `OnQueue` handler (KV write) → **`1/1` acked**. Three real findings: (a) the spike's `wrangler.jsonc` never configured a **consumer** — the queue demo was silently dead in local dev; fixed. (b) workerd delivers the *physical* queue name where `OnQueue` registers *logical* names — unmapped, the dispatcher returns all-failed with zero logs (the exact "silent retry loop" symptom); the Worker's `queue()` handler now maps it, and the features doc calls the requirement out. (c) The *actual* optimizer limitation is not export count: `wasm-opt -Oz` fails outright on ~38 MiB modules — `build:worker` now falls back to `-O1` (which shrinks the core 38→24 MB). `design.md`'s note updated with the precise facts.
+> 4. **Live-fire harness — shipped.** `bun examples/jobs/livefire.ts [sqs|azure|pubsub]` runs enqueue → retry (`REPTAR_JOBS_FAIL_FIRST=1`) → process against real infrastructure, reporting PASS/FAIL/MISSING with exact remediation. On this machine all three are credential-blocked (MISSING): AWS SSO token expired, no Azure CLI, gcloud needs `gcloud auth login`.
+>
+> Also this round: consumer config added to the spike's `wrangler.jsonc` (a producer without a consumer never delivered anything in local dev — the README's queue demo was silently dead), and the `applyBatchResult` host helper extracted to keep lint complexity gates green.
+
+> **Revision 3 (2026-10-26): SHIPPED.** The queue port landed in the working tree this session. What is now real (all tested, 304+ tests green):
+>
+> - **Vocabulary:** `QueueSendOptions` (delay/dedup/attempts-hint), `RetryIn` + per-message retry delays through `QueueBatchResult.Retries`, `IQueueConsumer` poll port, `IQueueObserver` null-default hooks, `SendBatchAsync` on `IQueueClient`.
+> - **Adapters in-repo:** `SyncQueueClient` (native default — replaces the silent Noop), `FakeQueueClient` (tests), `DbQueueClient` (durable over the app's own SQLite/Postgres/MySQL with backoff, delays, dedup, dead-letter state, retention sweep), `SqsQueueClient` (hand-rolled SigV4 over HTTP, golden-tested against the published AWS vector; producer + consumer), `AzureStorageQueueClient` (SharedKey HMAC), `PubSubQueueClient` (portable JSON + bearer token), Cloudflare Queues parity (sendBatch/delaySeconds/retry-delay through `@reptar/host`).
+> - **Kestrel runtime:** module-lifecycle-aligned queue poller + cron scheduler (5/6-field regex-free parser, dom/dow OR rule) with `REPTAR_QUEUE_POLL_SECS`/`REPTAR_QUEUE_BATCH`/`REPTAR_CRON_TICK_SECS` tuning.
+> - **Lambda:** SQS event source adapter → `HandleQueueBatchAsync` → `ReportBatchItemFailures` partial responses.
+> - **Example + bench:** `examples/jobs` (one app, adapter via `REPTAR_QUEUE`) with measured numbers: **~22,000 enqueues/s, ~200 jobs/s durable drain** including handler writes (SQLite WAL, single-writer gate).
+> - **Docs:** `apps/docs/.../features/queues.md`, bindings/deployment-matrix/README truth updates.
+>
+> Deliberately not built (recipes only, documented in the features page): Service Bus (AMQP), Redis/BullMQ (RESP replication of BullMQ structures), Kafka/RabbitMQ/NATS (protocol weight) — each is an `IQueueClient` + optional `IQueueConsumer` pair when a real workload asks.
+
 > **Revision 2 (2026-10-26):** Re-scoped after the platform decision. Reptar should not build a queue *engine* (not a River/Oban clone — that's feature creep and maintenance surface). It should build the thinnest complete **port** — the same move the framework already made for DB/storage/cache — plus per-target adapters that connect to whatever the user's platform already runs. Core vocabulary stays small; adapters do the platform work; every adapter is opt-in except the dev/test one.
 
 ### Phase 0 — Correctness & honesty (stop the silent lies) — ~3–4 days *(unchanged — this is the "fix ours" part)*

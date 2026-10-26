@@ -4,11 +4,29 @@ using System.Text.Json;
 
 namespace Reptar;
 
-public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
+public sealed class R2Client : IR2Client
 {
+    private const int MinimumMultipartPartSize = 5 * 1024 * 1024;
     private const int MaxDeleteBatch = 1000;
+    private const int MaxMultipartParts = 10_000;
 
-    private readonly string? _publicBaseUrl = publicBaseUrl;
+    private readonly string? _publicBaseUrl;
+    private readonly int _multipartPartSize;
+
+    public R2Client(
+        string? publicBaseUrl = null,
+        int multipartPartSizeBytes = 8 * 1024 * 1024)
+    {
+        _publicBaseUrl = publicBaseUrl;
+        _multipartPartSize = Math.Max(
+            MinimumMultipartPartSize,
+            multipartPartSizeBytes);
+    }
+
+    public R2Client(R2StorageOptions options)
+        : this(options.PublicBaseUrl, options.MultipartPartSizeBytes)
+    {
+    }
 
     [JSImport("r2put", "app.host")]
     private static extern Task<string> Put(
@@ -22,6 +40,9 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
         byte[] body,
         string contentType,
         string cacheControl,
+        string contentDisposition,
+        string contentEncoding,
+        string contentLanguage,
         string metadataJson,
         bool onlyIfAbsent);
 
@@ -49,6 +70,32 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
     [JSImport("r2deleteMany", "app.host")]
     private static extern Task DeleteMany(string keys);
 
+    [JSImport("r2multipartcreate", "app.host")]
+    private static extern Task<string> MultipartCreate(
+        string key,
+        string contentType,
+        string cacheControl,
+        string contentDisposition,
+        string contentEncoding,
+        string contentLanguage,
+        string metadataJson);
+
+    [JSImport("r2multipartpart", "app.host")]
+    private static extern Task<string> MultipartPart(
+        string key,
+        string uploadId,
+        int partNumber,
+        byte[] body);
+
+    [JSImport("r2multipartcomplete", "app.host")]
+    private static extern Task MultipartComplete(
+        string key,
+        string uploadId,
+        string parts);
+
+    [JSImport("r2multipartabort", "app.host")]
+    private static extern Task MultipartAbort(string key, string uploadId);
+
     [JSImport("r2exists", "app.host")]
     private static extern Task<bool> Exists(string key);
 
@@ -61,7 +108,9 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
                 StorageFeatures.RangeReads |
                 StorageFeatures.Listing |
                 StorageFeatures.ConditionalPut |
-                StorageFeatures.BulkDelete;
+                StorageFeatures.BulkDelete |
+                StorageFeatures.MultipartUpload |
+                StorageFeatures.StreamingPut;
 
             if (!string.IsNullOrWhiteSpace(_publicBaseUrl))
                 features |= StorageFeatures.PublicUrls;
@@ -90,6 +139,9 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
             body,
             contentType ?? "",
             options.CacheControl ?? "",
+            options.ContentDisposition ?? "",
+            options.ContentEncoding ?? "",
+            options.ContentLanguage ?? "",
             metadataJson,
             !options.Overwrite);
     }
@@ -101,13 +153,128 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
         StoragePutOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(body);
+        options ??= new StoragePutOptions();
 
-        using var buffer = new MemoryStream();
-        await body.CopyToAsync(buffer);
+        var normalizedKey = StorageKey.Normalize(key);
 
-        return options is null
-            ? await PutAsync(key, buffer.ToArray(), contentType)
-            : await PutAsync(key, buffer.ToArray(), contentType, options);
+        if (!options.Overwrite && await HeadAsync(normalizedKey) is not null)
+        {
+            throw new StorageException(
+                StorageErrorCode.PreconditionFailed,
+                $"Object '{normalizedKey}' already exists.",
+                normalizedKey);
+        }
+
+        var buffer = new byte[_multipartPartSize];
+        var read = await StorageStreams.ReadFullAsync(body, buffer);
+
+        if (read == 0)
+            return await PutAsync(normalizedKey, [], contentType, options);
+
+        if (read < buffer.Length)
+        {
+            var single = new byte[read];
+            Array.Copy(buffer, single, read);
+            return await PutAsync(normalizedKey, single, contentType, options);
+        }
+
+        return await PutMultipartAsync(
+            normalizedKey,
+            buffer,
+            read,
+            body,
+            contentType,
+            options);
+    }
+
+    private async Task<string> PutMultipartAsync(
+        string key,
+        byte[] firstPart,
+        int firstLength,
+        Stream body,
+        string contentType,
+        StoragePutOptions options)
+    {
+        var metadataJson = options.Metadata is { Count: > 0 }
+            ? JsonSerializer.Serialize(
+                new Dictionary<string, string>(options.Metadata),
+                ReptarInternalJsonContext.Default.DictionaryStringString)
+            : "{}";
+
+        var uploadId = await MultipartCreate(
+            key,
+            contentType ?? "",
+            options.CacheControl ?? "",
+            options.ContentDisposition ?? "",
+            options.ContentEncoding ?? "",
+            options.ContentLanguage ?? "",
+            metadataJson);
+
+        if (string.IsNullOrWhiteSpace(uploadId))
+        {
+            throw new StorageException(
+                StorageErrorCode.Unknown,
+                "R2 multipart create returned no upload id.",
+                key);
+        }
+
+        try
+        {
+            var parts = new List<(int Number, string ETag)>();
+            var partNumber = 1;
+            var buffer = firstPart;
+            var length = firstLength;
+
+            while (length > 0)
+            {
+                if (partNumber > MaxMultipartParts)
+                {
+                    throw new StorageException(
+                        StorageErrorCode.TooLarge,
+                        "R2 multipart supports at most 10,000 parts; the object is too large for the current part size.",
+                        key);
+                }
+
+                var payload = length == buffer.Length
+                    ? buffer
+                    : buffer.AsSpan(0, length).ToArray();
+
+                var etag = await MultipartPart(key, uploadId, partNumber, payload);
+                if (string.IsNullOrWhiteSpace(etag))
+                {
+                    throw new StorageException(
+                        StorageErrorCode.Unknown,
+                        $"R2 multipart part {partNumber} returned no ETag.",
+                        key);
+                }
+
+                parts.Add((partNumber, etag));
+                partNumber++;
+
+                buffer = new byte[_multipartPartSize];
+                length = await StorageStreams.ReadFullAsync(body, buffer);
+            }
+
+            var encodedParts = string.Join(
+                "\n",
+                parts.Select(part => $"{part.Number}\t{part.ETag}"));
+
+            await MultipartComplete(key, uploadId, encodedParts);
+            return key;
+        }
+        catch
+        {
+            try
+            {
+                await MultipartAbort(key, uploadId);
+            }
+            catch
+            {
+                // Best-effort cleanup; the original exception is more useful.
+            }
+
+            throw;
+        }
     }
 
     public Task<byte[]?> GetAsync(string key) => Get(key);
@@ -158,9 +325,26 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
                 ? info.MetadataValue("cache-control")
                 : null);
 
+        var contentDisposition = options.ContentDisposition
+            ?? (options.PreserveMetadata
+                ? info.MetadataValue("content-disposition")
+                : null);
+        var contentEncoding = options.ContentEncoding
+            ?? (options.PreserveMetadata
+                ? info.MetadataValue("content-encoding")
+                : null);
+        var contentLanguage = options.ContentLanguage
+            ?? (options.PreserveMetadata
+                ? info.MetadataValue("content-language")
+                : null);
+
         var metadata = options.Metadata
             ?? (options.PreserveMetadata
-                ? info.MetadataExcept("cache-control")
+                ? info.MetadataExcept(
+                    "cache-control",
+                    "content-disposition",
+                    "content-encoding",
+                    "content-language")
                 : null);
 
         await PutAsync(
@@ -171,6 +355,9 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
             {
                 Overwrite = options.Overwrite,
                 CacheControl = cacheControl,
+                ContentDisposition = contentDisposition,
+                ContentEncoding = contentEncoding,
+                ContentLanguage = contentLanguage,
                 Metadata = metadata,
             });
 
@@ -345,6 +532,27 @@ public sealed class R2Client(string? publicBaseUrl = null) : IR2Client
             var value = cacheControl.GetString();
             if (!string.IsNullOrWhiteSpace(value))
                 metadata["cache-control"] = value;
+        }
+
+        if (root.TryGetProperty("contentDisposition", out var contentDisposition))
+        {
+            var value = contentDisposition.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                metadata["content-disposition"] = value;
+        }
+
+        if (root.TryGetProperty("contentEncoding", out var contentEncoding))
+        {
+            var value = contentEncoding.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                metadata["content-encoding"] = value;
+        }
+
+        if (root.TryGetProperty("contentLanguage", out var contentLanguage))
+        {
+            var value = contentLanguage.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                metadata["content-language"] = value;
         }
 
         return metadata;

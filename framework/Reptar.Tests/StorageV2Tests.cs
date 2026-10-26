@@ -73,6 +73,72 @@ public sealed class StorageV2Tests
     }
 
     [Fact]
+    public async Task Files_CheckStreamAsync_ValidatesAndReplaysMagicBytes()
+    {
+        var check = await Files.CheckStreamAsync(
+            new MemoryStream(SampleBytes, writable: false),
+            "image/*");
+
+        Assert.True(check.Ok);
+        Assert.Equal("image/png", check.ContentType);
+        Assert.Equal("png", check.Extension);
+        Assert.NotNull(check.Body);
+
+        using var body = check.Body!;
+        using var copy = new MemoryStream();
+        await body.CopyToAsync(copy);
+        Assert.Equal(SampleBytes, copy.ToArray());
+
+        var rejected = await Files.CheckStreamAsync(
+            new MemoryStream(Encoding.UTF8.GetBytes("<svg></svg>"), writable: false),
+            "image/*");
+        Assert.False(rejected.Ok);
+        Assert.Equal(415, rejected.ErrorStatus);
+    }
+
+    [Fact]
+    public async Task StreamBody_RouteStreamsRequestIntoStorage()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var storage = new LocalStorage(root);
+            var app = ReptarApp.Create(new ReptarConfig { Storage = storage });
+
+            app.Put("/stream", async ctx =>
+            {
+                var check = await Files.CheckStreamAsync(ctx.Req.BodyStream, "image/*");
+                if (!check.Ok)
+                    return check.ToError(ctx);
+
+                await ctx.Storage.PutAsync(
+                    "stream.png",
+                    check.Body!,
+                    check.ContentType);
+
+                return ctx.Json(new { key = "stream.png" }, 201);
+            }).StreamBody(1024);
+
+            Assert.True(app.IsStreamingBody("PUT", "/stream"));
+            Assert.Equal(1024, app.GetMaxBodyBytes("PUT", "/stream"));
+
+            var response = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "PUT",
+                Path = "/stream",
+                BodyStream = new MemoryStream(SampleBytes, writable: false),
+            });
+
+            Assert.Equal(201, response.Status);
+            Assert.Equal(SampleBytes, await storage.GetAsync("stream.png"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task LocalStorage_SupportsMetadataRangesListingAndConditionalPut()
     {
         var root = CreateTempRoot();
@@ -87,6 +153,9 @@ public sealed class StorageV2Tests
                 new StoragePutOptions
                 {
                     CacheControl = "public, max-age=60",
+                    ContentDisposition = "attachment; filename=\"a.png\"",
+                    ContentEncoding = "gzip",
+                    ContentLanguage = "en",
                     Metadata = new Dictionary<string, string> { ["owner"] = "user_1" },
                 });
 
@@ -96,6 +165,9 @@ public sealed class StorageV2Tests
             Assert.Equal("image/png", head.ContentType);
             Assert.False(string.IsNullOrEmpty(head.ETag));
             Assert.Equal("public, max-age=60", head.Metadata!["cache-control"]);
+            Assert.Equal("attachment; filename=\"a.png\"", head.Metadata["content-disposition"]);
+            Assert.Equal("gzip", head.Metadata["content-encoding"]);
+            Assert.Equal("en", head.Metadata["content-language"]);
             Assert.Equal("user_1", head.Metadata["owner"]);
 
             var range = await storage.GetRangeAsync("avatars/a.png", 2, 4);
@@ -290,6 +362,55 @@ public sealed class StorageV2Tests
     }
 
     [Fact]
+    public async Task S3Storage_MultipartPartSize_IsConfigurable()
+    {
+        var http = new FakeHttpClient();
+        var partSize = 5 * 1024 * 1024;
+        var s3 = CreateS3(
+            new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero),
+            http,
+            partSize);
+
+        var partNumber = 0;
+        http.Handler = request =>
+        {
+            if (request.Url.Contains("uploads=", StringComparison.Ordinal))
+            {
+                return new HttpBytesResponse(
+                    200,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    Encoding.UTF8.GetBytes(
+                        "<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>"));
+            }
+
+            if (request.Url.Contains("partNumber=", StringComparison.Ordinal))
+            {
+                partNumber++;
+                return new HttpBytesResponse(
+                    200,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["etag"] = $"\"etag-{partNumber}\"",
+                    },
+                    []);
+            }
+
+            return new HttpBytesResponse(
+                200,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Encoding.UTF8.GetBytes("<CompleteMultipartUploadResult/>"));
+        };
+
+        var payload = new byte[partSize + 1];
+        await s3.PutAsync(
+            "large.bin",
+            new MemoryStream(payload, writable: false),
+            "application/octet-stream");
+
+        Assert.Equal(2, partNumber);
+    }
+
+    [Fact]
     public async Task S3Storage_DeleteManyAsync_UsesBatchDelete()
     {
         var http = new FakeHttpClient();
@@ -381,6 +502,35 @@ public sealed class StorageV2Tests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public void WebSocketCatchAll_CapturesNestedPathsWithPrecedence()
+    {
+        var app = ReptarApp.Create();
+        var staticHandlers = new WebSocketHandlers();
+        var paramHandlers = new WebSocketHandlers();
+        var catchAllHandlers = new WebSocketHandlers();
+
+        app.OnWebSocket("/ws/health", staticHandlers);
+        app.OnWebSocket("/ws/:id", paramHandlers);
+        app.OnWebSocket("/ws/*path", catchAllHandlers);
+
+        var exact = app.TryMatchWebSocket("/ws/health");
+        Assert.NotNull(exact);
+        Assert.Same(staticHandlers, exact!.Value.Handlers);
+
+        var single = app.TryMatchWebSocket("/ws/a");
+        Assert.NotNull(single);
+        Assert.Same(paramHandlers, single!.Value.Handlers);
+        Assert.Equal("a", single.Value.Params["id"]);
+
+        var nested = app.TryMatchWebSocket("/ws/a/b");
+        Assert.NotNull(nested);
+        Assert.Same(catchAllHandlers, nested!.Value.Handlers);
+        Assert.Equal("a/b", nested.Value.Params["path"]);
+
+        Assert.False(app.HasWebSocketHandler("/ws"));
     }
 
     [Fact]
@@ -730,6 +880,9 @@ public sealed class StorageV2Tests
             {
                 Overwrite = false,
                 CacheControl = "public, max-age=60",
+                ContentDisposition = "attachment; filename=\"a.png\"",
+                ContentEncoding = "gzip",
+                ContentLanguage = "en",
                 Metadata = new Dictionary<string, string> { ["owner"] = "user_1" },
             });
 
@@ -738,6 +891,9 @@ public sealed class StorageV2Tests
         Assert.Equal(SampleBytes, request.Body);
         Assert.Equal("image/png", request.ContentType);
         Assert.Equal("public, max-age=60", request.Headers["cache-control"]);
+        Assert.Equal("attachment; filename=\"a.png\"", request.Headers["content-disposition"]);
+        Assert.Equal("gzip", request.Headers["content-encoding"]);
+        Assert.Equal("en", request.Headers["content-language"]);
         Assert.Equal("user_1", request.Headers["x-amz-meta-owner"]);
         Assert.Equal("*", request.Headers["if-none-match"]);
         Assert.True(request.Headers.ContainsKey("authorization"));
@@ -745,7 +901,8 @@ public sealed class StorageV2Tests
 
     private static S3Storage CreateS3(
         DateTimeOffset now,
-        IHttpClient? http = null) =>
+        IHttpClient? http = null,
+        int multipartPartSizeBytes = 8 * 1024 * 1024) =>
         new(new S3StorageOptions
         {
             Endpoint = "https://acc123.r2.cloudflarestorage.com",
@@ -755,6 +912,7 @@ public sealed class StorageV2Tests
             Region = "auto",
             Clock = () => now,
             HttpClient = http,
+            MultipartPartSizeBytes = multipartPartSizeBytes,
         });
 
     private static string CreateTempRoot()

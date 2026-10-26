@@ -317,6 +317,18 @@ public sealed partial class S3Storage
         if (!string.IsNullOrWhiteSpace(cacheControl))
             metadata["cache-control"] = cacheControl;
 
+        var contentDisposition = GetHeader(headers, "content-disposition");
+        if (!string.IsNullOrWhiteSpace(contentDisposition))
+            metadata["content-disposition"] = contentDisposition;
+
+        var contentEncoding = GetHeader(headers, "content-encoding");
+        if (!string.IsNullOrWhiteSpace(contentEncoding))
+            metadata["content-encoding"] = contentEncoding;
+
+        var contentLanguage = GetHeader(headers, "content-language");
+        if (!string.IsNullOrWhiteSpace(contentLanguage))
+            metadata["content-language"] = contentLanguage;
+
         return new StorageObject(
             key,
             TryParseLong(GetHeader(headers, "content-length")) ?? 0,

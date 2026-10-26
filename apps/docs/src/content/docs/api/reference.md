@@ -7,7 +7,7 @@ description: "Auto-generated reference for the blog example app's API — every 
 
 The [blog example app](https://github.com/RocktownLabs/reptar/tree/main/examples/blog) is Reptar's living reference application. This page is generated from its OpenAPI 3.1.0 contract — the same artifact emitted to `packages/rpc/openapi.json` by `bun reptar codegen` — so it cannot drift from the C# route tree. For your own app, run `app.UseScalar()` to serve an interactive version of this reference at `/reference`.
 
-Contract: `Reptar API` (OpenAPI 3.1.0, 24 operations).
+Contract: `Reptar API` (OpenAPI 3.1.0, 25 operations).
 
 ## Route summary
 
@@ -37,6 +37,7 @@ Contract: `Reptar API` (OpenAPI 3.1.0, 24 operations).
 | DELETE | `/posts/{id}` | — | 204, 404 |
 | GET | `/posts/mine` | — | 200, 401 |
 | POST | `/upload` | — | 201, 400, 401, 413, 415 |
+| PUT | `/upload/stream` | — | 201, 400, 401, 413, 415 |
 
 ## `auth`
 
@@ -203,6 +204,10 @@ Request body: `UpdatePost`
 ## `upload`
 
 ### POST /upload
+
+**Responses:** 201 → `UploadResult` · 400 → `ErrorBody` · 401 → `ErrorBody` · 413 → `ErrorBody` · 415 → `ErrorBody`
+
+### PUT /upload/stream
 
 **Responses:** 201 → `UploadResult` · 400 → `ErrorBody` · 401 → `ErrorBody` · 413 → `ErrorBody` · 415 → `ErrorBody`
 

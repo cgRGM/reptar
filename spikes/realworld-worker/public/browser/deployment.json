@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "3892718c00508929c04c7cfa1eae3b3cb02210fc34b02d11e50ef90f7ac3c188",
+  "semanticBuildId": "2d51e05ebf6ea9a1ff037bf3e635b9e5cced7a5f91afb89a367bc604ee8dfeef",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "859174097c9cab1e91d9423ae9cdb3aca7d2b191816e41890eb378ad45696958",
+  "buildFingerprint": "c6e9b8014f8d0f87d97b9a34ca57afc6955c97652007d2067dde0643612c233d",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -22,43 +22,43 @@
     {
       "relativePath": "RealWorld.exceptions.json",
       "role": "exception-type-map",
-      "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "b204e6954f569e8189869503c21e90eca0ca1612074d4daddac288bfbdeefa8c",
+      "mediaType": "application/vnd.netwasm.exception-types+json;version=2",
+      "sha256": "71ef1a009b92b396d42848e338b6119d50eabce5b681012bf685c5b61607f8c1",
       "schemaVersion": 2
     },
     {
       "relativePath": "RealWorld.raw-adapter.mjs",
       "role": "raw-adapter",
       "mediaType": "text/javascript",
-      "sha256": "126606ecc954c5d2a20a5bfd1b7c2dba183b853b9eda11242a61dd21349d61fc",
+      "sha256": "fcafea757ebc50903c574886fc7c27b138a43e90fd704e16298a94339338328a",
       "schemaVersion": null
     },
     {
       "relativePath": "RealWorld.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "ca40e7bff4c02f02289517e1972264e00dcdfaf5f1319b7add08a6de773179a7",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "schemaVersion": null
     },
     {
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "98bf6120d227b3def3d8611ff8121ba306ea902654d8710cc058a2890f672756",
+      "sha256": "7e2673fb0d514f472ab40ed0b62fe1dfaeb27fc1fee4e55a2f850816efd3225a",
       "schemaVersion": 1
     },
     {
       "relativePath": "netwasm.page.mjs",
       "role": "hosting-javascript",
       "mediaType": "text/javascript",
-      "sha256": "363a1e6c1295aff52e3ab68cc10e17361819f53716c49faba9012be406006a1b",
+      "sha256": "ef3efdc846bc92db212e2f9b808397158b2ad0b271725786cf89d91acafbbbdb",
       "schemaVersion": null
     },
     {
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "13bc40c9009091b079f68880675b23db40992af470a03bc55ab3c461c7cd96b4",
+      "sha256": "c63a60a0242f1eb2d45e26d98e07080d0db9433f3aa6a2fc6021e10100bf5bbe",
       "schemaVersion": 1
     }
   ],
@@ -66,6 +66,7 @@
     "netwasm:runtime/reactor-host@1.0.0",
     "wasi:cli/environment@0.2.11",
     "wasi:cli/stderr@0.2.11",
+    "wasi:cli/stdout@0.2.11",
     "wasi:clocks/monotonic-clock@0.2.11",
     "wasi:clocks/wall-clock@0.2.11",
     "wasi:filesystem/preopens@0.2.11",
@@ -86,7 +87,7 @@
       "interface": "netwasm:runtime/reactor-host@1.0.0",
       "name": "watch",
       "parameters": [
-        "own\u003Cwasi:io/poll@0.2.11#pollable\u003E",
+        "own<wasi:io/poll@0.2.11#pollable>",
         "u32"
       ],
       "results": []
@@ -96,7 +97,7 @@
       "name": "get-environment",
       "parameters": [],
       "results": [
-        "list\u003Ctuple\u003Cstring,string\u003E\u003E"
+        "list<tuple<string,string>>"
       ]
     },
     {
@@ -104,7 +105,15 @@
       "name": "get-stderr",
       "parameters": [],
       "results": [
-        "own\u003Cwasi:io/streams@0.2.11#output-stream\u003E"
+        "own<wasi:io/streams@0.2.11#output-stream>"
+      ]
+    },
+    {
+      "interface": "wasi:cli/stdout@0.2.11",
+      "name": "get-stdout",
+      "parameters": [],
+      "results": [
+        "own<wasi:io/streams@0.2.11#output-stream>"
       ]
     },
     {
@@ -122,7 +131,7 @@
         "wasi:clocks/monotonic-clock@0.2.11#duration"
       ],
       "results": [
-        "own\u003Cwasi:io/poll@0.2.11#pollable\u003E"
+        "own<wasi:io/poll@0.2.11#pollable>"
       ]
     },
     {
@@ -138,44 +147,44 @@
       "name": "get-directories",
       "parameters": [],
       "results": [
-        "list\u003Ctuple\u003Cown\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E,string\u003E\u003E"
+        "list<tuple<own<wasi:filesystem/types@0.2.11#descriptor>,string>>"
       ]
     },
     {
       "interface": "wasi:filesystem/types@0.2.11",
       "name": "[method]descriptor.open-at",
       "parameters": [
-        "borrow\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E",
+        "borrow<wasi:filesystem/types@0.2.11#descriptor>",
         "wasi:filesystem/types@0.2.11#path-flags",
         "string",
         "wasi:filesystem/types@0.2.11#open-flags",
         "wasi:filesystem/types@0.2.11#descriptor-flags"
       ],
       "results": [
-        "result\u003Cown\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E,wasi:filesystem/types@0.2.11#error-code\u003E"
+        "result<own<wasi:filesystem/types@0.2.11#descriptor>,wasi:filesystem/types@0.2.11#error-code>"
       ]
     },
     {
       "interface": "wasi:filesystem/types@0.2.11",
       "name": "[method]descriptor.read",
       "parameters": [
-        "borrow\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E",
+        "borrow<wasi:filesystem/types@0.2.11#descriptor>",
         "wasi:filesystem/types@0.2.11#filesize",
         "wasi:filesystem/types@0.2.11#filesize"
       ],
       "results": [
-        "result\u003Ctuple\u003Clist\u003Cu8\u003E,bool\u003E,wasi:filesystem/types@0.2.11#error-code\u003E"
+        "result<tuple<list<u8>,bool>,wasi:filesystem/types@0.2.11#error-code>"
       ]
     },
     {
       "interface": "wasi:io/streams@0.2.11",
       "name": "[method]output-stream.blocking-write-and-flush",
       "parameters": [
-        "borrow\u003Cwasi:io/streams@0.2.11#output-stream\u003E",
-        "list\u003Cu8\u003E"
+        "borrow<wasi:io/streams@0.2.11#output-stream>",
+        "list<u8>"
       ],
       "results": [
-        "result\u003Cunit,wasi:io/streams@0.2.11#stream-error\u003E"
+        "result<unit,wasi:io/streams@0.2.11#stream-error>"
       ]
     },
     {
@@ -185,7 +194,7 @@
         "u64"
       ],
       "results": [
-        "list\u003Cu8\u003E"
+        "list<u8>"
       ]
     },
     {

@@ -19,6 +19,18 @@ public sealed partial class Ctx
     public ReptarRequest Req { get; }
 
     /// <summary>
+    /// Streaming request body for routes registered with
+    /// <see cref="RouteBuilder.StreamBody"/>. Null when the request has no body.
+    /// </summary>
+    public Stream? BodyStream => Req.BodyStream;
+
+    /// <summary>
+    /// Streaming body when available, otherwise a memory stream over the
+    /// buffered body.
+    /// </summary>
+    public Stream? OpenBody() => Req.OpenBody();
+
+    /// <summary>
     /// Shortcut for <see cref="ReptarRequest.Param"/> route parameters,
     /// e.g. ctx.Param("id") on GET /api/posts/:id.
     /// </summary>
@@ -31,6 +43,7 @@ public sealed partial class Ctx
     public IKvClient Cache => _services.Cache;
     public IQueueClient Queues => _services.Queues;
     public IDurableBridge Durable => _services.Durable;
+    public MailSender Mail => new(_services.Mail, _services.MailObserver, this);
     public IHttpClient Http => _services.Http;
     public IClock Clock => _services.Clock;
     public ICrypto Crypto => _services.Crypto;
@@ -71,7 +84,9 @@ public sealed partial class Ctx
 
     public string RequestId
     {
-        get => _requestId ??= Ids.New("req");
+        // Prefer the id assigned by the host so telemetry correlation and
+        // response headers use one value on every target.
+        get => _requestId ??= Req.RequestId ?? Ids.New("req");
         set => _requestId = value;
     }
 
@@ -280,6 +295,7 @@ internal sealed record ServiceSet(
     IKvClient Cache,
     IQueueClient Queues,
     IDurableBridge Durable,
+    IMailClient Mail,
     IHttpClient Http,
     IClock Clock,
     ICrypto Crypto,
@@ -287,5 +303,6 @@ internal sealed record ServiceSet(
     IJsonCodec Json,
     IErrorMapper Errors,
     IAppLogger Log,
+    IMailObserver? MailObserver,
     IWebSocketTransport WebSocket,
     IPolicyManager Policies);

@@ -46,34 +46,46 @@ public sealed class SourceGenJsonCodec : IJsonCodec
 
     private JsonTypeInfo? ResolveOrNull(Type type)
     {
+        // object metadata serializes polymorphically and asks the context for
+        // the runtime type; resolve value.GetType() in Serialize instead.
+        if (type == typeof(object))
+            return null;
+
         for (var i = 0; i < _contexts.Length; i++)
         {
             var info = _contexts[i].GetTypeInfo(type);
-            if (info is not null)
+            if (info is not null && info.Type == type)
                 return info;
         }
 
         foreach (var context in ReptarJson.Contexts)
         {
             var info = context.GetTypeInfo(type);
-            if (info is not null)
+            if (info is not null && info.Type == type)
                 return info;
         }
 
-        return ReptarInternalJsonContext.Default.GetTypeInfo(type);
+        var internalInfo = ReptarInternalJsonContext.Default.GetTypeInfo(type);
+        return internalInfo is not null && internalInfo.Type == type
+            ? internalInfo
+            : null;
     }
+
+    private JsonTypeInfo ResolveForValue<T>(T value) =>
+        ResolveOrNull(value?.GetType() ?? typeof(T))
+        ?? Resolve(typeof(T));
 
     public string Serialize<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value) =>
-        JsonSerializer.Serialize(value, Resolve(typeof(T)));
+        JsonSerializer.Serialize(value, ResolveForValue(value));
 
     public byte[] SerializeUtf8<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value) =>
-        JsonSerializer.SerializeToUtf8Bytes(value, Resolve(typeof(T)));
+        JsonSerializer.SerializeToUtf8Bytes(value, ResolveForValue(value));
 
     public T? Deserialize<
         [DynamicallyAccessedMembers(
@@ -125,7 +137,6 @@ public sealed class SourceGenJsonCodec : IJsonCodec
 #endif
 [JsonSerializable(typeof(Dictionary<string, bool>))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
-[JsonSerializable(typeof(object))]
 public sealed partial class ReptarInternalJsonContext : JsonSerializerContext;
 
 public sealed class DefaultJsonCodec : IJsonCodec
@@ -133,24 +144,49 @@ public sealed class DefaultJsonCodec : IJsonCodec
     public string Serialize<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value) =>
-        JsonSerializer.Serialize(value, ReptarJson.Options);
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value)
+    {
+        // Resolve the runtime type when T is object (or a base type): object
+        // metadata would ask the resolver for the concrete type anyway, but
+        // with the wrong resolver on AOT/NetWasm.
+        var info = ReptarJson.FindTypeInfo(value?.GetType() ?? typeof(T))
+            ?? ReptarJson.FindTypeInfo(typeof(T));
+        return info is not null
+            ? JsonSerializer.Serialize(value, info)
+            : JsonSerializer.Serialize(value, ReptarJson.Options);
+    }
 
     public byte[] SerializeUtf8<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value) =>
-        JsonSerializer.SerializeToUtf8Bytes(value, ReptarJson.Options);
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(T value)
+    {
+        var info = ReptarJson.FindTypeInfo(value?.GetType() ?? typeof(T))
+            ?? ReptarJson.FindTypeInfo(typeof(T));
+        return info is not null
+            ? JsonSerializer.SerializeToUtf8Bytes(value, info)
+            : JsonSerializer.SerializeToUtf8Bytes(value, ReptarJson.Options);
+    }
 
     public T? Deserialize<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties)] T>(string json) =>
-        JsonSerializer.Deserialize<T>(json, ReptarJson.Options);
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(string json)
+    {
+        var info = ReptarJson.FindTypeInfo(typeof(T)) as JsonTypeInfo<T>;
+        return info is not null
+            ? JsonSerializer.Deserialize<T>(json, info)
+            : JsonSerializer.Deserialize<T>(json, ReptarJson.Options);
+    }
 
     public T? Deserialize<
         [DynamicallyAccessedMembers(
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties)] T>(ReadOnlySpan<byte> utf8Json) =>
-        JsonSerializer.Deserialize<T>(utf8Json, ReptarJson.Options);
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(ReadOnlySpan<byte> utf8Json)
+    {
+        var info = ReptarJson.FindTypeInfo(typeof(T)) as JsonTypeInfo<T>;
+        return info is not null
+            ? JsonSerializer.Deserialize<T>(utf8Json, info)
+            : JsonSerializer.Deserialize<T>(utf8Json, ReptarJson.Options);
+    }
 }

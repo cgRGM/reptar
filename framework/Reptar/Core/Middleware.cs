@@ -40,15 +40,17 @@ public static class Middlewares
 {
     public static ReptarMiddleware RequestId() => async (ctx, next) =>
     {
-        ctx.RequestId = Ids.New("req");
+        ctx.RequestId = ctx.Req.RequestId ?? Ids.New("req");
         ctx.SetHeader("X-Request-Id", ctx.RequestId);
 
         var stopwatch = Stopwatch.StartNew();
         var response = await next();
         stopwatch.Stop();
 
-        response.Headers["Server-Timing"] =
-            $"reptar;dur={stopwatch.Elapsed.TotalMilliseconds:0.0}";
+        // Route through PendingHeaders so this composes with other
+        // Server-Timing producers (e.g. Telemetry's db/total entries)
+        // instead of being overwritten by them at response merge time.
+        ctx.ServerTiming("reptar", stopwatch.Elapsed.TotalMilliseconds);
 
         return response;
     };
@@ -210,6 +212,9 @@ public static class Middlewares
 
             if (db.SlowQueryCount > 0 && db.SlowestSql is not null)
                 ctx.Log.Warn($"slow_query {db.SlowestQueryMs:0.0}ms {db.SlowestSql}");
+
+            if (db.TryGetRepeatedTemplate(DbMetrics.NPlus1Threshold, out var template, out var executions))
+                ctx.Log.Warn($"n_plus_1_query {executions}x {template} -- batch the loop with BatchAsync or Preload");
 
             return response;
         };

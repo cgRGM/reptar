@@ -28,7 +28,7 @@ All providers share the same core operations:
 | Operation | What it does |
 | :-- | :-- |
 | `PutAsync(key, bytes, contentType)` | Write an object. |
-| `PutAsync(key, stream, contentType)` | Stream an object; S3 uses multipart above 8 MB. |
+| `PutAsync(key, stream, contentType)` | Stream an object; S3/R2 use multipart with a configurable part size. |
 | `GetAsync(key)` | Read the full object, or `null` when missing. |
 | `ExistsAsync(key)` / `DeleteAsync(key)` | Cheap existence check / delete. |
 | `DeleteManyAsync(keys)` | Batch delete (native `DeleteObjects` on S3, array delete on R2). |
@@ -157,6 +157,15 @@ await client.files["*path"]({ param: { path: "avatars/user_1/photo.png" } });
 ```
 
 The client preserves `/` separators while percent-encoding each segment.
+WebSocket routes support the same named catch-all syntax:
+
+```csharp
+app.OnWebSocket("/ws/files/*path", new WebSocketHandlers
+{
+    Message = (connection, message) =>
+        connection.SendAsync($"watching {connection.Ctx.Param("path")}"),
+});
+```
 
 ---
 
@@ -179,6 +188,12 @@ await ctx.Storage.DeleteManyAsync(["drafts/b.png", "drafts/c.png"]);
 S3 uses a native server-side copy (`x-amz-copy-source`) and the `DeleteObjects`
 batch endpoint. R2 uses an array delete. Local disk uses `File.Copy` /
 `File.Move` and moves the metadata sidecar.
+
+Copies preserve `Content-Type`, `Cache-Control`, `Content-Disposition`,
+`Content-Encoding`, `Content-Language`, and user metadata by default. Set
+`PreserveMetadata = false` or pass overrides to replace them. `ctx.File` serves
+the stored `Content-Encoding` / `Content-Language` / `Content-Disposition`
+headers automatically.
 
 ---
 
@@ -226,8 +241,9 @@ var download = await ctx.Storage.PresignGetAsync(
 ## 6. Streaming and multipart uploads
 
 `PutAsync(key, stream, contentType)` avoids buffering the whole object on
-providers that support streaming. S3 switches to multipart automatically above
-8 MB and aborts the upload if any part fails:
+providers that support streaming. S3 and R2 switch to multipart automatically
+above the configured part size (8 MiB by default) and abort the upload if any
+part fails:
 
 ```csharp
 await using var file = File.OpenRead("large-video.mp4");
@@ -246,9 +262,67 @@ Check capabilities before relying on the optimized path:
 ```csharp
 if (ctx.Storage.Capabilities.Has(StorageFeatures.MultipartUpload))
 {
-    // S3: 8 MiB parts, bounded memory.
+    // S3/R2: bounded-memory parts.
 }
 ```
+
+Tune the part size per provider:
+
+```csharp
+Storage = Storage.S3(new S3StorageOptions
+{
+    Endpoint = "https://acc123.r2.cloudflarestorage.com",
+    Bucket = "media",
+    AccessKeyId = "...",
+    SecretAccessKey = "...",
+    MultipartPartSizeBytes = 16 * 1024 * 1024,
+});
+
+Storage = Storage.R2(new R2StorageOptions
+{
+    MultipartPartSizeBytes = 16 * 1024 * 1024,
+});
+```
+
+Values below 5 MiB are clamped to the provider minimum.
+
+### Streaming the request body
+
+By default the framework buffers the request body so `ctx.Req.Body`,
+`ctx.Req.Form`, and `ctx.BindJsonAsync<T>()` keep working. Routes that only need
+to forward bytes can opt into a live stream with `StreamBody()`:
+
+```csharp
+app.Put("/upload/stream", Auth.RequireUser, async ctx =>
+{
+    // Peek at the magic bytes, then replay them into the storage stream.
+    var check = await Files.CheckStreamAsync(ctx.Req.BodyStream, "image/*");
+    if (!check.Ok)
+        return check.ToError(ctx);
+
+    var key = $"uploads/{Ids.New("file")}.{check.Extension}";
+    await ctx.Storage.PutAsync(
+        key,
+        check.Body!,
+        check.ContentType,
+        new StoragePutOptions
+        {
+            CacheControl = "public, max-age=31536000, immutable",
+        });
+
+    return ctx.Json(new { key }, 201);
+})
+.StreamBody(maxBytes: 20_000_000);
+```
+
+- **Kestrel** hands the handler the live `HttpRequest.Body`; the body is never
+  buffered by the framework. `StreamBody(maxBytes)` wraps it in a limit that
+  returns 413 when exceeded.
+- **Workers** still receive the body in the request envelope, but
+  `ctx.Req.BodyStream` is a memory stream and the storage path reads it in
+  parts instead of making another full copy.
+- `StreamBody()` routes must not use `ctx.Req.Form`, `ctx.Req.Body`, or
+  `ctx.BindJsonAsync<T>()`; those APIs need the buffered body.
 
 Providers without `StreamingPut` fall back to buffering through the default
 interface implementation.

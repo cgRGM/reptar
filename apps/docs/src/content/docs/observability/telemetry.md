@@ -60,10 +60,14 @@ ctx.SpanId;
 ctx.ParentSpanId;
 ```
 
-The framework creates the local span id. Request records can be exported to an
-OTLP/HTTP collector (see below); span export is still a roadmap item.
-`TraceContext.Current.ToTraceParent()` is available for propagating the context
-to outbound calls.
+The framework creates the local span id. Native hosts can export the same
+record as an OTLP log with `UseOtlp` (see below). On Workers the guest emits one
+event and the host exports it as an OTLP span (see “Workers: host-owned OTLP
+export”). `TraceContext.Current.ToTraceParent()` is available for propagating
+the context to outbound calls.
+
+On Workers, `request_id` is the host envelope id and is also returned as
+`X-Request-Id`, so Worker logs and Reptar events correlate without translation.
 
 ## 3. Server-Timing Headers
 
@@ -126,7 +130,33 @@ records are queued and flushed in the background, and the queue is flushed on
 Kestrel/Lambda shutdown. Export failures never fail a request. Headers (for
 example `Authorization`) can be added through `OtlpExporterOptions.Headers`.
 
-## 4d. Developer Dashboard
+## 4d. Workers: Host-Owned OTLP Export
+
+The Wasm guest does not open network connections for telemetry. It emits one
+JSON event through the `telemetry` host import; `@reptar/host` enriches it with
+`wasm_ms`, `cf_ray`, `colo`, and `trigger`, then calls `onTelemetry`. Delivery
+is handed to `ctx.waitUntil` so it survives the response.
+
+```typescript
+import { createOtlpExporter, createReptarHost } from "@reptar/host";
+
+const host = createReptarHost<Env>({
+  // ...
+  onTelemetry: createOtlpExporter({
+    endpoint: "https://api.axiom.co/v1/traces",
+    headers: { authorization: `Bearer ${env.AXIOM_TOKEN}` },
+    serviceName: "my-api",
+  }),
+});
+```
+
+`onTelemetry` defaults to `console.log(JSON.stringify(event))`. The exporter
+maps each request event to one server span (`http.request.method`,
+`http.response.status_code`, `reptar.db_ms`, `reptar.wasm_ms`, ...) and keeps
+the incoming W3C `traceparent` as the parent span. Export failures are logged
+and never fail the request.
+
+## 4e. Developer Dashboard
 
 ```csharp
 app.UseMetrics();
@@ -172,8 +202,9 @@ returns `503` when it is unavailable.
 The following are roadmap items, not current behavior:
 
 - Axiom-specific log export (`AxiomOptions` is not implemented; use OTLP);
-- span export and trace sampling beyond the request log.
+- trace sampling beyond the request log — the W3C sampled flag is propagated,
+  but every emitted request event is exported.
 
 Until those land, ship the structured JSON lines to your platform's log sink
-(Cloudflare Logpush, Axiom, Datadog, etc.), use `UseOtlp` for OTLP/HTTP
-collectors, and use `Server-Timing` for local profiling.
+(Cloudflare Logpush, Axiom, Datadog, etc.), use `UseOtlp` on native hosts and
+`createOtlpExporter` on Workers, and use `Server-Timing` for local profiling.

@@ -70,6 +70,29 @@ public sealed class ReliabilityTests
     }
 
     [Fact]
+    public async Task TestClient_awaits_waitUntil_work_before_returning()
+    {
+        var app = ReptarApp.Create(new ReptarConfig());
+        var completed = false;
+
+        app.Get("/background", ctx =>
+        {
+            ctx.WaitUntil(async () =>
+            {
+                await Task.Yield();
+                completed = true;
+            });
+
+            return Task.FromResult(ctx.Text("ok"));
+        });
+
+        var response = await app.CreateTestClient().GetAsync("/background");
+
+        Assert.Equal(200, response.Status);
+        Assert.True(completed);
+    }
+
+    [Fact]
     public async Task Modules_configure_start_and_stop_in_order()
     {
         var app = ReptarApp.Create(new ReptarConfig());

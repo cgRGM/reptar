@@ -1,0 +1,6 @@
+bucket:customer-42:50
+bucket:vip-α:67
+bucket:a:b/c:24
+bucket:🚂:95
+bucket::82
+rollback:PASS

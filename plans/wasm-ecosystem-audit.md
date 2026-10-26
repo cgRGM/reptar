@@ -670,3 +670,84 @@ The next milestone should not be "add another language" or "chase a 10 MB binary
 > **Make the edge runtime trustworthy and the contract loop automatic.**
 
 If Reptar can guarantee that a Worker request never hangs, background work actually survives, the host bridge cannot drift, and every route is fully typed in the generated client, then it has something none of the surveyed ecosystems offer: **C# on Workers with a complete, checked, language-neutral contract pipeline.**
+
+---
+
+## 11. Trust Release — Shipped
+
+The runtime-spine work is now implemented and verified. No new product surface was added.
+
+### Boundary safety
+
+- `WorkerEntrypoint.HandleAsync` is the single NetWasm request bridge. It
+  deserializes one envelope, guarantees exactly one response, maps malformed
+  envelopes to 400 and unhandled exceptions to 500, and logs background
+  failures instead of leaving the host promise pending.
+- The host accepts both legacy synchronous `handle()` exports and async
+  `handle(): Promise<void>` exports. A rejected export becomes a 500; an export
+  that completes without responding becomes a 502; a non-streaming request that
+  never responds times out (default 30 s, 504).
+- Queue and scheduled consumers retry the whole batch on export failure or
+  timeout instead of silently acknowledging it.
+- A rejected app instance is not cached; the next request gets a fresh open.
+- `ReptarTestClient` now awaits `ctx.WaitUntil` work before returning, so tests
+  are deterministic and background failures surface.
+
+### Real `waitUntil`
+
+- `ReptarApp.HandleWithBackgroundAsync` returns the response and the collected
+  background task. The Worker entrypoint sends the response first, then awaits
+  the task; the host hands the async export to `executionCtx.waitUntil`.
+- Durable Object hosts pass the object's `waitUntil` through the same path.
+- Native `HandleAsync` keeps the thread-pool dispatch for Kestrel/Lambda.
+
+### One structured request event
+
+- One JSON record per sampled request: request id, W3C trace/span/parent span,
+  method, route template, path, status, duration, DB time/query count, cache,
+  user, `cf_ray`, colo, error code, slow flag.
+- The host injects `traceparent` on ingress, enriches the event with `wasm_ms`,
+  `cf_ray`, `colo`, and `trigger`, and hands delivery to `ctx.waitUntil`.
+- `onTelemetry` is the host-owned exporter seam. `createOtlpExporter()` maps the
+  event to an OTLP/HTTP span without an OTel SDK; native hosts keep `UseOtlp`
+  for OTLP logs.
+- Outbound `WasmHttpClient` calls propagate `traceparent`.
+- The host and C# now share the same request id, so enrichment and response
+  headers cannot silently miss.
+
+### Drift checks
+
+- `bun reptar check:host` verifies every `app.host` import against
+  `app.host.mjs` **and** verifies every fetched `deployment.json` artifact
+  hash. The application wasm is compiled from the imported module and is
+  recorded with the empty hash.
+- `bun reptar codegen --check` regenerates contracts to a temp directory,
+  formats them, and compares both `examples/blog/rpc` and the published
+  `packages/rpc` copies (`app-type.ts`, `types.ts`, `schemas.ts`,
+  `openapi.json`, `schema.json`, `llms.txt`).
+- CI and `reptar self-check` run host boundary tests, the host/artifact check,
+  generated-contract freshness, NetWasm lint, and the two-host smoke.
+
+### Size and startup
+
+- `bun reptar check:worker` enforces a 48 MiB hard ceiling (under Cloudflare's
+  64 MiB Worker script limit) and warns above the 32 MiB optimization target.
+- The NetWasm loader is patched to use the statically imported
+  `WebAssembly.Module` instead of re-fetching the wasm as a static asset. The
+  wasm is excluded from `public/` via `.assetsignore`, avoiding the 25 MiB
+  per-asset limit and duplicate upload.
+- Measured on the current-source reference Worker: 38.9 MiB upload / 4.5 MiB
+  gzip unoptimized. The unoptimized module still starts and serves warm
+  requests in the e2e run. The older 15.9 MiB pinned artifact is smaller but
+  predates the D1 generic-insert fix; do not ship it.
+- `wasm-opt` on the current 38 MiB module is slow and fragile (core `-Oz` fails,
+  final `-O3` exceeds 15 minutes). This is the main Speed-release item: a
+  minimal edge profile, `Oz`, and a measured startup budget.
+
+### Verification
+
+- 388 C# tests, 16 host boundary tests, `check:host`, `check:worker`,
+  `codegen --check`, and `packages/host` typecheck pass.
+- The full Worker e2e suite (CRUD, auth, uploads including 9 MiB multipart, KV,
+  queue, Durable Object, SSE, WebSocket, CORS) passes against the current
+  38.4 MiB artifact with p50 ≈ 4.2 ms / p95 ≈ 7.1 ms for warm `/posts`.

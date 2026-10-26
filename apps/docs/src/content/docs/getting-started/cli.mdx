@@ -13,15 +13,19 @@ Reptar provides a unified CLI runner (`bun reptar`) that serves as the developer
 
 | Command | Usage | Description |
 | :-- | :-- | :-- |
-| `new` / `create` | `bun reptar new [name]` | Scaffold a new fullstack Reptar project. |
-| `dev` | `bun reptar dev` | Run the local development server with hot reloading. |
+| `new` / `create` | `bun reptar new [name] [--template <t>] [--db <d>] [--auth <a>]` | Scaffold a new project. Unsupported templates fail with the available list. |
+| `dev` | `bun reptar dev [--app <dir>]` | Run the local development server with hot reloading. |
 | `run` | `bun reptar run <path/to/app.cs>` | Execute any single file-based Reptar application directly. |
 | `build` | `bun reptar build` | Compile the C# framework and Native AOT binaries. |
-| `build:worker` | `bun reptar build:worker` | Compile C# to `netwasm0.1` and patch the NetWasm host. |
+| `build:worker` | `bun reptar build:worker` | Compile C# to `netwasm0.1` and patch the NetWasm host. The module stays unoptimized by default (under the 64 MiB script limit); set `REPTAR_OPTIMIZE_WORKER=1` for the slow wasm-opt pass. |
 | `test` | `bun reptar test` | Run the test suite via xUnit. |
-| `db` | `bun reptar db <subcommand>` | Database operations: `status`, `new`, `migrate`, `plan`, `generate`. |
-| `codegen` | `bun reptar codegen` | Regenerate `@reptar/client` TypeScript contracts from C# routes. |
-| `inspect` | `bun reptar inspect [--json]` | Machine-readable inspection of routes, tables, and project state. |
+| `test:realtime` | `bun reptar test:realtime [--workers] [--kestrel]` | Two-host realtime smoke (workerd + DO + D1, Kestrel + SQLite). |
+| `test:scaffold` | `bun reptar test:scaffold` | Scaffold → build → codegen → tsc → runtime auth/CRUD smoke. |
+| `check:netwasm` | `bun reptar check:netwasm [--strict] [path]` | Scan for NetWasm/Workers incompatibilities before deploying. |
+| `self-check` | `bun reptar self-check` | Doctor + tests + host boundary/contract + contracts + lint + two-host realtime. |
+| `db` | `bun reptar db <subcommand> [--app <dir>]` | Database operations: `status`, `new`, `migrate`, `plan`, `generate`. |
+| `codegen` | `bun reptar codegen [--app <dir>] [--out <dir>]` | Regenerate `@reptar/client` TypeScript contracts from C# routes. |
+| `inspect` | `bun reptar inspect [--json] [--app <dir>]` | Machine-readable inspection of routes, tables, and project state. |
 | `doctor` | `bun reptar doctor [--json] [--strict] [--app <dir>]` | Diagnose SDK toolchain, database connectivity, and RPC sync. `--strict` treats warnings as failures (CI mode). |
 | `mcp` | `bun reptar mcp` | Launch the stdio Model Context Protocol (MCP) server. |
 | `agent` | `bun reptar agent [flags]` | Boot the interactive terminal AI agent. |

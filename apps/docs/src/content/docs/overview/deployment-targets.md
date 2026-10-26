@@ -29,14 +29,14 @@ Cloudflare Workers   Vercel Edge  AWS Lambda       Docker / VPS
 
 | Platform | Target Runtime | Status | Cold Start | Base Footprint | Database Support |
 | :-- | :-- | :-- | :-- | :-- | :-- |
-| **Cloudflare Workers** | `netwasm0.1` (Wasm) | **Shipped & Verified** | Sub-50 ms | ~9.5 MB Wasm | D1 (SQLite), Hyperdrive (Postgres) |
+| **Cloudflare Workers** | `netwasm0.1` (Wasm) | **Shipped & Verified** | Sub-50 ms | ~38 MiB Wasm (~4.5 MiB gzip) | D1 (SQLite), Hyperdrive (Postgres) |
 | **Linux VPS / Docker** | `net10.0` (Native AOT) | **Shipped & Verified** | 258 ms | **10.9 MB** Binary | SQLite, PostgreSQL (Npgsql), MySQL |
 | **AWS Lambda** | `net10.0` (Native AOT) | **Shipped Adapter** | Sub-15 ms | ~20 MB Memory | PostgreSQL, MySQL, SQLite |
 | **Vercel Edge** | `netwasm0.1` (Wasm) | **Roadmap / Evaluation** | Sub-50 ms | ~25 MB Memory | Hyperdrive, HTTP APIs |
 
 ## Per-Target Feature Support Matrix
 
-Because NetWasm `0.10.0` (`wasm-opt` / Binaryen) enforces a single `[JSExport]` entry point (`Program.Handle`) per WebAssembly module, some streaming and event-driven primitives execute directly in C# on `net10.0` (`Kestrel` and `Lambda`) while being terminated or bridged by the TypeScript `@reptar/host` Worker shim on `Cloudflare Workers`:
+NetWasm exposes the entrypoints a module declares, and Reptar bridges the Worker-only primitives through the TypeScript `@reptar/host` shim. Streaming and event-driven features that cannot run inside a single Worker request execute directly in C# on `net10.0` (`Kestrel` and `Lambda`), while Workers use the host bridge:
 
 | Feature / Primitive | Cloudflare Workers (`netwasm0.1` + `@reptar/host`) | Cloudflare Durable Objects (NetWasm + DO) | Kestrel (`net10.0` Native AOT) | AWS Lambda (`net10.0` Native AOT) |
 | :-- | :-- | :-- | :-- | :-- |
@@ -52,8 +52,8 @@ Because NetWasm `0.10.0` (`wasm-opt` / Binaryen) enforces a single `[JSExport]` 
 | **WebSockets (`app.OnWebSocket`)** | ⚡ Single-socket Worker (`WebSocketPair`) | ✅ Full cross-client Fanout & Presence | ✅ Native C# `System.Net.WebSockets` | ❌ Use API Gateway WebSocket API |
 | **Multi-room Hubs (`Reptar.Realtime`)** | ❌ Cannot fanout across requests | ✅ Supported (`examples/realtime-rooms`) | ✅ Supported (ConcurrentDictionary) | ❌ External Pub/Sub required |
 | **AI Workspace Tools (`app.UseWorkspaceTools`)** | ❌ Confined / In-memory tools only | ❌ In-memory tools only | ✅ Full Local Process & Filesystem | ⚡ Lambda /tmp filesystem |
-| **Queue Consumers (`app.OnQueue`)** | ⚡ TS Worker `queue(batch, env)` host bridge | ⚡ DO Alarm queue drain | ✅ Native C# (`HandleQueueBatchAsync`) | ⚡ SQS event adapter |
-| **Cron Triggers (`app.OnScheduled`)** | ⚡ TS Worker `scheduled(event, env)` host bridge | ⚡ DO scheduled alarms | ✅ Native C# (`HandleScheduledAsync`) | ⚡ EventBridge scheduled rule |
+| **Queue Consumers (`app.OnQueue`)** | ⚡ TS Worker `queue(batch, env)` host bridge | ⚡ DO Alarm queue drain | ✅ Native C# poller (`IQueueConsumer`: DB / SQS / Azure Storage / Pub/Sub adapters) | ✅ SQS event adapter (`ReportBatchItemFailures`) |
+| **Cron Triggers (`app.OnScheduled`)** | ⚡ TS Worker `scheduled(event, env)` host bridge | ⚡ DO scheduled alarms | ✅ Native C# cron scheduler (5/6-field parser) | ⚡ EventBridge scheduled rule |
 | **OpenAPI 3.1 (`/openapi.json`, `/reference`)** | ⚡ Generated at build time (`bun run rpc:gen`) | ⚡ Generated at build time | ✅ Native C# (`app.UseScalar()`) | ✅ Native C# (`app.UseScalar()`) |
 | **Static Files (`app.UseStaticFiles`)** | ⚡ Cloudflare Workers Assets (`env.ASSETS`) | ⚡ Cloudflare Workers Assets | ✅ Native C# (`ETag` + SPA fallback) | ⚡ CloudFront / S3 static hosting |
 
@@ -63,7 +63,7 @@ Reptar compiles to WebAssembly (`netwasm0.1`) and executes directly inside Cloud
 
 ### Runtime Characteristics
 
-- **Compilation:** NetWasm compiler emits optimized `.wasm` bytecode with compile-time source generation.
+- **Compilation:** NetWasm emits `.wasm` bytecode with compile-time source generation. The default build leaves the module unoptimized (under Cloudflare's 64 MiB script limit); set `REPTAR_OPTIMIZE_WORKER=1` for the slow `wasm-opt` pass. The module is imported as a `CompiledWasm` module and excluded from the static-asset upload, so the 25 MiB per-asset limit does not apply.
 - **Isolate Execution:** Sub-2ms execution per request, measured live via `server-timing: reptar;dur=0.0`.
 - **Memory Footprint:** Runs comfortably within the 128 MB Worker isolate ceiling.
 - **Zero Reflection:** All JSON serialization, route dispatching, and D1 row mapping are generated at build time.

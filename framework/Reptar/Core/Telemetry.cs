@@ -219,11 +219,27 @@ public sealed class DbMetrics
     /// <summary>Queries slower than this are counted as slow queries.</summary>
     public static int SlowQueryThresholdMs { get; set; } = 100;
 
+    /// <summary>
+    /// Executions of one SQL template at or above this count within a single
+    /// request are reported as an N+1 pattern (usually a query inside a
+    /// loop that should be a BatchAsync or Preload).
+    /// </summary>
+    public static int NPlus1Threshold { get; set; } = 10;
+
+    /// <summary>
+    /// Optional per-flow observer notified whenever a request telemetry scope
+    /// opens. Stored in an AsyncLocal so concurrent clients (parallel test
+    /// classes) never observe each other's requests; null in production.
+    /// </summary>
+    internal static readonly AsyncLocal<Action<DbMetrics>?> ScopeObserverSlot = new();
+
     private long _queries;
     private long _ticks;
     private long _slowQueries;
     private long _slowestTicks;
     private string? _slowestSql;
+    private readonly object _templateLock = new();
+    private Dictionary<string, int>? _templateCounts;
 
     public int QueryCount => (int)Interlocked.Read(ref _queries);
     public double TotalMs => TicksToMs(Interlocked.Read(ref _ticks));
@@ -247,6 +263,54 @@ public sealed class DbMetrics
                 ? Truncate(sql, 240)
                 : $"{Truncate(sql, 200)} -- {Truncate(error, 120)}";
         }
+
+        TrackTemplate(sql);
+    }
+
+    /// <summary>
+    /// Returns the most-executed SQL template when it ran at least
+    /// <paramref name="minCount"/> times in this request. This is the signal
+    /// behind N+1 detection.
+    /// </summary>
+    public bool TryGetRepeatedTemplate(int minCount, out string sql, out int count)
+    {
+        sql = "";
+        count = 0;
+
+        if (_templateCounts is not { } counts)
+            return false;
+
+        lock (_templateLock)
+        {
+            foreach (var (template, executions) in counts)
+            {
+                if (executions > count)
+                {
+                    count = executions;
+                    sql = template;
+                }
+            }
+        }
+
+        return count >= minCount;
+    }
+
+    private void TrackTemplate(string sql)
+    {
+        var counts = _templateCounts;
+
+        if (counts is null)
+        {
+            var created = new Dictionary<string, int>(StringComparer.Ordinal);
+            counts = Interlocked.CompareExchange(ref _templateCounts, created, null) ?? created;
+        }
+
+        var key = Truncate(sql, 240);
+
+        lock (_templateLock)
+        {
+            counts[key] = counts.TryGetValue(key, out var count) ? count + 1 : 1;
+        }
     }
 
     public static IDisposable Begin(DbMetrics metrics)
@@ -254,6 +318,7 @@ public sealed class DbMetrics
         ArgumentNullException.ThrowIfNull(metrics);
         var previous = CurrentSlot.Value;
         CurrentSlot.Value = metrics;
+        ScopeObserverSlot.Value?.Invoke(metrics);
         return new Scope(previous);
     }
 
@@ -623,11 +688,74 @@ public sealed class InstrumentedDbClient(IDbClient inner) : IDbClient, IDisposab
         }
     }
 
-    public Task TransactionAsync(Func<IDbClient, Task> action) =>
-        Inner.TransactionAsync(action);
+    public async Task TransactionAsync(Func<IDbClient, Task> action)
+    {
+        var metrics = DbMetrics.Current;
+        if (metrics is null)
+        {
+            await Inner.TransactionAsync(action);
+            return;
+        }
 
-    public Task<T> TransactionAsync<T>(Func<IDbClient, Task<T>> action) =>
-        Inner.TransactionAsync(action);
+        var started = Stopwatch.GetTimestamp();
+        var wasBuffered = false;
+        try
+        {
+            // Real transactions (SQLite, MySQL) execute statements immediately;
+            // wrapping the client they hand to the action counts each one.
+            // Buffered transactions (D1, PostgreSQL via the default) only hit
+            // the database once at the batch flush, so the whole transaction
+            // is recorded as a single entry instead.
+            await Inner.TransactionAsync(db =>
+            {
+                wasBuffered = db is BufferedTransactionClient;
+                return action(Instrument(db));
+            });
+
+            if (wasBuffered)
+                metrics.Record("transaction (batched)", Stopwatch.GetTimestamp() - started);
+        }
+        catch (Exception ex)
+        {
+            if (wasBuffered)
+                metrics.Record("transaction (batched)", Stopwatch.GetTimestamp() - started, ex.Message);
+            throw;
+        }
+    }
+
+    public async Task<T> TransactionAsync<T>(Func<IDbClient, Task<T>> action)
+    {
+        var metrics = DbMetrics.Current;
+        if (metrics is null)
+            return await Inner.TransactionAsync(action);
+
+        var started = Stopwatch.GetTimestamp();
+        var wasBuffered = false;
+        try
+        {
+            var result = await Inner.TransactionAsync(db =>
+            {
+                wasBuffered = db is BufferedTransactionClient;
+                return action(Instrument(db));
+            });
+
+            if (wasBuffered)
+                metrics.Record("transaction (batched)", Stopwatch.GetTimestamp() - started);
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            if (wasBuffered)
+                metrics.Record("transaction (batched)", Stopwatch.GetTimestamp() - started, ex.Message);
+            throw;
+        }
+    }
+
+    private static IDbClient Instrument(IDbClient db) =>
+        db is InstrumentedDbClient or BufferedTransactionClient
+            ? db
+            : new InstrumentedDbClient(db);
 }
 
 #if !NETWASM

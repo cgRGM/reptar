@@ -15,6 +15,9 @@ export interface R2PutOptions {
   customMetadata?: Record<string, string>;
   httpMetadata?: {
     cacheControl?: string;
+    contentDisposition?: string;
+    contentEncoding?: string;
+    contentLanguage?: string;
     contentType?: string;
   };
   onlyIf?: {
@@ -35,6 +38,9 @@ export interface R2ObjectLike {
   etag?: string;
   httpMetadata?: {
     cacheControl?: string;
+    contentDisposition?: string;
+    contentEncoding?: string;
+    contentLanguage?: string;
     contentType?: string;
   };
   key?: string;
@@ -48,7 +54,26 @@ export interface R2ObjectsLike {
   truncated: boolean;
 }
 
+export interface R2UploadedPartLike {
+  etag: string;
+  partNumber: number;
+}
+
+export interface R2MultipartUploadLike {
+  abort: () => Promise<void>;
+  complete: (uploadedParts: R2UploadedPartLike[]) => Promise<unknown>;
+  uploadId: string;
+  uploadPart: (
+    partNumber: number,
+    value: Uint8Array
+  ) => Promise<R2UploadedPartLike>;
+}
+
 export interface R2BucketLike {
+  createMultipartUpload?: (
+    key: string,
+    options?: R2PutOptions
+  ) => Promise<R2MultipartUploadLike>;
   delete: (key: string | string[]) => Promise<unknown>;
   get: (key: string, options?: R2GetOptions) => Promise<R2ObjectLike | null>;
   head: (key: string) => Promise<R2ObjectLike | null>;
@@ -63,6 +88,10 @@ export interface R2BucketLike {
     value: Uint8Array,
     options?: R2PutOptions
   ) => Promise<unknown>;
+  resumeMultipartUpload?: (
+    key: string,
+    uploadId: string
+  ) => R2MultipartUploadLike;
 }
 
 export interface ReptarStorageBinding {
@@ -99,6 +128,18 @@ export interface QueueLike {
   ) => Promise<void>;
 }
 
+/**
+ * Cloudflare Email Sending binding (send_email). `send` accepts the
+ * structured EmailMessageBuilder payload ({ to, from, subject, html, text,
+ * cc, bcc, replyTo, attachments, headers }) or a legacy raw-MIME
+ * EmailMessage, resolves to { messageId } on success, and rejects with
+ * standard Error objects carrying a platform code such as
+ * E_SENDER_NOT_VERIFIED or E_RATE_LIMIT_EXCEEDED.
+ */
+export interface SendEmailLike {
+  send: (message: unknown) => Promise<unknown>;
+}
+
 export interface WorkersAiLike {
   run: (model: string, input: Record<string, unknown>) => Promise<unknown>;
 }
@@ -126,6 +167,7 @@ export interface ReptarBindings {
   ai?: WorkersAiLike;
   db?: D1DatabaseLike;
   durable?: Record<string, DurableObjectNamespaceLike>;
+  email?: Record<string, SendEmailLike>;
   hyperdrive?: HyperdriveLike;
   kv?: KvNamespaceLike;
   postgres?: PostgresBindingLike;

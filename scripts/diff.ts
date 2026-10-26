@@ -410,14 +410,21 @@ export const planMigrations = (
         }
       }
     } else {
-      // Entire table needs to be created
+      // Compiler metadata marks each composite-key member as primaryKey.
+      // SQLite requires one table-level constraint, not several inline keys.
+      const primaryKey = targetTable.primaryKey?.length
+        ? targetTable.primaryKey
+        : targetTable.columns
+            .filter((column) => column.primaryKey)
+            .map((column) => column.name);
+      const compositePrimaryKey = primaryKey.length > 1;
       const lines: string[] = [];
       for (const col of targetTable.columns) {
         let line = `  "${col.name}" ${col.type}`;
-        if (col.primaryKey) {
+        if (col.primaryKey && !compositePrimaryKey) {
           line += " PRIMARY KEY";
         }
-        if (col.notNull && !col.primaryKey) {
+        if (col.notNull && (!col.primaryKey || compositePrimaryKey)) {
           line += " NOT NULL";
         }
         if (col.unique && !col.primaryKey) {
@@ -430,8 +437,16 @@ export const planMigrations = (
         }
         if (col.referencesTable) {
           line += ` REFERENCES "${col.referencesTable}"("${col.referencesCol ?? "id"}")`;
+          if (col.onDelete) {
+            line += ` ON DELETE ${col.onDelete.toUpperCase()}`;
+          }
         }
         lines.push(line);
+      }
+      if (compositePrimaryKey) {
+        lines.push(
+          `  PRIMARY KEY (${primaryKey.map((name) => `"${name}"`).join(", ")})`
+        );
       }
 
       const createTableSql = `CREATE TABLE IF NOT EXISTS "${targetTable.name}" (\n${lines.join(",\n")}\n);`;

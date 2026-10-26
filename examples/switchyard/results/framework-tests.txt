@@ -1,0 +1,52 @@
+  Determining projects to restore...
+  Restored /src/framework/Reptar/Reptar.csproj (in 2.18 sec).
+  Restored /src/framework/Reptar.Lambda/Reptar.Lambda.csproj (in 2.18 sec).
+  Restored /src/framework/Reptar.Tests/Reptar.Tests.csproj (in 1.84 sec).
+  Restored /src/framework/Reptar.SourceGenerators/Reptar.SourceGenerators.csproj (in 2.11 sec).
+  1 of 5 projects are up-to-date for restore.
+/src/framework/Reptar/Auth/Auth.cs(16,13): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(16,40): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(16,70): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(18,13): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(18,42): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(16,13): warning CS8604: Possible null reference argument for parameter 'Id' in 'UserRow.UserRow(string Id, string Email, string Name, string? PasswordHash, int IsAnonymous, string Role, string CreatedAt, string? Image = null, int EmailVerified = 0)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(16,40): warning CS8604: Possible null reference argument for parameter 'Email' in 'UserRow.UserRow(string Id, string Email, string Name, string? PasswordHash, int IsAnonymous, string Role, string CreatedAt, string? Image = null, int EmailVerified = 0)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(16,70): warning CS8604: Possible null reference argument for parameter 'Name' in 'UserRow.UserRow(string Id, string Email, string Name, string? PasswordHash, int IsAnonymous, string Role, string CreatedAt, string? Image = null, int EmailVerified = 0)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(18,13): warning CS8604: Possible null reference argument for parameter 'Role' in 'UserRow.UserRow(string Id, string Email, string Name, string? PasswordHash, int IsAnonymous, string Role, string CreatedAt, string? Image = null, int EmailVerified = 0)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(18,42): warning CS8604: Possible null reference argument for parameter 'CreatedAt' in 'UserRow.UserRow(string Id, string Email, string Name, string? PasswordHash, int IsAnonymous, string Role, string CreatedAt, string? Image = null, int EmailVerified = 0)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(21,13): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(21,40): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(21,70): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(22,13): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(21,13): warning CS8604: Possible null reference argument for parameter 'Id' in 'SessionUser.SessionUser(string Id, string Email, string Name, string Role = "user", string? Image = null, int EmailVerified = 0, string? CreatedAt = null)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(21,40): warning CS8604: Possible null reference argument for parameter 'Email' in 'SessionUser.SessionUser(string Id, string Email, string Name, string Role = "user", string? Image = null, int EmailVerified = 0, string? CreatedAt = null)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(21,70): warning CS8604: Possible null reference argument for parameter 'Name' in 'SessionUser.SessionUser(string Id, string Email, string Name, string Role = "user", string? Image = null, int EmailVerified = 0, string? CreatedAt = null)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(22,13): warning CS8604: Possible null reference argument for parameter 'Role' in 'SessionUser.SessionUser(string Id, string Email, string Name, string Role = "user", string? Image = null, int EmailVerified = 0, string? CreatedAt = null)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(24,13): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(24,40): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(24,72): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(25,13): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(25,54): warning CS8600: Converting null literal or possible null value to non-nullable type. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(24,13): warning CS8604: Possible null reference argument for parameter 'Id' in 'OAuthAccountRow.OAuthAccountRow(string Id, string UserId, string Provider, string ProviderUserId, string CreatedAt)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(24,40): warning CS8604: Possible null reference argument for parameter 'UserId' in 'OAuthAccountRow.OAuthAccountRow(string Id, string UserId, string Provider, string ProviderUserId, string CreatedAt)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(24,72): warning CS8604: Possible null reference argument for parameter 'Provider' in 'OAuthAccountRow.OAuthAccountRow(string Id, string UserId, string Provider, string ProviderUserId, string CreatedAt)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(25,13): warning CS8604: Possible null reference argument for parameter 'ProviderUserId' in 'OAuthAccountRow.OAuthAccountRow(string Id, string UserId, string Provider, string ProviderUserId, string CreatedAt)'. [/src/framework/Reptar/Reptar.csproj]
+/src/framework/Reptar/Auth/Auth.cs(25,54): warning CS8604: Possible null reference argument for parameter 'CreatedAt' in 'OAuthAccountRow.OAuthAccountRow(string Id, string UserId, string Provider, string ProviderUserId, string CreatedAt)'. [/src/framework/Reptar/Reptar.csproj]
+  Reptar -> /src/framework/Reptar/bin/Debug/net10.0/Reptar.dll
+  Reptar.Lambda -> /src/framework/Reptar.Lambda/bin/Debug/net10.0/Reptar.Lambda.dll
+  Reptar.AI -> /src/framework/Reptar.AI/bin/Debug/net10.0/Reptar.AI.dll
+  Reptar.SourceGenerators -> /src/framework/Reptar.SourceGenerators/bin/Debug/netstandard2.0/Reptar.SourceGenerators.dll
+/src/framework/Reptar.Tests/WorkflowGraphTests.cs(25,26): warning REPTARWF001: Workflow 'BrokenWorkflowFixture': message 'raw_html' produced by step 'fetch' is not consumed by any step. Add a consuming step, or mark the producer with IsOutput = true [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/WorkflowGraphTests.cs(34,26): warning REPTARWF002: Workflow 'OrphanWorkflowFixture': step 'waiter' consumes message 'ghost_message' but no step produces it [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/QueueTests.cs(62,35): warning CS8604: Possible null reference argument for parameter 'collection' in 'QueueRetry Assert.Single<QueueRetry>(IEnumerable<QueueRetry> collection)'. [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/TerminalEditorTests.cs(92,23): warning CS8602: Dereference of a possibly null reference. [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/TerminalEditorTests.cs(110,31): warning CS8602: Dereference of a possibly null reference. [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/AgentEngineTests.cs(1144,107): warning xUnit1031: Test methods should not use blocking task operations, as they can cause deadlocks. Use an async test method and await instead. (https://xunit.net/xunit.analyzers/rules/xUnit1031) [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/AgentEngineTests.cs(1147,89): warning xUnit1031: Test methods should not use blocking task operations, as they can cause deadlocks. Use an async test method and await instead. (https://xunit.net/xunit.analyzers/rules/xUnit1031) [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/AgentEngineTests.cs(1151,59): warning xUnit1031: Test methods should not use blocking task operations, as they can cause deadlocks. Use an async test method and await instead. (https://xunit.net/xunit.analyzers/rules/xUnit1031) [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+/src/framework/Reptar.Tests/AgentEngineTests.cs(1229,92): warning xUnit1031: Test methods should not use blocking task operations, as they can cause deadlocks. Use an async test method and await instead. (https://xunit.net/xunit.analyzers/rules/xUnit1031) [/src/framework/Reptar.Tests/Reptar.Tests.csproj]
+  Reptar.Tests -> /src/framework/Reptar.Tests/bin/Debug/net10.0/Reptar.Tests.dll
+Test run for /src/framework/Reptar.Tests/bin/Debug/net10.0/Reptar.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+
+Passed!  - Failed:     0, Passed:   319, Skipped:     0, Total:   319, Duration: 9 s - Reptar.Tests.dll (net10.0)

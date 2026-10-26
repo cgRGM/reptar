@@ -12,6 +12,12 @@ public sealed class ReptarRequest
     public string Query { get; init; } = "";
     public string? RemoteIp { get; init; }
 
+    /// <summary>
+    /// Host-assigned request id (the Worker envelope id). Native hosts leave
+    /// this null and <see cref="Ctx.RequestId"/> generates one.
+    /// </summary>
+    public string? RequestId { get; init; }
+
     public Func<Dictionary<string, string>>? HeadersFactory { get; init; }
     public Func<string, string?>? HeaderLookup { get; init; }
 
@@ -28,7 +34,22 @@ public sealed class ReptarRequest
     }
 
     public byte[]? Body { get; init; }
+
+    /// <summary>
+    /// Raw request body stream for routes registered with
+    /// <see cref="RouteBuilder.StreamBody"/>. Kestrel exposes the live request
+    /// body; the Worker host exposes a memory stream over the decoded envelope.
+    /// </summary>
+    public Stream? BodyStream { get; init; }
+
     public bool BodyTooLarge { get; init; }
+
+    /// <summary>
+    /// Returns the streaming body when present, otherwise a memory stream over
+    /// the buffered body. Null when the request has no body.
+    /// </summary>
+    public Stream? OpenBody() =>
+        BodyStream ?? (Body is null ? null : new MemoryStream(Body, writable: false));
 
     /// <summary>
     /// Host cancellation signal for this request. Kestrel/Lambda populate it;
@@ -87,4 +108,14 @@ public sealed class ReptarRequest
         QueryValue(name) ?? defaultValue;
 
     public string? BodyText => Body is null ? null : Encoding.UTF8.GetString(Body);
+}
+
+/// <summary>
+/// Thrown when a streaming request body crosses its route's byte limit. The
+/// request pipeline maps it to a 413 instead of a generic 500.
+/// </summary>
+public sealed class PayloadTooLargeException(long limit)
+    : Exception($"Request body exceeds the maximum allowed size of {limit} bytes.")
+{
+    public long Limit { get; } = limit;
 }

@@ -23,9 +23,9 @@
       ],
       "result": "i32",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.0600086d",
-      "rejectExport": "netwasm.async.import.reject.Reptar.0600086d",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.0600086d"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bbb",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bbb",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bbb"
     },
     {
       "module": "app.host",
@@ -36,9 +36,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.0600089d",
-      "rejectExport": "netwasm.async.import.reject.Reptar.0600089d",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.0600089d"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bf7",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bf7",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bf7"
     },
     {
       "module": "app.host",
@@ -49,9 +49,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.0600086c",
-      "rejectExport": "netwasm.async.import.reject.Reptar.0600086c",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.0600086c"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bba",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bba",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bba"
     },
     {
       "module": "app.host",
@@ -74,9 +74,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.0600089c",
-      "rejectExport": "netwasm.async.import.reject.Reptar.0600089c",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.0600089c"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bf6",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bf6",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bf6"
     },
     {
       "module": "app.host",
@@ -220,10 +220,6 @@
     {
       "interface": "wasi:cli@0.2.11/environment",
       "function": "get-environment"
-    },
-    {
-      "interface": "wasi:cli@0.2.11/stderr",
-      "function": "get-stderr"
     },
     {
       "interface": "wasi:cli@0.2.11/stdout",

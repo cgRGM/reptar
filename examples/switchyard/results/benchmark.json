@@ -1,0 +1,52 @@
+{
+  "cpu": "Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz",
+  "loadGenerator": "Bun 1.4.4, same VPS, closed-loop fetch",
+  "logicalCpus": 2,
+  "memoryBytes": 4018421760,
+  "results": [
+    {
+      "concurrency": 16,
+      "elapsedMs": 5001.343523,
+      "errors": 0,
+      "label": "health / unauthenticated / no DB",
+      "p50Ms": 1.9355040000000372,
+      "p95Ms": 3.592017999999939,
+      "p99Ms": 5.733511999999791,
+      "requests": 38293,
+      "requestsPerSecond": 7656.542651769375,
+      "statuses": {
+        "200": 38293
+      }
+    },
+    {
+      "concurrency": 16,
+      "elapsedMs": 5002.903613,
+      "errors": 0,
+      "label": "evaluation / authenticated / DB-backed / uncached",
+      "p50Ms": 4.278868999999759,
+      "p95Ms": 7.540402999999969,
+      "p99Ms": 9.883330999999998,
+      "requests": 17664,
+      "requestsPerSecond": 3530.7496139042646,
+      "statuses": {
+        "200": 17664
+      }
+    },
+    {
+      "concurrency": 16,
+      "elapsedMs": 5001.915627,
+      "errors": 0,
+      "label": "conditional evaluation / authenticated / DB-backed / 304",
+      "p50Ms": 3.8484760000010283,
+      "p95Ms": 6.846516999999949,
+      "p99Ms": 9.393869999999879,
+      "requests": 19575,
+      "requestsPerSecond": 3913.500638502473,
+      "statuses": {
+        "304": 19575
+      }
+    }
+  ],
+  "runtime": "Native AOT / SQLite / Kestrel",
+  "timestamp": "2026-10-26T10:34:34.722Z"
+}

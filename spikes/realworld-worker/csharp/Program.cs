@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Reptar;
 using static Reptar.ReptarApi;
 
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(ErrorBody))]
 [JsonSerializable(typeof(ValidationError))]
 [JsonSerializable(typeof(string))]

@@ -12,11 +12,11 @@ describe("createOtlpExporter", () => {
   test("maps a request event to an OTLP/HTTP JSON span", async () => {
     let body: unknown;
     let headers: HeadersInit | undefined;
-    globalThis.fetch = (async (input, init) => {
+    globalThis.fetch = ((input, init) => {
       expect(String(input)).toBe("https://otel.test/v1/traces");
       body = JSON.parse(String(init?.body));
       headers = init?.headers;
-      return new Response(null, { status: 200 });
+      return Promise.resolve(new Response(null, { status: 200 }));
     }) as typeof fetch;
 
     const exportEvent = createOtlpExporter({
@@ -41,9 +41,11 @@ describe("createOtlpExporter", () => {
       wasm_ms: 3.1,
     });
 
-    const resourceSpans = (body as {
+    const { resourceSpans } = body as {
       resourceSpans: {
-        resource: { attributes: { key: string; value: { stringValue: string } }[] };
+        resource: {
+          attributes: { key: string; value: { stringValue: string } }[];
+        };
         scopeSpans: {
           spans: {
             attributes: { key: string }[];
@@ -54,7 +56,7 @@ describe("createOtlpExporter", () => {
           }[];
         }[];
       }[];
-    }).resourceSpans;
+    };
     const span = resourceSpans[0]?.scopeSpans[0]?.spans[0];
 
     expect(span?.traceId).toBe("4bf92f3577b34da6a3ce929d0e0e4736");
@@ -74,9 +76,9 @@ describe("createOtlpExporter", () => {
 
   test("marks 5xx spans as errors", async () => {
     let body: unknown;
-    globalThis.fetch = (async (_input, init) => {
+    globalThis.fetch = ((_input, init) => {
       body = JSON.parse(String(init?.body));
-      return new Response(null, { status: 200 });
+      return Promise.resolve(new Response(null, { status: 200 }));
     }) as typeof fetch;
 
     const exportEvent = createOtlpExporter({

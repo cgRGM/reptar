@@ -108,5 +108,12 @@ export type AppType = {
       UploadResult | ErrorBody,
       201 | 400 | 401 | 413 | 415
     >;
+    stream: {
+      $put: Endpoint<
+        undefined,
+        UploadResult | ErrorBody,
+        201 | 400 | 401 | 413 | 415
+      >;
+    };
   };
 };

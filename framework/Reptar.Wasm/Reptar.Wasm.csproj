@@ -16,7 +16,11 @@
          they add measurable O0 module size. -->
     <Compile Remove="../Reptar/Core/AiTools.cs" />
     <Compile Remove="../Reptar/Core/OpenApi.cs" />
+    <!-- ConsoleTransport + /_mail dev preview is native-only. Exclude it on
+         the Include so the Mail wildcard does not re-add it. -->
     <Compile Include="../Reptar/Validation/**/*.cs" />
+    <Compile Include="../Reptar/Mail/**/*.cs"
+             Exclude="../Reptar/Mail/ConsoleTransport.cs" />
     <Compile Include="../Reptar/Queue/QueuePort.cs" />
     <Compile Include="../Reptar/Queue/SyncQueueClient.cs" />
     <Compile Include="../Reptar/Data/ReptarEntityAttribute.cs" />
@@ -37,6 +41,7 @@
     <Compile Include="Data/KvClient.cs" />
     <Compile Include="Data/AiClient.cs" />
     <Compile Include="Data/QueueClient.cs" />
+    <Compile Include="Data/CloudflareEmailTransport.cs" />
     <Compile Include="Data/DurableBridge.cs" />
     <Compile Include="Auth/Auth.cs" />
   </ItemGroup>
