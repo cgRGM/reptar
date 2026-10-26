@@ -31,7 +31,7 @@
 
 ### 1b. Build-time JSON context generation
 
-- `scripts/json-context.ts` scans `[ReptarEntity]`, `Rule<T>`, and `Produces<T>` and writes `json-context.g.cs`.
+- `packages/cli/src/json-context.ts` (re-exported from `scripts/json-context.ts`) scans `[ReptarEntity]`, `Rule<T>`, and `Produces<T>` and writes `json-context.g.cs`.
 - `bun reptar json:gen` runs it; `make:model` runs it automatically and wires the include.
 - `ReptarJson.RegisterContext` + `SourceGenJsonCodec`/`GeneratedFirstResolver` discover the context without a manual `AppJsonContext` list.
 - Verified: generated context compiles with the STJ source generator and is visible to the app.
@@ -100,10 +100,11 @@
 - `bun reptar make:feature Post`
 - Generates `schema/<plural>.cs` (TableDef + `[ReptarEntity]` DTO), optional `features/<plural>.cs`, updates `schema/index.cs`, inserts `#:include` lines and `Feature.Configure(app)`, and adds `[JsonSerializable(typeof(Dto))]` to an existing JSON context.
 - `--migration` invokes `reptar db generate`.
-- The scaffold runner (`templates/fullstack/scripts/reptar.ts`) now forwards `make:model`, `make:feature`, and `json:gen` to the framework CLI when running from a clone.
+- The scaffold runner (`templates/fullstack/scripts/reptar.ts`) imports `@reptar/cli-core` directly, so `make:model`, `make:feature`, and `json:gen` work in a scaffold without a framework clone. create-reptar copies the package into `packages/cli-core`, which the scaffold workspace links.
+- The framework repo keeps `scripts/make.ts` / `scripts/json-context.ts` as re-export shims, so there is one implementation.
 - Verified in a temp app: files, index, includes, feature call, and JSON context are updated.
 
-**Still open:** packaged `@reptar/cli-core` for standalone scaffolds; add pluralization edge cases and a scaffold smoke test for make.
+**Still open:** pluralization edge cases and a standalone (NuGet-based) scaffold path.
 
 ### 6b. CI/codegen fixes
 
@@ -173,11 +174,11 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 ## Next priorities
 
 1. D1 interactive transactions are not available on the platform; D1 keeps the write-only buffered transaction. SQLite/MySQL have read/write ambient transactions.
-2. JSON context generation via build-time codegen (not a source generator) — implemented in `scripts/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
+2. JSON context generation via build-time codegen (not a source generator) — implemented in `packages/cli/src/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
 3. DB/HTTP cancellation + command timeouts.
 4. Migration locks/check/dry-run landed; next is automatic lock renewal for very long migrations.
-5. Cache metrics and shared/distributed cache adapters (single-flight, ETag, compression landed).
+5. Shared/distributed cache adapters (single-flight, ETag, compression, and cache metrics landed).
 6. `Rule<T>` typed path benchmarked (~50 ns JIT / ~66 ns AOT valid, 0 B); invalid path still allocates issues.
-7. Move `make:*` into the project-local CLI; add scaffold smoke test.
+7. `@reptar/cli-core` packaged and copied into scaffolds; `make:*` scaffold smoke step added.
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
 9. OTLP exporter and the `/_reptar` developer dashboard (Prometheus `/metrics` landed).

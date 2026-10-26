@@ -102,7 +102,7 @@ const availableTemplates = (): string[] => {
       return readdirSync(root, { withFileTypes: true })
         .filter((entry) => entry.isDirectory())
         .map((entry) => entry.name)
-        .sort();
+        .toSorted();
     }
   }
   return [];
@@ -201,6 +201,48 @@ const copyAndTransform = (
 };
 
 /**
+ * Copies @reptar/cli-core into the scaffold as a workspace package so
+ * make:model / make:feature / json:gen work without a framework clone or a
+ * registry install. create-reptar resolves the source from its sibling
+ * package in the monorepo, or from its own dependency when published.
+ */
+const copyCliCore = (targetDir: string): void => {
+  const currentDir = path.dirname(new URL(import.meta.url).pathname);
+  const candidates = [
+    path.resolve(currentDir, "../../cli"),
+    path.resolve(currentDir, "../../../packages/cli"),
+    path.resolve(process.cwd(), "packages/cli"),
+  ];
+
+  try {
+    const resolved = new URL(import.meta.resolve("@reptar/cli-core")).pathname;
+    candidates.push(path.dirname(path.dirname(resolved)));
+  } catch {
+    // Not installed as a package; the sibling paths cover clone scaffolds.
+  }
+
+  const source = candidates.find((candidate) =>
+    existsSync(path.join(candidate, "package.json"))
+  );
+
+  if (!source) {
+    throw new Error(
+      "Could not locate @reptar/cli-core. Reinstall create-reptar or run from a framework clone."
+    );
+  }
+
+  const destination = path.join(targetDir, "packages", "cli-core");
+  mkdirSync(destination, { recursive: true });
+  cpSync(source, destination, {
+    filter: (entry) => {
+      const name = path.basename(entry);
+      return name !== "node_modules" && name !== "bin" && name !== "obj";
+    },
+    recursive: true,
+  });
+};
+
+/**
  * Rewrites the scaffolded app for file-based builds against the in-repo
  * framework: `#:project` directives instead of a csproj, plus a
  * Directory.Build.props that attaches the Reptar source generators so
@@ -211,7 +253,7 @@ const wireUpFileBasedApp = (
   _replacements: Record<string, string>
 ): void => {
   const { targetDir } = options;
-  const frameworkDir = options.frameworkDir;
+  const { frameworkDir } = options;
 
   if (!frameworkDir) {
     return;
@@ -280,18 +322,19 @@ export const scaffoldProject = (options: ScaffoldOptions): void => {
     .join("");
 
   const replacements: Record<string, string> = {
+    // Templates occasionally use the spaced mustache form in JSX text.
+    "{{ PROJECT_NAME }}": options.projectName,
+    "{{ PROJECT_PASCAL }}": projectPascal || "MyApp",
+    "{{ PROJECT_TITLE }}": projectTitle,
     "{{AUTH_PROVIDER}}": options.auth,
     "{{DATABASE_DIALECT}}": options.database,
     "{{PROJECT_NAME}}": options.projectName,
     "{{PROJECT_PASCAL}}": projectPascal || "MyApp",
     "{{PROJECT_TITLE}}": projectTitle,
-    // Templates occasionally use the spaced mustache form in JSX text.
-    "{{ PROJECT_NAME }}": options.projectName,
-    "{{ PROJECT_PASCAL }}": projectPascal || "MyApp",
-    "{{ PROJECT_TITLE }}": projectTitle,
   };
 
   copyAndTransform(templateDir, options.targetDir, replacements);
+  copyCliCore(options.targetDir);
 
   if (options.frameworkDir) {
     wireUpFileBasedApp(options, replacements);

@@ -15,6 +15,7 @@
     "check-types": "tsc --noEmit"
   },
   "devDependencies": {
+    "@reptar/cli-core": "workspace:*",
     "@types/node": "^26.4.1",
     "typescript": "^5.7.3"
   }

@@ -12,9 +12,13 @@
     "check-types": "turbo run check-types",
     "api:dev": "bun scripts/reptar.ts dev",
     "api:codegen": "bun scripts/reptar.ts codegen",
-    "api:build": "bun scripts/reptar.ts build"
+    "api:build": "bun scripts/reptar.ts build",
+    "make:model": "bun scripts/reptar.ts make:model",
+    "make:feature": "bun scripts/reptar.ts make:feature",
+    "json:gen": "bun scripts/reptar.ts json:gen"
   },
   "devDependencies": {
+    "@reptar/cli-core": "workspace:*",
     "turbo": "^2.11.10",
     "typescript": "^5.7.3"
   },

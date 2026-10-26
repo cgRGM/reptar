@@ -85,6 +85,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:",
+    "@reptar/cli-core": "workspace:*",
     "@reptar/config": "workspace:*",
     "@types/node": "^26.4.1",
     "lefthook": "latest",

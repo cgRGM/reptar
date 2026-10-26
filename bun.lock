@@ -11,6 +11,7 @@
       },
       "devDependencies": {
         "@cloudflare/workers-types": "catalog:",
+        "@reptar/cli-core": "workspace:*",
         "@reptar/config": "workspace:*",
         "@types/node": "^26.4.1",
         "lefthook": "latest",
@@ -75,6 +76,10 @@
         "typescript": "catalog:",
       },
     },
+    "packages/cli": {
+      "name": "@reptar/cli-core",
+      "version": "0.1.0",
+    },
     "packages/config": {
       "name": "@reptar/config",
       "version": "0.0.0",
@@ -83,9 +88,10 @@
       "name": "create-reptar",
       "version": "0.1.0",
       "bin": {
-        "create-reptar": "./bin/create-reptar.mjs",
+        "create-reptar": "./cli.mjs",
       },
       "devDependencies": {
+        "@reptar/cli-core": "workspace:*",
         "@types/node": "^26.4.1",
         "typescript": "^5.7.3",
       },
@@ -659,6 +665,8 @@
     "@redis/time-series": ["@redis/time-series@6.3.0", "", { "peerDependencies": { "@redis/client": "^6.3.0" } }, "sha512-+fJOB8mN1z5WRakCJNh5lVdz1KqvHGSOistsKeitD24QsCtPwyRQXWC0iq6T/i/ubLE/YcguZqPm8F598MKk4A=="],
 
     "@reptar/adapter-lambda": ["@reptar/adapter-lambda@workspace:packages/adapter-lambda"],
+
+    "@reptar/cli-core": ["@reptar/cli-core@workspace:packages/cli"],
 
     "@reptar/client": ["@reptar/client@workspace:packages/rpc"],
 

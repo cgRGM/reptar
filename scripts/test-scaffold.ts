@@ -192,6 +192,12 @@ try {
   console.log("  ✓ no unreplaced placeholders");
 
   run("bun install", process.execPath, ["install"], targetDir);
+  run(
+    "make:model (dry run)",
+    process.execPath,
+    ["run", "make:model", "Widget", "--dry-run"],
+    targetDir
+  );
   run("api build (pinned SDK)", process.execPath, ["run", "api:build"], targetDir);
   run("api codegen", process.execPath, ["run", "api:codegen"], targetDir);
   run(
