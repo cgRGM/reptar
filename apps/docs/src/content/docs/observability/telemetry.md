@@ -86,6 +86,20 @@ scope is active it records:
 When telemetry is not active the fast path is a single `AsyncLocal` read and no
 stopwatch is started.
 
+## 4b. Prometheus Metrics
+
+Mount the dependency-free metrics middleware and endpoint:
+
+```csharp
+app.UseMetrics();
+app.MapMetrics(); // GET /metrics
+```
+
+It exposes `reptar_http_requests_total` (method/route/status) and
+`reptar_http_request_duration_ms` histograms with fixed latency buckets.
+Route labels use the matched template, not the raw path. Protect `/metrics`
+with `Auth.RequireRole("admin")` or a private listener when exposed publicly.
+
 ## 5. Sampling and Overhead
 
 - `SampleRate` applies to successful, non-slow requests.
@@ -113,7 +127,6 @@ The following are roadmap items, not current behavior:
 
 - OTLP/Axiom log export (`AxiomOptions` is not implemented);
 - a `/_reptar` developer dashboard;
-- Prometheus metrics endpoint;
 - span export and trace sampling beyond the request log.
 
 Until those land, ship the structured JSON lines to your platform's log sink

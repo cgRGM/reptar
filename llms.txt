@@ -22,8 +22,9 @@ Before writing code or assuming database schema, query the framework's machine-r
 - `bun reptar make:model <Name> [-f] [-m]`: Generates a `TableDef` + `[ReptarEntity]` DTO, wires `#:include`, updates the JSON context when present, and optionally generates a CRUD feature slice (`-f`) and migration (`-m`).
 - `bun reptar make:feature <Name>`: Generates a CRUD feature slice for an existing model.
 - `bun reptar json:gen [--app <dir>]`: Scans `[ReptarEntity]`, `Rule<T>`, and `Produces<T>` types and writes `json-context.g.cs` so the STJ source generator can emit an AOT-safe context.
-- `bun reptar check:architecture --strict`: Enforces the core/AI/terminal boundary.
+- `bun run check:architecture --strict`: Enforces the core/AI/terminal boundary.
 - `bun scripts/bench-gate.ts --results <result.json> --baseline bench/perf-baseline.json`: Compares a benchmark run to the baseline and fails on RPS/p95 regressions.
+- `app.UseMetrics(); app.MapMetrics();`: Exposes Prometheus counters/histograms at `GET /metrics`; protect the route when it is publicly reachable.
 
 ---
 
@@ -426,5 +427,5 @@ Code that compiles locally can still fail at runtime under NetWasm. Run `bun rep
 3. **No Attribute Salad DDL**: Do not attach `[PrimaryKey]` or `[Unique]` attributes to DTO records. Use `TableDef` in `schema/`.
 4. **Always Use ColumnRef Over Strings**: Avoid `ctx.Db.ListAsync<T>(table, "where col = @val")` when `table.Col<T>("col").Eq(...)` is available.
 5. **Keep Raw SQL Available**: Never remove raw SQL escape hatches (`QueryAsync`, `ExecuteAsync`).
-6. **Respect the Module Boundary**: `framework/Reptar` must not reference `Reptar.AI`, terminal UI, process, or termios code. Run `bun reptar check:architecture --strict` after structural changes.
+6. **Respect the Module Boundary**: `framework/Reptar` must not reference `Reptar.AI`, terminal UI, process, or termios code. Run `bun run check:architecture --strict` after structural changes.
 7. **Preload, Don't N+1**: For list endpoints, use `TableQuery<T>.Preload(Relation.BelongsTo/HasMany(...))` instead of a per-row query. Relations are explicit and reflection-free.

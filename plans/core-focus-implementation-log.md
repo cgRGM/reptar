@@ -52,12 +52,13 @@
 - `DefaultHttpClient` has a configurable timeout (`REPTAR_HTTP_TIMEOUT_SECONDS`, default 100s).
 - `PostgresDbClient` has `CommandTimeoutSeconds` (default 30s), including transaction-context commands.
 - `UseETag()` / `ETag()` middleware adds strong ETags to successful JSON/text GET/HEAD responses and returns `304` on `If-None-Match`; it skips `no-store`, cookies, non-GET, and oversized bodies.
+- `UseMetrics()` / `MapMetrics()` exposes dependency-free Prometheus counters and latency histograms at `GET /metrics`, with route-template labels.
 - SQL migrations store a SHA-256 checksum in `__reptar_migrations`; re-running an edited applied migration throws instead of silently diverging. Existing databases get the nullable column automatically.
 - `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message.
 - **SQLite now has real read/write transactions:** `SqliteDbClient.TransactionAsync` holds the write gate, begins a transaction on the single writer connection, and routes reads/writes through the ambient transaction. Tests verify uncommitted reads and rollback.
 - `DbTransactionExtensions` exposes the transaction contract on concrete clients.
 
-**Tests:** `ReliabilityTests` cover timeout 504 and module order; `TransactionTests` cover commit, rollback, uncommitted reads, and buffered-transaction behavior; `ETagTests` cover 304 revalidation and skip rules; `MigrationChecksumTests` cover edited-migration rejection.
+**Tests:** `ReliabilityTests` cover timeout 504 and module order; `TransactionTests` cover commit, rollback, uncommitted reads, and buffered-transaction behavior; `ETagTests` cover 304 revalidation and skip rules; `MetricsTests` cover Prometheus output; `MigrationChecksumTests` cover edited-migration rejection.
 
 ### 4. AI / terminal boundary
 
@@ -141,7 +142,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Verification
 
-- `bun reptar test`: **288 passed**.
+- `bun reptar test`: **289 passed**.
 - `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
 - `bun scripts/check-architecture.ts --strict`: **core is clean**.
 - `framework/Reptar.Wasm` builds (NetWasm 0.10.1) with telemetry/preload/queue changes; the Rooms Worker module is 13.13 MB against a 16 MB budget.
@@ -166,3 +167,4 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 6. Benchmark the new `Rule<T>` typed path against the manual-validation tier.
 7. Move `make:*` into the project-local CLI; add scaffold smoke test.
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
+9. OTLP exporter and the `/_reptar` developer dashboard (Prometheus `/metrics` landed).

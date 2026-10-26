@@ -153,6 +153,8 @@ public sealed class ReptarApp
 
     public List<TableDef> Tables { get; } = new();
 
+    public MetricsRegistry Metrics { get; } = new();
+
     public IReadOnlyList<RouteMeta> RouteMetadata =>
         _routes.Select(route => route.Meta).ToList();
 

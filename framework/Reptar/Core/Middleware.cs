@@ -335,6 +335,27 @@ public static class Middlewares
         };
     }
 
+    public static ReptarMiddleware Metrics(MetricsRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+
+        return async (ctx, next) =>
+        {
+            var started = Stopwatch.GetTimestamp();
+            var response = await next();
+            var durationMs = (Stopwatch.GetTimestamp() - started) * 1000.0 /
+                Stopwatch.Frequency;
+
+            registry.Record(
+                ctx.Req.Method,
+                ctx.RoutePattern ?? ctx.Req.Path,
+                response.Status,
+                durationMs);
+
+            return response;
+        };
+    }
+
     private static bool Sample(double rate) =>
         rate >= 1 || (rate > 0 && Random.Shared.NextDouble() < rate);
 
