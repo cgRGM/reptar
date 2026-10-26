@@ -51,10 +51,9 @@ const parseFlags = (
     }
   }
 
-  const dbFlagIndex =
-    args.indexOf("--db") !== -1
-      ? args.indexOf("--db")
-      : args.indexOf("--database");
+  const dbFlagIndex = args.includes("--db")
+    ? args.indexOf("--db")
+    : args.indexOf("--database");
   if (dbFlagIndex !== -1 && args[dbFlagIndex + 1]) {
     const val = args[dbFlagIndex + 1]?.toLowerCase();
     if (

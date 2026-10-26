@@ -1,6 +1,13 @@
+/* oxlint-disable complexity -- schema inspection is one linear parser */
+/* oxlint-disable prefer-named-capture-group -- groups mirror SQLite/DDL shapes */
+/* oxlint-disable no-explicit-any -- raw SQLite pragma rows */
+/* oxlint-disable no-nested-ternary -- compact display formatting */
+/* oxlint-disable no-empty -- best-effort probes ignore unreadable inputs */
+/* oxlint-disable import/no-cycle -- inspect/diff share schema discovery */
+/* oxlint-disable prefer-single-call -- diagnostic blocks stay readable */
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 import { loadCompilerTables } from "./diff";
@@ -67,6 +74,14 @@ export interface ReptarInspection {
   tables: TableInfo[];
   databaseTables: TableInfo[];
   routes: RouteInfo[];
+  /** Present when the database carries the DB queue adapter's jobs table. */
+  queue?: {
+    table: "reptar_jobs";
+    pending: number;
+    completed: number;
+    dead: number;
+    oldestPendingSeconds?: number;
+  };
   migrations: {
     directory: string;
     applied: string[];
@@ -100,7 +115,11 @@ export interface ReptarDoctorReport {
  * synchronous, so this runs a tiny Bun/Node child that performs the connect
  * and exits 0 on success. Cross-platform, and bounded by `timeoutMs`.
  */
-const probeTcpSync = (host: string, port: number, timeoutMs = 1500): boolean => {
+const probeTcpSync = (
+  host: string,
+  port: number,
+  timeoutMs = 1500
+): boolean => {
   const script = `
     const net = require("node:net");
     const host = process.env.REPTAR_PROBE_HOST;
@@ -161,9 +180,9 @@ const parsePostgresTarget = (raw: string): DatabaseTarget => {
 const sqliteTarget = (rawPath: string, cwd: string): DatabaseTarget => {
   const cleaned = rawPath
     .trim()
-    .replace(/^sqlite:/i, "")
-    .replace(/^Data Source=/i, "")
-    .replace(/^file:/i, "");
+    .replace(/^sqlite:/iu, "")
+    .replace(/^Data Source=/iu, "")
+    .replace(/^file:/iu, "");
   return {
     dialect: "sqlite",
     driver: "sqlite",
@@ -183,7 +202,7 @@ export const resolveDatabaseTarget = (
 ): DatabaseTarget => {
   const raw = explicitDb?.trim() || process.env.DATABASE_URL?.trim();
   if (raw) {
-    if (/^postgres(ql)?:\/\//i.test(raw)) {
+    if (/^postgres(ql)?:\/\//iu.test(raw)) {
       return parsePostgresTarget(raw);
     }
     return sqliteTarget(raw, cwd);
@@ -206,7 +225,7 @@ export const resolveDatabaseTarget = (
           !file.endsWith("-shm") &&
           !file.endsWith("-wal")
       )
-      .sort()
+      .toSorted()
       .map((file) => path.join(cwd, file));
     for (const candidate of discovered) {
       if (!cwdCandidates.includes(candidate)) {
@@ -273,11 +292,7 @@ export const inspectProject = (
   cwd: string = process.cwd(),
   options?: { dbPath?: string; migrationsDir?: string }
 ): ReptarInspection => {
-  const databaseTarget = resolveDatabaseTarget(
-    repoRoot,
-    cwd,
-    options?.dbPath
-  );
+  const databaseTarget = resolveDatabaseTarget(repoRoot, cwd, options?.dbPath);
   const dbPath = databaseTarget.path;
   const migrationsDir = resolveMigrationsDir(
     repoRoot,
@@ -302,15 +317,16 @@ export const inspectProject = (
   const tables: TableInfo[] = [];
   const appliedMigrations: string[] = [];
   let dbConnected = false;
+  let queueStats: ReptarInspection["queue"];
 
   if (databaseTarget.dialect === "postgres") {
     // PostgreSQL is reachable over TCP; table introspection needs a SQL
     // client, so `databaseTables` stays empty and the compiler schema is used.
     dbConnected = Boolean(
       databaseTarget.host &&
-        databaseTarget.port &&
-        !databaseTarget.error &&
-        probeTcpSync(databaseTarget.host, databaseTarget.port)
+      databaseTarget.port &&
+      !databaseTarget.error &&
+      probeTcpSync(databaseTarget.host, databaseTarget.port)
     );
   } else if (existsSync(dbPath)) {
     try {
@@ -384,6 +400,46 @@ export const inspectProject = (
           appliedMigrations.push(r.name || `${r.id}.sql`);
         }
       }
+
+      // Queue adapter stats: the DB queue's jobs table is a regular
+      // TableDef, so inspection reads it like any application table.
+      const hasJobsTable = db
+        .query(
+          `SELECT 1 FROM sqlite_master WHERE type='table' AND name='reptar_jobs'`
+        )
+        .get();
+      if (hasJobsTable) {
+        const stateRows = db
+          .query(
+            `SELECT state, COUNT(*) AS count FROM reptar_jobs GROUP BY state`
+          )
+          .all() as { state: string; count: number }[];
+        const counts: Record<string, number> = {};
+        for (const row of stateRows) {
+          counts[row.state] = row.count;
+        }
+
+        const oldest = db
+          .query(
+            `SELECT MIN(created_at) AS oldest FROM reptar_jobs WHERE state = 'pending'`
+          )
+          .get() as { oldest: string | null };
+
+        const oldestMs = oldest?.oldest
+          ? Date.parse(oldest.oldest)
+          : Number.NaN;
+
+        queueStats = {
+          completed: counts.completed ?? 0,
+          dead: counts.dead ?? 0,
+          oldestPendingSeconds:
+            Number.isFinite(oldestMs) && oldestMs > 0
+              ? Math.max(0, Math.round((Date.now() - oldestMs) / 1000))
+              : undefined,
+          pending: counts.pending ?? 0,
+          table: "reptar_jobs",
+        };
+      }
       db.close();
     } catch {
       dbConnected = false;
@@ -395,11 +451,11 @@ export const inspectProject = (
   if (existsSync(migrationsDir)) {
     const files = readdirSync(migrationsDir)
       .filter((f) => f.endsWith(".sql"))
-      .sort();
+      .toSorted();
     for (const f of files) {
-      const id = f.replace(/\.sql$/i, "");
+      const id = f.replace(/\.sql$/iu, "");
       const isApplied = appliedMigrations.some(
-        (a) => a === f || a.replace(/\.sql$/i, "") === id
+        (a) => a === f || a.replace(/\.sql$/iu, "") === id
       );
       if (!isApplied) {
         pendingMigrations.push(f);
@@ -475,18 +531,20 @@ export const inspectProject = (
       } catch {}
     }
     const routeRegex =
-      /app\.(Get|Post|Put|Delete|Patch|MapWebSocket|OnWebSocket)\s*(?:<[^>]+>)?\s*\(\s*"([^"]+)"/g;
+      /app\.(Get|Post|Put|Delete|Patch|MapWebSocket|OnWebSocket)\s*(?:<[^>]+>)?\s*\(\s*"([^"]+)"/gu;
     for (const file of csFiles) {
       try {
         const content = readFileSync(file, "utf-8");
         let match: RegExpExecArray | null;
         while ((match = routeRegex.exec(content)) !== null) {
+          const [, routeMethod, routePath] = match;
           const method =
-            match[1] === "MapWebSocket" || match[1] === "OnWebSocket"
+            routeMethod === "MapWebSocket" || routeMethod === "OnWebSocket"
               ? "WS"
-              : match[1].toUpperCase();
-          const routePath = match[2];
-          if (!routes.some((r) => r.method === method && r.path === routePath)) {
+              : routeMethod.toUpperCase();
+          if (
+            !routes.some((r) => r.method === method && r.path === routePath)
+          ) {
             routes.push({
               method,
               path: routePath,
@@ -504,7 +562,9 @@ export const inspectProject = (
       path.join(cwd, "packages/client/src/types.ts"),
       path.join(cwd, "rpc/types.ts"),
       path.join(cwd, ".reptar/types.ts"),
-      ...(cwd === repoRoot ? [path.join(repoRoot, "packages/rpc/src/types.ts")] : []),
+      ...(cwd === repoRoot
+        ? [path.join(repoRoot, "packages/rpc/src/types.ts")]
+        : []),
     ].find((p) => existsSync(p)) ??
     path.join(cwd, "packages/client/src/types.ts");
   const typesExists = existsSync(typesPath);
@@ -576,6 +636,7 @@ export const inspectProject = (
       root: cwd,
       version: pkgVersion,
     },
+    ...(queueStats ? { queue: queueStats } : {}),
     routes,
     schemaSource,
     tables,
@@ -690,7 +751,7 @@ export const doctorProject = (
   // Check 3: Database & Migrations. Connectivity must be real: compiler
   // schema classes alone do not prove the runtime database exists.
   const inspection = inspectProject(repoRoot, cwd);
-  const database = inspection.database;
+  const { database } = inspection;
   const isPostgres = database.dialect === "postgres";
   const databaseAdvice = database.connected
     ? undefined
@@ -701,11 +762,10 @@ export const doctorProject = (
     ? isPostgres
       ? `PostgreSQL reachable at ${database.path} (schema from compiler)`
       : `Reachable at ${database.path} (${inspection.databaseTables.length} table(s) discovered)`
-    : database.error
-      ? database.error
-      : isPostgres
+    : database.error ||
+      (isPostgres
         ? `PostgreSQL unreachable at ${database.path}`
-        : `Database file not found at ${database.path}`;
+        : `Database file not found at ${database.path}`);
   checks.push({
     advice: databaseAdvice,
     details: databaseDetails,

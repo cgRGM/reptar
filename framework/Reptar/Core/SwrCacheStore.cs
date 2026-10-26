@@ -118,13 +118,18 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
         Directory.CreateDirectory(_directory);
     }
 
-    public int Count => Directory.EnumerateFiles(_directory, $"*{Extension}").Count();
+    public int Count => Directory.Exists(_directory)
+        ? Directory.EnumerateFiles(_directory, $"*{Extension}").Count()
+        : 0;
 
     public IReadOnlyCollection<string> Keys
     {
         get
         {
             var keys = new List<string>();
+
+            if (!Directory.Exists(_directory))
+                return keys;
 
             foreach (var file in Directory.EnumerateFiles(_directory, $"*{Extension}"))
             {
@@ -150,6 +155,10 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
     public bool TryGet(string key, out SwrCacheEntry entry)
     {
         entry = null!;
+
+        if (!Directory.Exists(_directory))
+            return false;
+
         var path = PathFor(key);
 
         if (!File.Exists(path))
@@ -219,6 +228,7 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
 
     public void Set(string key, SwrCacheEntry entry)
     {
+        Directory.CreateDirectory(_directory);
         var path = PathFor(key);
         var temp = $"{path}.{Guid.NewGuid():n}.tmp";
 
@@ -264,16 +274,26 @@ public sealed class FileSwrCacheStore : ISwrCacheStore
         }
     }
 
-    public void Remove(string key) => TryDelete(PathFor(key));
+    public void Remove(string key)
+    {
+        if (Directory.Exists(_directory))
+            TryDelete(PathFor(key));
+    }
 
     public void Clear()
     {
+        if (!Directory.Exists(_directory))
+            return;
+
         foreach (var file in Directory.EnumerateFiles(_directory, $"*{Extension}"))
             TryDelete(file);
     }
 
     private void Trim()
     {
+        if (!Directory.Exists(_directory))
+            return;
+
         var files = Directory.EnumerateFiles(_directory, $"*{Extension}")
             .Select(file => new FileInfo(file))
             .OrderBy(file => file.LastWriteTimeUtc)

@@ -159,7 +159,8 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Verification
 
-- `bun reptar test`: **315 passed**.
+- `bun reptar test`: **320 passed**.
+- Lint cleanup: `scripts/reptar.ts`, `scripts/diff.ts`, `scripts/mcp.ts`, `scripts/inspect.ts`, `scripts/docs-gen.ts`, and `scripts/test-scaffold.ts` pass targeted Ultracite checks.
 - `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
 - `bun scripts/check-architecture.ts --strict`: **core is clean**.
 - `framework/Reptar.Wasm` builds (NetWasm 0.10.1) with telemetry/preload/queue changes; the Rooms Worker module is 13.13 MB against a 16 MB budget.
@@ -185,3 +186,4 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 7. `@reptar/cli-core` packaged and copied into scaffolds; `make:*` scaffold smoke step added.
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
 9. OTLP log export and the `/_reptar` dashboard landed; span export remains.
+10. CLI script lint is clean; generated browser bundles and some host/rpc package files still have pre-existing Ultracite findings.

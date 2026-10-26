@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+/* oxlint-disable complexity -- one command dispatch table plus DB status/migrate handling */
 
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
@@ -170,7 +171,7 @@ const findBuildLockHolders = (): { command: string; pid: number }[] => {
       continue;
     }
     for (const line of result.stdout.split("\n")) {
-      const pid = Number.parseInt(line.trim(), 10);
+      const pid = Math.trunc(Number(line.trim()));
       if (!Number.isFinite(pid) || holders.has(pid)) {
         continue;
       }
@@ -372,7 +373,7 @@ const optimizeWasmModule = (wasmPath: string): number | null => {
     return null;
   }
 
-  const version = readdirSync(packagesDir).sort().at(-1);
+  const version = readdirSync(packagesDir).toSorted().at(-1);
   if (!version) {
     return null;
   }
@@ -603,7 +604,7 @@ const handleDbCommand = (args: string[]) => {
   const dbPath = databaseTarget.path;
 
   if (subCommand === "new") {
-    const name = args[1]?.replace(/\.sql$/i, "");
+    const name = args[1]?.replace(/\.sql$/iu, "");
     if (!name || name.startsWith("-")) {
       console.error("Usage: bun reptar db new <migration_name>");
       process.exit(1);
@@ -614,16 +615,16 @@ const handleDbCommand = (args: string[]) => {
       : [];
     let nextNum = 1;
     for (const f of existing) {
-      const match = f.match(/^(\d+)_/);
-      if (match) {
-        const n = Number.parseInt(match[1], 10);
+      const match = f.match(/^(?<digits>\d+)_/u);
+      if (match?.groups?.digits) {
+        const n = Math.trunc(Number(match.groups.digits));
         if (n >= nextNum) {
           nextNum = n + 1;
         }
       }
     }
     const prefix = String(nextNum).padStart(4, "0");
-    const sanitized = name.toLowerCase().replaceAll(/[^a-z0-9_]/g, "_");
+    const sanitized = name.toLowerCase().replaceAll(/[^a-z0-9_]/gu, "_");
     const filename = `${prefix}_${sanitized}.sql`;
     const targetPath = path.join(migrationsDir, filename);
     writeFileSync(
@@ -710,7 +711,7 @@ const handleDbCommand = (args: string[]) => {
 
   const migrationFiles = readdirSync(migrationsDir)
     .filter((f) => f.endsWith(".sql"))
-    .sort();
+    .toSorted();
 
   if (migrationFiles.length === 0) {
     console.log(`No .sql migration files found in ${migrationsDir}.`);
@@ -743,7 +744,7 @@ const handleDbCommand = (args: string[]) => {
     console.log(`Status        Migration`);
     console.log(`────────────  ──────────────────────────────────────────`);
     for (const file of migrationFiles) {
-      const id = file.replace(/\.sql$/i, "");
+      const id = file.replace(/\.sql$/iu, "");
       const appliedAt = appliedMap.get(id);
       if (appliedAt) {
         console.log(`✓ Applied     ${file} (${appliedAt})`);
@@ -756,7 +757,7 @@ const handleDbCommand = (args: string[]) => {
 
   if (subCommand === "migrate") {
     const pending = migrationFiles.filter(
-      (f) => !appliedMap.has(f.replace(/\.sql$/i, ""))
+      (f) => !appliedMap.has(f.replace(/\.sql$/iu, ""))
     );
     if (pending.length === 0) {
       console.log(
@@ -769,7 +770,7 @@ const handleDbCommand = (args: string[]) => {
       `Applying ${pending.length} pending migration(s) to ${dbPath}...`
     );
     for (const file of pending) {
-      const id = file.replace(/\.sql$/i, "");
+      const id = file.replace(/\.sql$/iu, "");
       const filePath = path.join(migrationsDir, file);
       const sql = readFileSync(filePath, "utf-8");
       const start = performance.now();
@@ -834,6 +835,16 @@ if (command === "inspect") {
   if (aiRoutes.length > 0) {
     console.log(`AI Tools:    ${aiRoutes.length} route(s) exposed as AI tools`);
   }
+  if (inspection.queue) {
+    const { queue } = inspection;
+    const oldest =
+      queue.oldestPendingSeconds === undefined
+        ? ""
+        : `, oldest ${queue.oldestPendingSeconds}s`;
+    console.log(
+      `Queue:       ${queue.pending} pending${oldest}, ${queue.completed} completed, ${queue.dead} dead (${queue.table})`
+    );
+  }
   console.log(
     `Migrations:  ${inspection.migrations.applied.length} applied, ${inspection.migrations.pending.length} pending`
   );
@@ -863,7 +874,10 @@ if (command === "doctor") {
   console.log(`\nReptar Doctor Diagnostics${strict ? " (strict)" : ""}`);
   console.log(`──────────────────────────────────────────`);
   for (const check of report.checks) {
-    const symbol = check.passed ? (check.warning ? "⚠" : "✓") : "✗";
+    let symbol = "✗";
+    if (check.passed) {
+      symbol = check.warning ? "⚠" : "✓";
+    }
     console.log(`${symbol} ${check.title}: ${check.details ?? ""}`);
     if (!check.passed && check.advice) {
       console.log(`    ↳ Action: ${check.advice}`);
@@ -873,15 +887,15 @@ if (command === "doctor") {
       console.log(`    ↳ Note: ${check.advice}`);
     }
   }
-  console.log(
-    `\nStatus: ${
-      report.healthy
-        ? "All checks passed! Reptar environment is healthy."
-        : strict && report.checks.some((check) => check.warning)
-          ? "Strict mode: warnings are treated as failures. See notes above."
-          : "Some checks failed. See actions above."
-    }`
-  );
+  let statusMessage = "Some checks failed. See actions above.";
+  if (report.healthy) {
+    statusMessage = "All checks passed! Reptar environment is healthy.";
+  } else if (strict && report.checks.some((check) => check.warning)) {
+    statusMessage =
+      "Strict mode: warnings are treated as failures. See notes above.";
+  }
+
+  console.log(`\nStatus: ${statusMessage}`);
   process.exit(report.healthy ? 0 : 1);
 }
 
@@ -1152,6 +1166,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
       { cwd: process.cwd(), stdio: "inherit" }
     );
     process.exit(result.status ?? 1);
+    break;
   }
 
   case "build": {
@@ -1309,6 +1324,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
       { cwd: repoRoot, stdio: "inherit" }
     );
     process.exit(result.status ?? 1);
+    break;
   }
 
   case "check:worker": {
@@ -1318,6 +1334,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
       { cwd: repoRoot, stdio: "inherit" }
     );
     process.exit(result.status ?? 1);
+    break;
   }
 
   case "check:netwasm": {

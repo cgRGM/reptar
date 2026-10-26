@@ -1,3 +1,5 @@
+/* oxlint-disable no-explicit-any -- JSON-RPC envelopes are schema-free */
+/* oxlint-disable complexity -- one dispatch table for MCP methods */
 import readline from "node:readline";
 
 import { planMigrations } from "./diff";
@@ -103,6 +105,10 @@ const MCP_TOOLS = [
   },
 ];
 
+const sendResponse = (res: JsonRpcResponse) => {
+  process.stdout.write(`${JSON.stringify(res)}\n`);
+};
+
 export const runMcpServer = (
   repoRoot: string,
   cwd: string = process.cwd()
@@ -112,10 +118,6 @@ export const runMcpServer = (
     output: process.stdout,
     terminal: false,
   });
-
-  const sendResponse = (res: JsonRpcResponse) => {
-    process.stdout.write(`${JSON.stringify(res)}\n`);
-  };
 
   rl.on("close", () => {
     process.exit(0);
@@ -314,8 +316,8 @@ export const runMcpServer = (
             result: {
               content: [
                 {
-                  type: "text",
                   text: `Error executing ${toolName}: ${error?.message ?? String(error)}`,
+                  type: "text",
                 },
               ],
               isError: true,

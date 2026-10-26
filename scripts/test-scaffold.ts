@@ -11,6 +11,7 @@
  *   bun scripts/test-scaffold.ts --keep     # keep the generated app for debugging
  */
 
+/* oxlint-disable no-await-in-loop -- polling waits for a booting server */
 import { spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -81,12 +82,15 @@ const freePort = (): number => {
     fetch: () => new Response(""),
     port: 0,
   });
-  const port = probe.port;
+  const { port } = probe;
   probe.stop(true);
   return port;
 };
 
-const waitForHealth = async (port: number, logs: () => string): Promise<void> => {
+const waitForHealth = async (
+  port: number,
+  logs: () => string
+): Promise<void> => {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
     try {
@@ -99,7 +103,7 @@ const waitForHealth = async (port: number, logs: () => string): Promise<void> =>
     } catch {
       // server still booting
     }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await Bun.sleep(500);
   }
   throw new Error(`API did not become healthy on :${port}\n${logs()}`);
 };
@@ -125,7 +129,10 @@ const stopServer = (child: ReturnType<typeof spawn>): void => {
   }
 };
 
-const findUnreplacedPlaceholders = (dir: string, found: string[] = []): string[] => {
+const findUnreplacedPlaceholders = (
+  dir: string,
+  found: string[] = []
+): string[] => {
   for (const entry of readdirSync(dir)) {
     if (
       entry === "node_modules" ||
@@ -155,7 +162,9 @@ const findUnreplacedPlaceholders = (dir: string, found: string[] = []): string[]
     // such as `{{ open, setOpen }}` must not match.
     const matches = content.match(/\{\{\s*[A-Z][A-Z0-9_]*\s*\}\}/gu);
     if (matches) {
-      found.push(`${path.relative(targetDir, full)}: ${[...new Set(matches)].join(", ")}`);
+      found.push(
+        `${path.relative(targetDir, full)}: ${[...new Set(matches)].join(", ")}`
+      );
     }
   }
 
@@ -173,7 +182,16 @@ try {
   run(
     "scaffold (bun reptar new)",
     process.execPath,
-    [path.join(repoRoot, "scripts/reptar.ts"), "new", appName, "-y", "--db", "sqlite", "--auth", "none"],
+    [
+      path.join(repoRoot, "scripts/reptar.ts"),
+      "new",
+      appName,
+      "-y",
+      "--db",
+      "sqlite",
+      "--auth",
+      "none",
+    ],
     workRoot
   );
 
@@ -198,7 +216,12 @@ try {
     ["run", "make:model", "Widget", "--dry-run"],
     targetDir
   );
-  run("api build (pinned SDK)", process.execPath, ["run", "api:build"], targetDir);
+  run(
+    "api build (pinned SDK)",
+    process.execPath,
+    ["run", "api:build"],
+    targetDir
+  );
   run("api codegen", process.execPath, ["run", "api:codegen"], targetDir);
   run(
     "typecheck apps/web",
@@ -256,9 +279,9 @@ try {
     const headersWithCookies = signup.headers as Headers & {
       getSetCookie?: () => string[];
     };
-    const setCookies =
-      headersWithCookies.getSetCookie?.() ??
-      [signup.headers.get("set-cookie") ?? ""];
+    const setCookies = headersWithCookies.getSetCookie?.() ?? [
+      signup.headers.get("set-cookie") ?? "",
+    ];
     const cookie = setCookies
       .map((value) => value.split(";")[0])
       .find((value) => value.startsWith("better-auth.session_token="));

@@ -1,4 +1,6 @@
-import { Database } from "bun:sqlite";
+/* oxlint-disable complexity -- schema parsing is one linear pass over generated C# shapes */
+/* oxlint-disable import/no-cycle -- inspect/diff share schema discovery; splitting it is a follow-up */
+/* oxlint-disable prefer-named-capture-group -- groups mirror generated C# shapes and are positional by design */
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -59,7 +61,7 @@ const parseCompilerSchemaJson = (rawJson: string): ParsedTable[] | null => {
         name: string;
         primaryKey?: string[];
         indexes?: string[];
-        columns: Array<{
+        columns: {
           name: string;
           clrName?: string;
           type: string;
@@ -73,7 +75,7 @@ const parseCompilerSchemaJson = (rawJson: string): ParsedTable[] | null => {
           referencesTable?: string | null;
           referencesColumn?: string | null;
           onDelete?: string | null;
-        }>;
+        }[];
       }[];
     };
     if (!Array.isArray(parsed.tables)) {
@@ -136,11 +138,13 @@ export const loadCompilerTables = (
     ...(cwd === repoRoot ? [path.join(repoRoot, "examples/blog/app.cs")] : []),
   ];
   const pinnedDotnet = path.join(repoRoot, ".reptar", "sdk", "dotnet");
-  const dotnetCommand = existsSync(pinnedDotnet)
-    ? pinnedDotnet
-    : process.env.DOTNET_ROOT
-      ? path.join(process.env.DOTNET_ROOT, "dotnet")
-      : "dotnet";
+  let dotnetCommand = "dotnet";
+
+  if (existsSync(pinnedDotnet)) {
+    dotnetCommand = pinnedDotnet;
+  } else if (process.env.DOTNET_ROOT) {
+    dotnetCommand = path.join(process.env.DOTNET_ROOT, "dotnet");
+  }
 
   for (const appCs of appCandidates) {
     if (existsSync(appCs)) {
@@ -159,7 +163,9 @@ export const loadCompilerTables = (
             }
           }
         }
-      } catch {}
+      } catch {
+        // The app may not support --schema; fall back to source parsing.
+      }
     }
   }
 
@@ -187,7 +193,9 @@ const findCsFiles = (dir: string): string[] => {
         results.push(full);
       }
     }
-  } catch {}
+  } catch {
+    // Ignore unreadable directories during the best-effort source scan.
+  }
   return results;
 };
 
@@ -195,31 +203,28 @@ export const parseTableDefinitionsFromCs = (
   csContent: string
 ): ParsedTable[] => {
   const tables: ParsedTable[] = [];
-  const tableRegex = /DefineTable\s*\(\s*"([^"]+)"([\s\S]*?)\);/g;
+  const tableRegex = /DefineTable\s*\(\s*"([^"]+)"([\s\S]*?)\);/gu;
 
   let match: RegExpExecArray | null;
   while ((match = tableRegex.exec(csContent)) !== null) {
-    const tableName = match[1];
-    const body = match[2];
+    const [, tableName, body] = match;
     const columns: ParsedColumn[] = [];
 
     const colRegex =
-      /(?:ReptarApi\.)?Col\.(Text|Int|Real|Blob)\s*\(\s*"([^"]+)"\s*\)([^,\n\r);]*)/g;
+      /(?:ReptarApi\.)?Col\.(Text|Int|Real|Blob)\s*\(\s*"([^"]+)"\s*\)([^,\n\r);]*)/gu;
     let colMatch: RegExpExecArray | null;
 
     while ((colMatch = colRegex.exec(body)) !== null) {
-      const typeStr = colMatch[1];
-      const colName = colMatch[2];
-      const modifiers = colMatch[3] ?? "";
+      const [, typeStr, colName, modifiers = ""] = colMatch;
 
-      const colType =
-        typeStr === "Text"
-          ? "TEXT"
-          : typeStr === "Int"
-            ? "INTEGER"
-            : typeStr === "Real"
-              ? "REAL"
-              : "BLOB";
+      let colType = "BLOB";
+      if (typeStr === "Text") {
+        colType = "TEXT";
+      } else if (typeStr === "Int") {
+        colType = "INTEGER";
+      } else if (typeStr === "Real") {
+        colType = "REAL";
+      }
 
       const primaryKey = modifiers.includes(".PrimaryKey()");
       const notNull = modifiers.includes(".NotNull()") || primaryKey;
@@ -227,25 +232,30 @@ export const parseTableDefinitionsFromCs = (
       const indexed = modifiers.includes(".Indexed()");
 
       let defaultValue: string | undefined;
-      const defMatch = modifiers.match(/\.Default\s*\(([^)]+)\)/);
+      const defMatch = modifiers.match(/\.Default\s*\(([^)]+)\)/u);
       if (defMatch) {
-        defaultValue = defMatch[1].trim();
+        const [, rawDefault] = defMatch;
+        defaultValue = rawDefault.trim();
       }
 
       let defaultSql: string | undefined;
-      const defSqlMatch = modifiers.match(/\.DefaultSql\s*\(\s*"([^"]+)"\s*\)/);
+      const defSqlMatch = modifiers.match(
+        /\.DefaultSql\s*\(\s*"([^"]+)"\s*\)/u
+      );
       if (defSqlMatch) {
-        defaultSql = defSqlMatch[1];
+        const [, sql] = defSqlMatch;
+        defaultSql = sql;
       }
 
       let referencesTable: string | undefined;
       let referencesCol: string | undefined;
       const refMatch = modifiers.match(
-        /\.References\s*\(\s*"([^"]+)"(?:\s*,\s*"([^"]+)")?/
+        /\.References\s*\(\s*"([^"]+)"(?:\s*,\s*"([^"]+)")?/u
       );
       if (refMatch) {
-        referencesTable = refMatch[1];
-        referencesCol = refMatch[2] ?? "id";
+        const [, refTable, refCol] = refMatch;
+        referencesTable = refTable;
+        referencesCol = refCol ?? "id";
       }
 
       columns.push({
@@ -326,17 +336,12 @@ export const planMigrations = (
   cwd: string = process.cwd(),
   options?: { dbPath?: string; migrationsDir?: string }
 ): MigrationPlan => {
-  const databaseTarget = resolveDatabaseTarget(
-    repoRoot,
-    cwd,
-    options?.dbPath
-  );
+  const databaseTarget = resolveDatabaseTarget(repoRoot, cwd, options?.dbPath);
   if (databaseTarget.dialect !== "sqlite") {
     throw new Error(
       `Schema planning currently supports SQLite only (detected ${databaseTarget.dialect} at ${databaseTarget.path}).`
     );
   }
-  const dbPath = databaseTarget.path;
   const inspection = inspectProject(repoRoot, cwd, options);
   const { tables: codeTables, source } = discoverProjectTablesWithSource(
     repoRoot,
@@ -497,9 +502,10 @@ export const generateMigrationFile = (
 
   let nextNum = 1;
   for (const f of existing) {
-    const match = f.match(/^(\d+)_/);
+    const match = f.match(/^(\d+)_/u);
     if (match) {
-      const n = Number.parseInt(match[1], 10);
+      const [, digits] = match;
+      const n = Math.trunc(Number(digits));
       if (n >= nextNum) {
         nextNum = n + 1;
       }
@@ -509,7 +515,7 @@ export const generateMigrationFile = (
   const prefix = String(nextNum).padStart(4, "0");
   const sanitized = (name || "auto_schema_sync")
     .toLowerCase()
-    .replaceAll(/[^a-z0-9_]/g, "_");
+    .replaceAll(/[^a-z0-9_]/gu, "_");
   const filename = `${prefix}_${sanitized}.sql`;
   const targetPath = path.join(migrationsDir, filename);
 
