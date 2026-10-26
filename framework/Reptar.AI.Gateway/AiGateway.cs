@@ -192,6 +192,26 @@ public static class AiGateway
         if (string.IsNullOrWhiteSpace(request.Model))
             return OpenAiError(400, "invalid_request_error", "'model' is required.");
 
+        // ── Optional model allowlist (cost control) ───────────────────────────
+        // GATEWAY_ALLOWED_MODELS="gpt-4o-mini,llama-3.3-70b-versatile" — when
+        // set, completions for any other model are rejected instead of being
+        // routed (and billed) to providers with server-held credentials.
+        var allowedModels = env.Get("GATEWAY_ALLOWED_MODELS");
+        if (!string.IsNullOrWhiteSpace(allowedModels))
+        {
+            var permitted = allowedModels.Split(
+                ',',
+                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+            if (!permitted.Contains(request.Model, StringComparer.Ordinal))
+            {
+                return OpenAiError(
+                    400,
+                    "invalid_request_error",
+                    $"'{request.Model}' is not in GATEWAY_ALLOWED_MODELS.");
+            }
+        }
+
         var protocol = ResolveProtocol(ctx, request.Stream);
         var bypassCache = ctx.Req.QueryValue("no_cache") == "1" ||
                           ctx.Req.QueryValue("cache") == "0";

@@ -14,6 +14,15 @@ public sealed record WorkspaceToolOptions
 {
     public string RootPath { get; set; } = ".";
     /// <summary>
+    /// Authorization gate evaluated before every mounted workspace tool route.
+    /// When null (default), the toolset is reachable from loopback peers and
+    /// in-process AI tool dispatch only — the intended local-agent companion
+    /// deployment. Exposing the tools to any other client requires an explicit
+    /// gate, e.g. <c>ctx => Auth.CurrentUser(ctx) is not null</c> or a shared
+    /// token check.
+    /// </summary>
+    public Func<Ctx, bool>? Authorize { get; set; }
+    /// <summary>
     /// Mounts the shell tool. Off by default: a shell is a full sandbox escape
     /// by design, so enabling it must be an explicit app decision.
     /// </summary>
@@ -50,8 +59,44 @@ public static class WorkspaceToolsExtensions
         var options = new WorkspaceToolOptions { RootPath = rootPath };
         configure?.Invoke(options);
         var workspace = new WorkspaceRoot(options);
+
+        // Gate every workspace tool route: the toolset is a full filesystem
+        // (and optionally shell) surface, so without an explicit Authorize
+        // gate it accepts loopback peers and in-process dispatch only.
+        app.Use(async (ctx, next) =>
+        {
+            if (IsWorkspaceToolPath(ctx.Req.Path) && !IsAllowed(ctx, options))
+            {
+                return ctx.Error(
+                    403,
+                    "forbidden",
+                    "Workspace tools are not exposed to this client. Pass an Authorize gate in WorkspaceToolOptions to enable remote access.");
+            }
+
+            return await next();
+        });
+
         WorkspaceTools.Mount(app, workspace);
         return app;
+    }
+
+    private static bool IsWorkspaceToolPath(string path) =>
+        path.StartsWith("/workspace/", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAllowed(Ctx ctx, WorkspaceToolOptions options) =>
+        options.Authorize is { } authorize
+            ? authorize(ctx)
+            : IsLoopbackPeer(ctx.Req.RemoteIp);
+
+    private static bool IsLoopbackPeer(string? remoteIp)
+    {
+        // Null peer = in-process AI tool dispatch (synthetic requests) and the
+        // in-memory test client; real remote peers are gated below.
+        if (string.IsNullOrEmpty(remoteIp))
+            return true;
+
+        return remoteIp is "::1" or "::ffff:127.0.0.1" ||
+            remoteIp.StartsWith("127.", StringComparison.Ordinal);
     }
 }
 

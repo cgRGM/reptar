@@ -1,5 +1,6 @@
 using System.Text;
 using Reptar;
+using Reptar.AI;
 using Xunit;
 
 namespace Reptar.Tests;
@@ -491,6 +492,142 @@ public sealed class SecurityRegressions
         Assert.False(StorageKey.IsValid("a/./b"));
         Assert.False(StorageKey.IsValid("a\rb"));
         Assert.False(StorageKey.IsValid(new string('a', StorageKey.MaxLength + 1)));
+    }
+
+    [Fact]
+    public async Task WorkspaceTools_GateRemotePeers_UnlessExplicitlyAuthorized()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"reptar-ws-gate-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "hello.txt"), "line one\n");
+
+        try
+        {
+            // Default (no Authorize): remote peers are 403, loopback and
+            // in-process dispatch pass the gate.
+            var app = ReptarApp.Create();
+            app.UseWorkspaceTools(root);
+
+            var remote = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/workspace/read_file",
+                Query = "path=hello.txt",
+                RemoteIp = "203.0.113.99",
+            });
+            Assert.Equal(403, remote.Status);
+
+            var loopback = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/workspace/read_file",
+                Query = "path=hello.txt",
+                RemoteIp = "127.0.0.1",
+            });
+            // Gate passed; the file exists so the read succeeds.
+            Assert.Equal(200, loopback.Status);
+
+            var inProcess = await app.ExecuteAiToolAsync(
+                "read_file",
+                """{"path": "hello.txt"}""");
+            Assert.True(inProcess.Success, inProcess.ToLlmResponse());
+
+            // Explicit Authorize gate decides access itself.
+            var gated = ReptarApp.Create();
+            gated.UseWorkspaceTools(root, options =>
+            {
+                options.Authorize = ctx => ctx.Req.Header("X-Agent-Token") == "secret";
+            });
+
+            var badToken = await gated.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/workspace/read_file",
+                Query = "path=hello.txt",
+                RemoteIp = "127.0.0.1",
+                Headers = new Dictionary<string, string> { ["X-Agent-Token"] = "wrong" },
+            });
+            Assert.Equal(403, badToken.Status);
+
+            var goodToken = await gated.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/workspace/read_file",
+                Query = "path=hello.txt",
+                RemoteIp = "203.0.113.99",
+                Headers = new Dictionary<string, string> { ["X-Agent-Token"] = "secret" },
+            });
+            Assert.Equal(200, goodToken.Status);
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); }
+            catch { /* best-effort temp cleanup */ }
+        }
+    }
+
+    [Fact]
+    public async Task Csrf_Middleware_RequiresDoubleSubmitToken_OnUnsafeMethods()
+    {
+        var app = ReptarApp.Create(new ReptarConfig());
+        app.Use(Middlewares.Csrf(new CsrfOptions { SecureCookie = false }));
+        app.Get("/value", ctx => ctx.Json(new { ok = true }));
+        app.Post("/submit", ctx => ctx.Json(new { ok = true }));
+
+        // 1. GET issues the JS-readable token cookie (double-submit token
+        // must not be HttpOnly)
+        var get = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/value" });
+        Assert.Equal(200, get.Status);
+        var cookie = CookieValue(get, "reptar_csrf");
+        Assert.NotNull(cookie);
+        Assert.DoesNotContain("HttpOnly", get.SetCookies.Single());
+
+        // 2. POST without the header -> 403
+        var noHeader = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/submit",
+            Cookies = new Dictionary<string, string> { ["reptar_csrf"] = cookie! },
+        });
+        Assert.Equal(403, noHeader.Status);
+
+        // 3. POST with a mismatched header -> 403
+        var wrong = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/submit",
+            Cookies = new Dictionary<string, string> { ["reptar_csrf"] = cookie! },
+            Headers = new Dictionary<string, string> { ["x-csrf-token"] = "forged" },
+        });
+        Assert.Equal(403, wrong.Status);
+
+        // 4. POST echoing the cookie in the header -> 200
+        var ok = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/submit",
+            Cookies = new Dictionary<string, string> { ["reptar_csrf"] = cookie! },
+            Headers = new Dictionary<string, string> { ["x-csrf-token"] = cookie! },
+        });
+        Assert.Equal(200, ok.Status);
+
+        // 5. First-visit POST (no cookie yet) -> rejected, token issued for
+        // the client's retry
+        var firstVisit = await app.HandleAsync(new ReptarRequest { Method = "POST", Path = "/submit" });
+        Assert.Equal(403, firstVisit.Status);
+        Assert.NotNull(CookieValue(firstVisit, "reptar_csrf"));
+
+        // 6. Exempt path prefixes bypass the check (third-party webhooks)
+        var exemptApp = ReptarApp.Create(new ReptarConfig());
+        exemptApp.Use(Middlewares.Csrf(new CsrfOptions { ExemptPaths = ["/hooks"] }));
+        exemptApp.Post("/hooks/stripe", ctx => ctx.Json(new { ok = true }));
+
+        var webhook = await exemptApp.HandleAsync(new ReptarRequest
+        {
+            Method = "POST",
+            Path = "/hooks/stripe",
+        });
+        Assert.Equal(200, webhook.Status);
     }
 
     [Fact]

@@ -511,6 +511,87 @@ public static class Middlewares
         return await next();
     };
 
+    /// <summary>
+    /// Double-submit CSRF protection: issues a JS-readable token cookie and
+    /// requires unsafe-method requests (POST/PUT/PATCH/DELETE) to echo it in a
+    /// header compared in constant time. Complements — not replaces — the
+    /// SameSite=Lax default on framework cookies; opt in for browser sessions
+    /// where defense in depth is required. Non-browser API clients that
+    /// authenticate via Authorization headers are unaffected (they simply
+    /// present the cookie+header pair, or use an exempt path).
+    /// </summary>
+    public static ReptarMiddleware Csrf(CsrfOptions? options = null)
+    {
+        var opts = options ?? new CsrfOptions();
+
+        return async (ctx, next) =>
+        {
+            var cookieToken = ctx.Cookies.Get(opts.CookieName);
+            var issued = false;
+
+            if (cookieToken is null)
+            {
+                cookieToken = ctx.Crypto.RandomToken(16);
+                // Deliberately not HttpOnly: the client must read this value to
+                // echo it in the request header (double-submit pattern).
+                ctx.Cookies.Pending.Add(
+                    $"{opts.CookieName}={cookieToken}; Path=/; SameSite=Lax" +
+                    (opts.SecureCookie ? "; Secure" : ""));
+                issued = true;
+            }
+
+            var method = ctx.Req.Method;
+            var unsafeMethod =
+                string.Equals(method, "POST", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(method, "PUT", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(method, "PATCH", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(method, "DELETE", StringComparison.OrdinalIgnoreCase);
+
+            if (!unsafeMethod || IsCsrfExempt(ctx.Req.Path, opts.ExemptPaths))
+                return await next();
+
+            var headerToken = ctx.Req.Header(opts.HeaderName);
+
+            // A token issued during this same request cannot have been echoed
+            // by the client yet, so a first-visit POST is rejected; clients
+            // fetch once (receiving the cookie) before their first mutation.
+            if (issued ||
+                string.IsNullOrEmpty(headerToken) ||
+                !FixedTimeEquals(cookieToken, headerToken))
+            {
+                return ctx.Error(
+                    403,
+                    "csrf_failed",
+                    $"Missing or invalid CSRF token. Send the '{opts.HeaderName}' header with the '{opts.CookieName}' cookie value.");
+            }
+
+            return await next();
+        };
+    }
+
+    private static bool IsCsrfExempt(string path, string[] exemptPaths)
+    {
+        for (var i = 0; i < exemptPaths.Length; i++)
+        {
+            if (path.StartsWith(exemptPaths[i], StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool FixedTimeEquals(string left, string right)
+    {
+        if (left.Length != right.Length)
+            return false;
+
+        var difference = 0;
+        for (var index = 0; index < left.Length; index++)
+            difference |= left[index] ^ right[index];
+
+        return difference == 0;
+    }
+
 #if !NETWASM
     public static ReptarMiddleware StaticFiles(
         string rootDirectory = "wwwroot",
@@ -528,6 +609,16 @@ public sealed class SecurityHeadersOptions
     public string? XssProtection { get; set; } = "0";
     public string? PermissionsPolicy { get; set; } = "camera=(), microphone=(), geolocation=()";
     public string? ContentSecurityPolicy { get; set; }
+}
+
+public sealed class CsrfOptions
+{
+    public string CookieName { get; set; } = "reptar_csrf";
+    public string HeaderName { get; set; } = "x-csrf-token";
+    /// <summary>Adds the Secure attribute; leave false only for plain-HTTP local development.</summary>
+    public bool SecureCookie { get; set; } = true;
+    /// <summary>Path prefixes exempt from validation, e.g. <c>["/api/webhooks"]</c> for third-party callers.</summary>
+    public string[] ExemptPaths { get; set; } = [];
 }
 
 public sealed class ETagOptions

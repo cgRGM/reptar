@@ -531,7 +531,14 @@ left intact because other agents were actively committing. Bisect through `23323
 | F-36 Kestrel WS receive loop | ✅ | Inbound frame accumulation capped at 1 MiB, closing with `MessageTooBig` — parity with the Workers runtime's own ~1 MiB cap; no more unbounded per-connection memory |
 | F-47 Wasm R2Client keys | ✅* | `StorageKey.Normalize` guards added to every R2 operation in the working tree — landing alongside (and interleaved with) the storage agent's in-flight R2 copy/bulk-delete feature commit, whose new methods also normalize. Not included in this commit to avoid capturing their half-finished JS-interop work |
 | GitHub verified email | ✅ | `/user/emails` (scope already requested) consulted for primary+verified attestation; verified email of any kind beats the unverified profile address; any failure falls back to unverified (linking stays blocked) |
-| F-56/F-58/F-06, WS auth/origin model | ⏳ deferred | Still open: workspace-tools auth gate, gateway auth/model allowlist, CSRF token middleware, WS upgrade auth+origin — these need product-behavior decisions and touch actively-contended files (`Middleware.cs`, `AiTools.cs`) |
+**Round 3 (same day) — auth gate, CSRF, cost control:**
+
+| Finding | Status | Notes |
+|---|---|---|
+| F-56 workspace tools | ✅ | `UseWorkspaceTools` now gates every `/workspace/*` route: default accepts loopback peers and in-process AI dispatch only (the local-agent use case); any other exposure requires an explicit `WorkspaceToolOptions.Authorize` gate. The unauthenticated remote `run_command` RCE surface is closed |
+| F-06 CSRF | ✅ | New `Middlewares.Csrf` — double-submit token (JS-readable cookie + `x-csrf-token` header, constant-time compare), safe-method pass-through, exempt-path prefixes, first-visit POST rejection. Opt-in; documented as complement to SameSite=Lax, available on both hosts |
+| F-58 gateway cost control | ✅ (partial) | New `GATEWAY_ALLOWED_MODELS` env allowlist on the completions path — when set, off-catalog models are 400-rejected instead of routed (and billed) with server-held credentials. Still open: an authentication requirement for the gateway itself (app-level wiring; the gateway is intentionally a drop-in proxy) |
+| F-50/51 WS upgrade auth+origin | ⏳ deferred | Last open item: requires middleware-pipeline execution on WS opens (ReptarApp.HandleWebSocketOpenAsync) plus transport-level Origin checks — both in the most actively-contended file; sequenced for a quiet window |
 
 7. **Verify-before-fix, test-after-fix.** Every patch was verified against the actual file immediately before
    editing (anchors drifted twice mid-session due to concurrent edits — both caught because re-reads were
