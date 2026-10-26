@@ -7,12 +7,7 @@
 // .reptar/sdk. The SDK is a build tool only — never shipped in the container.
 
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dir, "..");
@@ -43,6 +38,28 @@ const findRepoSdk = (): string | null => {
   for (let i = 0; i < 6; i += 1) {
     const candidate = path.join(dir, ".reptar", "sdk", "dotnet");
     if (existsSync(candidate)) {
+      return candidate;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) {
+      break;
+    }
+    dir = parent;
+  }
+  return null;
+};
+
+const findFrameworkCli = (): string | null => {
+  // A scaffold created from a framework clone can reuse the repo CLI for
+  // make:model / make:feature / json:gen. Standalone package scaffolds will
+  // get these commands from @reptar/cli-core once packaging lands.
+  let dir = root;
+  for (let i = 0; i < 8; i += 1) {
+    const candidate = path.join(dir, "scripts", "reptar.ts");
+    if (
+      existsSync(candidate) &&
+      existsSync(path.join(dir, "framework", "Reptar", "Reptar.csproj"))
+    ) {
       return candidate;
     }
     const parent = path.dirname(dir);
@@ -143,9 +160,34 @@ switch (command) {
     runDotnet(["build", target, ...rest], apiDir);
     break;
   }
+  case "make:model":
+  case "make:feature":
+  case "json:gen": {
+    const cli = findFrameworkCli();
+    if (!cli) {
+      console.error(
+        "This command requires the Reptar framework repo CLI. " +
+          "Run it from a clone, or wait for the packaged @reptar/cli-core."
+      );
+      process.exit(1);
+    }
+
+    const apiDir = path.join(root, "apps/api");
+    const args =
+      command === "json:gen"
+        ? [command, "--app", apiDir, ...rest]
+        : [command, ...rest, "--app", apiDir];
+    const result = spawnSync(process.execPath, [cli, ...args], {
+      cwd: root,
+      env: process.env,
+      stdio: "inherit",
+    });
+    process.exit(result.status ?? 1);
+    break;
+  }
   default: {
     console.error(
-      `Unknown command: ${command ?? "(none)"}. Commands: dev, codegen, build`
+      `Unknown command: ${command ?? "(none)"}. Commands: dev, codegen, build, make:model, make:feature, json:gen`
     );
     process.exit(1);
   }

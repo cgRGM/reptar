@@ -88,9 +88,10 @@
 - `bun reptar make:feature Post`
 - Generates `schema/<plural>.cs` (TableDef + `[ReptarEntity]` DTO), optional `features/<plural>.cs`, updates `schema/index.cs`, inserts `#:include` lines and `Feature.Configure(app)`, and adds `[JsonSerializable(typeof(Dto))]` to an existing JSON context.
 - `--migration` invokes `reptar db generate`.
+- The scaffold runner (`templates/fullstack/scripts/reptar.ts`) now forwards `make:model`, `make:feature`, and `json:gen` to the framework CLI when running from a clone.
 - Verified in a temp app: files, index, includes, feature call, and JSON context are updated.
 
-**Still open:** move the generator into the project-local CLI package; add pluralization edge cases and a scaffold smoke test.
+**Still open:** packaged `@reptar/cli-core` for standalone scaffolds; add pluralization edge cases and a scaffold smoke test for make.
 
 ### 6b. CI/codegen fixes
 
