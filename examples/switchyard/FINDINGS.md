@@ -1,5 +1,19 @@
 # Switchyard: verified Reptar field notes
 
+## Release-integration follow-up — 2026-10-26
+
+The original observations below retain their baseline provenance. Combined-tree verification subsequently reached **396 passing framework tests**, **22 Bun tests / 72 assertions**, and a repeated **6-test / 265-assertion Linux Native AOT acceptance run**. Desktop/mobile Chromium verification also passed and now checks typed GET evaluation with `query.subject`.
+
+- **S1/S2:** auth AOT and composite-migration fixes are included in integration. Published-native acceptance is now a CI gate.
+- **S3:** `.WithQuery<EvaluateInput>()` now emits scalar query inputs for the client and OpenAPI. The frontend uses typed GET evaluation; metadata does not replace handler validation.
+- **S4:** `.Produces<T>()` defaults to 200. The client has status-specific response bodies, no native `Response.json()` `any` leakage, and `never` JSON results for declared 204/205/304 responses. Undeclared auth/error metadata still needs author attention.
+- **S5:** `inspect --db` now uses the requested database and `doctor` forwards it. Regression coverage was added.
+- **S6/S7:** the safe AOT authoring lane and provider-specific transaction semantics remain genuine limitations. A passing framework provider matrix does not make Switchyard's interactive transaction portable to D1.
+
+See the separate [controlled framework comparison](../../bench/results/release-20261026/README.md). The final confirmation does **not** demonstrate an overall throughput gain; database-backed cases measured up to 6.4% below the repaired baseline and deserve profiling. Do not compare those numbers directly with the older app benchmark below.
+
+The original VPS lab services remain **stopped**, with source/data retained. Disposable release-verification containers were removed.
+
 ## Scope and provenance
 
 This follows the supplied Switchyard and Relay design reviews, but replaces their uncompiled assumptions with runtime evidence where possible.
@@ -62,7 +76,7 @@ No test result here establishes D1/Worker, Postgres, NetWasm, or multi-process t
 
 ## Confirmed limitations / DX findings
 
-### S3 — Query reads do not generate query contracts
+### S3 — Query reads do not generate query contracts (resolved with explicit metadata in integration)
 
 `ctx.Req.QueryValue("subject")` does not produce a `query.subject` input in `AppType`. An agent can easily believe a generated client covers a route fully when it only covers path/body metadata.
 
@@ -70,7 +84,7 @@ No test result here establishes D1/Worker, Postgres, NetWasm, or multi-process t
 
 **Recommended framework work:** explicit typed query metadata/validation with generated OpenAPI and client inputs. Query values are part of the public contract, not implementation detail.
 
-### S4 — Route contracts require more author discipline than the DX pitch suggests
+### S4 — Route contracts require more author discipline than the DX pitch suggests (partly resolved in integration)
 
 The first compile failed on seven `.Produces<T>()` calls: this baseline requires an explicit status. One correction made the app compile. This was an agent mistake, not a compiler defect; a compact signature reference would have prevented it.
 
@@ -78,7 +92,7 @@ The generator only knows declared response metadata. Several built-in auth route
 
 **Recommendation:** add metadata completeness diagnostics and document status-aware client usage. Never call `.json()` on 204/304. A generated contract is not automatically proof of exhaustive runtime behavior.
 
-### S5 — Inspection needs explicit deployment configuration
+### S5 — Inspection needs explicit deployment configuration (`--db` defect fixed in integration)
 
 `inspect --app examples/switchyard --db <active-db>` silently used the app-local default instead; `DATABASE_URL=<active-db>` selected the right database. `db plan --db` worked. `doctor` reported the absent host SDK correctly, despite successful Docker builds.
 
@@ -149,9 +163,9 @@ The fixed-snapshot remote workspace was essential with many agents editing the s
 
 ## Recommended next work, in order
 
-1. Land/review the auth AOT and composite-migration fixes with their regressions.
-2. Wire the verified `examples/switchyard/test-native.sh` gate into CI; it already builds a native image and runs this protocol suite against a disposable instance.
-3. Add typed query inputs and metadata-completeness diagnostics.
+1. Complete release review of the integrated auth/migration fixes, typed query/status contracts, inspection fixes, and published-native CI gate.
+2. Add metadata-completeness diagnostics for undeclared authentication/validation responses.
+3. Profile the database-backed benchmark reductions before making performance-improvement claims.
 4. Publish a target capability/semantics matrix; design and test a separate D1 publish adapter.
 5. Default to generated JSON/DB mappings, with actionable diagnostics for reflection-dependent runtime code.
 6. Extend the workload with multi-process concurrency, longer mixed-load runs, project roles, pagination, and deployed Worker parity before broadening claims.

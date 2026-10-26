@@ -29,10 +29,6 @@ pre-commit:
         - "*.yml"
         - "*.graphql"
         - "*.gql"
-      stage_fixed: true
-    - name: oxlint
-      run: bun oxlint --fix {staged_files}
-      stage_fixed: true
-    - name: oxfmt
-      run: bun oxfmt --write {staged_files}
+      # Ultracite already runs Oxlint and Oxfmt. Duplicate parallel jobs race
+      # on the same files and Oxlint alone rejects Markdown-only commits.
       stage_fixed: true

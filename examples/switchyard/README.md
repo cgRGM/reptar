@@ -4,21 +4,23 @@ A feature-flag control room and benchmark app for Reptar: **C# backend, generate
 
 ## Verified scope
 
-Tested on Linux x64 with .NET SDK **10.0.402**, Native AOT runtime **10.0.13**, and Bun **1.4.4**. The isolated framework baseline is commit **`2dd0871`**, plus the auth and migration-planner fixes described in [FINDINGS.md](FINDINGS.md). Local Bun **1.3.10** also passes the migration-planner regression tests.
+Initially tested on Linux x64 with .NET SDK **10.0.402**, Native AOT runtime **10.0.13**, and Bun **1.4.4**, against isolated baseline **`2dd0871`** plus the fixes in [FINDINGS.md](FINDINGS.md). Release integration subsequently reverified the native acceptance suite and Chromium workflow against the combined framework, including typed GET query evaluation. Local release gates use pinned .NET **10.0.401** and Bun **1.3.10**.
 
 - Native AOT API: six acceptance scenarios / **265 assertions**, including a 24-way publish race, tenant isolation, auth lifecycle, targeting, stable bucketing, immutable history, draft/live separation, and ETags.
 - Forced final-write failure: version insert and active-pointer update roll back together. Verified on JIT and the native binary.
 - Independent BigInt implementation checks runtime buckets for 104 subjects, including Unicode. Five golden vectors match JIT and Native AOT.
 - Chromium: signup → create project → create flag → save draft → publish → evaluate. Desktop and mobile screenshots; no JS exceptions or mobile horizontal overflow.
-- Framework regression suite: **319 passed** against the isolated snapshot with the auth fix.
+- Framework regression suite: **396 passed** in release integration (**319** at the original isolated baseline).
 - Migration regression tests: **2 passed**; generated initial migration applied to a fresh database; subsequent plan reports `in_sync`.
 - TypeScript typecheck, scoped Ultracite checks, and regenerated-contract comparison pass.
 
 **Not verified:** Workers/D1, Postgres, NetWasm, multi-process publishing, production TLS, or internet-facing deployment. This example deliberately uses SQLite's real interactive transaction; D1's write-only buffered transaction is not a drop-in substitute.
 
-## Open the running VPS app
+## Retained VPS lab (currently stopped)
 
-Both ports are loopback-only; no firewall or existing application was changed.
+The original `switchyard-api` container and `switchyard-web.service` are intentionally **stopped**. Source, data, image, and results are retained. Release verification used separate disposable instances and did not restart these services.
+
+If an operator explicitly starts a lab instance, both ports are loopback-only; no firewall or existing application was changed.
 
 ```sh
 ssh -N -L 8796:127.0.0.1:8796 -L 8795:127.0.0.1:8795 remotedev
@@ -127,10 +129,10 @@ The app calls `EnsureCreatedAsync` for convenient first-run demos. That is not a
 # Run from repository root; specify the actual DB, not a guessed app-local default.
 bun reptar db migrate --app examples/switchyard --db /absolute/path/switchyard.db
 bun reptar db plan --app examples/switchyard --db /absolute/path/switchyard.db --json
-DATABASE_URL=/absolute/path/switchyard.db bun reptar inspect --app examples/switchyard --json
+bun reptar inspect --app examples/switchyard --db /absolute/path/switchyard.db --json
 ```
 
-At the tested baseline `inspect` does not honor `--db`, although `db plan` does; use `DATABASE_URL` for inspection. App runtime configuration is `SWITCHYARD_DB`, so tooling cannot infer that override. `doctor` correctly reports the absent VPS host SDK even though Docker builds work.
+Release integration fixes `inspect --db` and forwards that target through `doctor`; `DATABASE_URL` remains an alternative. App runtime configuration is `SWITCHYARD_DB`, so explicitly identify the active database rather than expecting tooling to infer it. `doctor` reports the absent VPS host SDK even though Docker builds work.
 
 ## Design
 
@@ -141,7 +143,7 @@ At the tested baseline `inspect` does not honor `--db`, although `db plan` does;
 - Evaluation reads the active version with one join. Disabled overrides targeting; explicit subject targeting overrides percentage; otherwise a stable FNV-1a bucket selects the cohort.
 - Bucketing hashes four **length-prefixed UTF-8 fields**. Percentage or version changes do not reshuffle subjects. This is deterministic cohorting, not a cryptographic or adversary-resistant assignment.
 - GET evaluation supports private revalidation, weak/comma-separated ETags, and empty 304 responses. Auth runs before conditional handling. ETags include all decision fields.
-- POST evaluation provides a fully typed `{ subject }` request because arbitrary `QueryValue` reads do not become generated query metadata.
+- GET evaluation declares `.WithQuery<EvaluateInput>()`, generating a typed `query.subject` contract used by the frontend. This is explicit metadata, not automatic query binding or validation; the handler still validates the subject. POST evaluation remains an alternative with a typed `{ subject }` body.
 - App DTOs use a source-generated JSON context and explicit database mappings. Built-in auth no longer depends on reflection surviving trimming.
 
 ### Endpoints
