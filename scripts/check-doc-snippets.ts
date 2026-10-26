@@ -71,6 +71,66 @@ for (const file of files) {
   }
 }
 
+// Workspace tools drift: every AI tool mounted by `app.UseWorkspaceTools` in
+// framework/Reptar.AI/WorkspaceTools.cs must be documented in the AI agent
+// tools cookbook page, so the docs can't fall behind the framework's toolset.
+const workspaceToolsSource = readFileSync(
+  join(ROOT, "framework/Reptar.AI/WorkspaceTools.cs"),
+  "utf-8"
+);
+const agentToolsDocPath = join(DOCS_DIR, "cookbook/ai-agent-tools.mdx");
+const agentToolsDoc = existsSync(agentToolsDocPath)
+  ? readFileSync(agentToolsDocPath, "utf-8")
+  : "";
+const registeredToolPattern = /\.AsAiTool\("([a-z_]+)"/gu;
+for (const match of workspaceToolsSource.matchAll(registeredToolPattern)) {
+  const tool = match[1] ?? "";
+  if (!agentToolsDoc.includes(tool)) {
+    errors.push(
+      `cookbook/ai-agent-tools.mdx: AI tool '${tool}' from WorkspaceTools.cs is not documented`
+    );
+  }
+}
+
+// Agent surface sync: `bun reptar <command>` references inside the npm-shipped
+// agent references (root llms.txt, packages/rpc/llms.txt, and the SKILL.md
+// packaged with @reptar/client) must match commands the CLI actually
+// implements, so shipped agent guidance can't drift behind the CLI.
+const CLI_SOURCE_PATH = join(ROOT, "scripts/reptar.ts");
+const AGENT_SURFACE_PATHS = [
+  join(ROOT, "llms.txt"),
+  join(ROOT, "packages/rpc/llms.txt"),
+  join(ROOT, "packages/rpc/skills/reptar/SKILL.md"),
+];
+
+const cliSource = readFileSync(CLI_SOURCE_PATH, "utf-8");
+const implementedCommands = new Set<string>();
+for (const match of cliSource.matchAll(
+  /(?:case|command ===) "([a-z][a-z0-9:-]*)"/gu
+)) {
+  const cliCommand = match[1] ?? "";
+  if (cliCommand) {
+    implementedCommands.add(cliCommand);
+  }
+}
+
+const referencedCommandPattern = /bun reptar ([a-z][a-z0-9:-]*)/gu;
+for (const surfacePath of AGENT_SURFACE_PATHS) {
+  if (!existsSync(surfacePath)) {
+    continue;
+  }
+  const surface = readFileSync(surfacePath, "utf-8");
+  const surfaceRel = relative(ROOT, surfacePath);
+  for (const match of surface.matchAll(referencedCommandPattern)) {
+    const referencedCommand = match[1] ?? "";
+    if (!implementedCommands.has(referencedCommand)) {
+      errors.push(
+        `${surfaceRel}: references 'bun reptar ${referencedCommand}' but the CLI has no '${referencedCommand}' command`
+      );
+    }
+  }
+}
+
 if (errors.length > 0) {
   console.error("Documentation snippet check failed:");
   for (const err of errors) {

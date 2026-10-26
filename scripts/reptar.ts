@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
 import { Database } from "bun:sqlite";
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   cpSync,
@@ -16,22 +16,23 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import path from "node:path";
 import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { upsertReptarAgentsContext } from "../packages/create-reptar/src/scaffold";
 import { patchNetWasmHost } from "../packages/host/src/patch";
 import { runCheck } from "./check-netwasm";
 import { listDevServers } from "./dev-status";
-import { runMake } from "./make";
-import { ensureJsonContextInclude, generateJsonContext } from "./json-context";
 import { planMigrations, generateMigrationFile } from "./diff";
+import { generateApiDocs } from "./docs-gen";
 import {
   inspectProject,
   doctorProject,
   resolveDatabaseTarget,
   resolveMigrationsDir,
 } from "./inspect";
+import { ensureJsonContextInclude, generateJsonContext } from "./json-context";
+import { runMake } from "./make";
 import { runMcpServer } from "./mcp";
 import { runRealtimeSmoke } from "./test-realtime";
 
@@ -73,9 +74,9 @@ const dotnetPath = (): string => {
 const dotnetEnv = (): NodeJS.ProcessEnv => ({
   ...process.env,
   DOTNET_CLI_HOME: cliHome,
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1",
   DOTNET_NOLOGO: "1",
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: "1",
-  DOTNET_CLI_TELEMETRY_OPTOUT: "1",
   NUGET_HTTP_CACHE_PATH: path.join(toolchainDir, "nuget-cache"),
 });
 
@@ -143,7 +144,10 @@ const findBuildLockHolders = (): { command: string; pid: number }[] => {
   const files = [
     path.join(repoRoot, "framework/Reptar/bin/Debug/net10.0/Reptar.deps.json"),
     path.join(repoRoot, "framework/Reptar/bin/Debug/net10.0/Reptar.dll"),
-    path.join(repoRoot, "framework/Reptar/bin/Release/net10.0/Reptar.deps.json"),
+    path.join(
+      repoRoot,
+      "framework/Reptar/bin/Release/net10.0/Reptar.deps.json"
+    ),
     path.join(repoRoot, "framework/Reptar/bin/Release/net10.0/Reptar.dll"),
     path.join(
       repoRoot,
@@ -422,6 +426,34 @@ const sha256File = (filePath: string): string =>
   createHash("sha256").update(readFileSync(filePath)).digest("hex");
 
 /**
+ * Resolve the application Wasm artifact from the deployment manifest. A
+ * publish directory also contains `<App>.core.wasm`; optimizing the wrong file
+ * leaves the served module and interop manifest out of sync.
+ */
+const resolveAppWasm = (publishRoot: string): string | undefined => {
+  const manifestPath = path.join(publishRoot, "deployment.json");
+  if (existsSync(manifestPath)) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
+        artifacts?: { relativePath?: string; role?: string }[];
+      };
+      const application = manifest.artifacts?.find(
+        (artifact) => artifact.role === "application"
+      );
+      if (application?.relativePath) {
+        return application.relativePath;
+      }
+    } catch {
+      // Fall back to the filename heuristic below.
+    }
+  }
+
+  return readdirSync(publishRoot).find(
+    (file) => file.endsWith(".wasm") && !file.endsWith(".core.wasm")
+  );
+};
+
+/**
  * The optimized wasm no longer matches the hash recorded by NetWasm's
  * deployment manifest. Refresh the artifact hash and the generated loader's
  * manifestSha256 so the host's integrity check passes.
@@ -491,10 +523,12 @@ Commands:
   mcp          Run the Model Context Protocol stdio server for AI agents
   db           Database operations: status, migrate, new <name>, plan (--json), generate
   codegen      Generate packages/rpc contracts from the C# route tree
+  docs:gen     Regenerate the docs site API reference from packages/rpc/openapi.json
   test         Run the C# framework tests
   test:scaffold End-to-end scaffold smoke: new → install → build → codegen → tsc
   test:realtime Two-host smoke: run the realtime-rooms protocol suite against Kestrel AND local workerd+DO
   check:netwasm Scan C# sources for NetWasm/Workers incompatibilities (--strict, default target examples/)
+  check:architecture Enforce the core/AI/terminal module boundary (--strict)
   check:host   Verify app.host.mjs exports match the generated interop manifest
   check:worker Measure the uncompressed Worker upload size (--app, --max-mb)
   dev:status   List running Reptar dev servers and their ports
@@ -534,19 +568,19 @@ if (command === "make:model" || command === "make:feature") {
 }
 
 if (command === "json:gen") {
-  const appRoot = path.resolve(
-    process.cwd(),
-    argValue(rest, "--app") ?? "."
-  );
+  const appRoot = path.resolve(process.cwd(), argValue(rest, "--app") ?? ".");
   const result = generateJsonContext(appRoot);
   if (result.types.length === 0) {
-    console.log("json:gen: no [ReptarEntity], Rule<T>, or Produces<T> types found.");
+    console.log(
+      "json:gen: no [ReptarEntity], Rule<T>, or Produces<T> types found."
+    );
     process.exit(0);
   }
   const includeChanged = ensureJsonContextInclude(appRoot);
   console.log(
-    `✓ ${result.file} (${result.types.length} type(s))` +
-      (includeChanged ? " and wired into app.cs" : "")
+    `✓ ${result.file} (${result.types.length} type(s))${
+      includeChanged ? " and wired into app.cs" : ""
+    }`
   );
   process.exit(0);
 }
@@ -984,7 +1018,9 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     const appDir = resolveAppDir(rest);
     const appCs = path.join(appDir, "app.cs");
     if (!existsSync(appCs)) {
-      console.error(`No app.cs found at ${appCs}. Use --app <dir> to target an app.`);
+      console.error(
+        `No app.cs found at ${appCs}. Use --app <dir> to target an app.`
+      );
       process.exit(1);
     }
 
@@ -1004,13 +1040,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     const outDir = outArg
       ? path.resolve(process.cwd(), outArg)
       : path.join(appDir, "rpc");
-    const passthrough = withoutArgs(
-      rest,
-      "--app",
-      "-a",
-      "--out",
-      "--check"
-    );
+    const passthrough = withoutArgs(rest, "--app", "-a", "--out", "--check");
     const generatedDir = check
       ? mkdtempSync(path.join(tmpdir(), "reptar-codegen-"))
       : outDir;
@@ -1091,6 +1121,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
       if (isBlog) {
         syncRpcContracts();
         formatGenerated();
+        generateApiDocs();
       } else {
         formatPaths([outDir]);
       }
@@ -1099,6 +1130,11 @@ Slash commands inside the session: /reset /history /tools /model /sessions
         rmSync(generatedDir, { force: true, recursive: true });
       }
     }
+    break;
+  }
+
+  case "docs:gen": {
+    generateApiDocs();
     break;
   }
 
@@ -1188,9 +1224,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     );
 
     if (existsSync(publishRoot)) {
-      const wasmFile = readdirSync(publishRoot).find((file) =>
-        file.endsWith(".wasm")
-      );
+      const wasmFile = resolveAppWasm(publishRoot);
       if (wasmFile) {
         const optimizedSize = optimizeWasmModule(
           path.join(publishRoot, wasmFile)
@@ -1255,6 +1289,16 @@ Slash commands inside the session: /reset /history /tools /model /sessions
       );
       process.exit(1);
     }
+    break;
+  }
+
+  case "check:architecture": {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts/check-architecture.ts"), ...rest],
+      { cwd: repoRoot, stdio: "inherit" }
+    );
+    process.exitCode = result.status ?? 1;
     break;
   }
 

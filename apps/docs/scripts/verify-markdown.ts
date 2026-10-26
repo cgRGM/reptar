@@ -75,20 +75,20 @@ const results = await Promise.all(
     for (const fragment of expectation.mustInclude) {
       if (!markdown.includes(fragment)) {
         failures.push(
-          `${expectation.file} (${expectation.proves}): missing ${JSON.stringify(fragment)}`,
+          `${expectation.file} (${expectation.proves}): missing ${JSON.stringify(fragment)}`
         );
       }
     }
     for (const fragment of expectation.mustExclude) {
       if (markdown.includes(fragment)) {
         failures.push(
-          `${expectation.file} (${expectation.proves}): leaked ${JSON.stringify(fragment)}`,
+          `${expectation.file} (${expectation.proves}): leaked ${JSON.stringify(fragment)}`
         );
       }
     }
 
     return failures;
-  }),
+  })
 );
 
 const failures = results.flat();

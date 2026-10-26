@@ -86,12 +86,19 @@ export default Alchemy.Stack(
     });
 
     const docsWorker = yield* Cloudflare.Website.StaticSite("docs", {
+      // Edge worker in front of the assets: serves per-page Markdown twins
+      // via Accept: text/markdown content negotiation (see
+      // apps/docs/worker/index.ts) and adds Vary: Accept everywhere.
+      assets: {
+        runWorkerFirst: true,
+      },
       command: "bun run build",
       cwd: "../../apps/docs",
       dev: {
         command: "bun run dev",
         url: "http://localhost:4322",
       },
+      main: "../../apps/docs/worker/index.ts",
       name: "reptar-docs",
       outdir: "../../apps/docs/dist",
     });

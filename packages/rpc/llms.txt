@@ -14,16 +14,18 @@ Before writing code or assuming database schema, query the framework's machine-r
 - `bun reptar db generate [--name <name>]`: Generates a timestamped `.sql` migration from planned changes.
 - `bun reptar db migrate`: Applies all pending SQL migrations to the database.
 - `bun reptar codegen`: Regenerates `@reptar/client` TypeScript RPC contracts from the C# route tree.
+- `bun reptar docs:gen`: Regenerates the docs site API reference (`apps/docs/src/content/docs/api/reference.md`) from the generated OpenAPI contract.
 - `bun reptar check:netwasm [--strict] [path]`: Scans C# sources for NetWasm/Workers incompatibilities (Channels, Process/filesystem APIs, background Task.Run loops, anonymous ctx.Json, runtime reflection) with `#if !NETWASM`-aware regions. See §6 for the rules it enforces.
 - `bun reptar test:realtime [--workers|--kestrel]`: Two-host protocol smoke — runs `examples/realtime-rooms/smoke.ts` against local workerd (Durable Object + D1) AND native Kestrel (SQLite). Catches host-specific regressions (thread safety, WS event lifetime, D1 marshaling) before deploy.
 - `bun reptar dev:status`: Lists running dev servers and their listening ports — orphaned `dotnet run`/runfile processes serve stale builds and hold ports hostage in multi-agent repos.
 - `bun reptar self-check`: One-command ground truth: doctor → framework tests → netwasm lint → two-host realtime smoke. Run this after concurrent edits or before trusting cached state.
 - `bun reptar mcp`: Launches the Model Context Protocol stdio server exposing `reptar_inspect`, `reptar_schema`, `reptar_routes`, `reptar_db_status`, `reptar_db_plan`, `reptar_check`, and `reptar_doctor`.
-- `bun reptar make:model <Name> [-f] [-m]`: Generates a `TableDef` + `[ReptarEntity]` DTO, wires `#:include`, updates the JSON context when present, and optionally generates a CRUD feature slice (`-f`) and migration (`-m`).
+- `bun reptar make:model <Name> [-f] [-m]`: Generates a `TableDef` + `[ReptarEntity]` DTO, wires `#:include`, updates the JSON context when present, and optionally generates a CRUD feature slice (`-f`) and migration (`-m`). The generator lives in `@reptar/cli-core`, so scaffolded projects expose the same commands as `bun run make:model`.
 - `bun reptar make:feature <Name>`: Generates a CRUD feature slice for an existing model.
 - `bun reptar json:gen [--app <dir>]`: Scans `[ReptarEntity]`, `Rule<T>`, and `Produces<T>` types and writes `json-context.g.cs` so the STJ source generator can emit an AOT-safe context.
 - `bun reptar check:architecture --strict`: Enforces the core/AI/terminal boundary.
 - `bun scripts/bench-gate.ts --results <result.json> --baseline bench/perf-baseline.json`: Compares a benchmark run to the baseline and fails on RPS/p95 regressions.
+- `app.UseMetrics(); app.MapMetrics();`: Exposes Prometheus counters/histograms at `GET /metrics`; protect the route when it is publicly reachable.
 
 ---
 
@@ -349,7 +351,8 @@ In AOT-published code paths, build `JsonObject`/`JsonArray` and return
 
 `c.Storage` is provider-agnostic: R2 on Workers, S3-compatible or local disk on
 Native AOT. The core contract is `PutAsync` / `GetAsync` / `ExistsAsync` /
-`DeleteAsync`; richer providers add `HeadAsync`, `GetRangeAsync`, `ListAsync`,
+`DeleteAsync`; richer providers add `PutAsync(stream)`, `CopyAsync`,
+`MoveAsync`, `DeleteManyAsync`, `HeadAsync`, `GetRangeAsync`, `ListAsync`,
 `PresignPutAsync`, `PresignGetAsync`, and `PublicUrl`. Check
 `c.Storage.Capabilities.Has(StorageFeatures.X)` rather than switching on the
 concrete provider type.
@@ -372,6 +375,14 @@ await ctx.Storage.PutAsync(
 // Serve with ETag/304, Range/206, HEAD, Content-Length, and cache headers.
 app.Get("/files/:key", ctx => ctx.File(ctx.Param("key")!));
 app.Get("/download/:key", ctx => ctx.Attachment(ctx.Param("key")!));
+
+// Nested keys use a named catch-all; static and single-segment routes win.
+app.Get("/assets/*path", ctx => ctx.File(ctx.Param("path")!));
+
+// Stream large uploads (S3 multipart above 8 MB) and move/batch-delete.
+await ctx.Storage.PutAsync("videos/a.mp4", fileStream, "video/mp4");
+await ctx.Storage.MoveAsync("drafts/a.png", "published/a.png");
+await ctx.Storage.DeleteManyAsync(["drafts/b.png", "drafts/c.png"]);
 ```
 
 Rules:
@@ -390,6 +401,17 @@ Rules:
   mutating the object.
 - `PutAsync(..., new StoragePutOptions { Overwrite = false })` fails with
   `PreconditionFailed` (HTTP 412) instead of replacing an existing object.
+- Catch-all route segments must be named and final (`/files/*path`); bare `*`
+  throws. Static and single-segment routes always win. WebSocket routes do not
+  support catch-alls.
+- `PutAsync(stream)` uses S3 multipart above 8 MiB and aborts on failure.
+  Providers without `StreamingPut` buffer through the default implementation.
+- `CopyAsync`/`MoveAsync` preserve content type, cache control, and user
+  metadata by default; set `PreserveMetadata = false` or pass overrides.
+- `DeleteManyAsync` uses S3 `DeleteObjects` (1000-key batches) and R2 array
+  delete; the default loops `DeleteAsync`.
+- `PublicUrl` returns null unless the provider was configured with a public base
+  URL (`Storage.R2("https://cdn...")` or `S3StorageOptions.PublicBaseUrl`).
 
 ---
 

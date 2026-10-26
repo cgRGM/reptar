@@ -3,6 +3,29 @@ import starlight from "@astrojs/starlight";
 import { defineConfig } from "astro/config";
 import starlightLlmsTxt from "starlight-llms-txt";
 
+// Machine-readable identity for AI agents and social previews.
+// Facts only — no fabricated contact or license claims.
+const OG_IMAGE_URL = "https://reptar-docs.rocktown-labs.workers.dev/og.png";
+const JSON_LD = JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  applicationCategory: "DeveloperApplication",
+  author: {
+    "@type": "Organization",
+    name: "Rocktown Labs",
+    url: "https://github.com/RocktownLabs",
+  },
+  description:
+    "High-performance, single-binary C# 13 web framework for Native AOT and Cloudflare Workers (NetWasm), with zero runtime reflection, typed RPC codegen, and built-in AI tooling.",
+  isAccessibleForFree: true,
+  name: "Reptar",
+  operatingSystem: "Cloudflare Workers, AWS Lambda, Docker, Linux, macOS",
+  programmingLanguage: "C#",
+  sameAs: ["https://github.com/RocktownLabs/reptar"],
+  softwareVersion: "0.1",
+  url: "https://reptar-docs.rocktown-labs.workers.dev/",
+});
+
 // https://astro.build/config
 export default defineConfig({
   integrations: [
@@ -13,6 +36,17 @@ export default defineConfig({
       customCss: ["./src/styles/custom.css"],
       description:
         "Reptar is a high-performance, single-binary C# 13 web framework for Native AOT and Cloudflare Workers (NetWasm), with zero runtime reflection, typed RPC codegen, and built-in AI tooling.",
+      head: [
+        {
+          attrs: { content: OG_IMAGE_URL, property: "og:image" },
+          tag: "meta",
+        },
+        {
+          attrs: { type: "application/ld+json" },
+          content: JSON_LD,
+          tag: "script",
+        },
+      ],
       plugins: [
         starlightLlmsTxt({
           details:
@@ -183,10 +217,22 @@ export default defineConfig({
           label: "Client & OpenAPI",
         },
         {
+          items: [{ autogenerate: { directory: "api" } }],
+          label: "API Reference",
+        },
+        {
           items: [
             { label: "Telemetry & Logs", slug: "observability/telemetry" },
           ],
           label: "Observability",
+        },
+        {
+          items: [
+            { label: "About", slug: "about" },
+            { label: "Contact", slug: "contact" },
+            { label: "Privacy", slug: "privacy" },
+          ],
+          label: "Project",
         },
       ],
       social: [

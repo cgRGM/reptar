@@ -95,8 +95,15 @@ jobs:
           test -f dist/llms.txt
           test -f dist/llms-full.txt
           test -f dist/llms-small.txt
+          test -f dist/index.md
+          test -f dist/client/codegen.md
         working-directory: apps/docs
 
       - name: Documentation markdown actions check
         run: bun run check:markdown
         working-directory: apps/docs
+
+      - name: Generated API reference drift check
+        run: |
+          bun reptar codegen
+          git diff --exit-code apps/docs/src/content/docs/api/
