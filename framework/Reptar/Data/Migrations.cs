@@ -230,6 +230,33 @@ public static class MigrationRunner
         return new HashSet<string>(applied.Keys, StringComparer.Ordinal);
     }
 
+    private static List<IMigration> FindChecksumMismatches(
+        IReadOnlyList<IMigration> migrations,
+        IReadOnlyDictionary<string, string?> applied)
+    {
+        var mismatched = new List<IMigration>();
+
+        foreach (var migration in migrations)
+        {
+            if (migration.Checksum is null ||
+                !applied.TryGetValue(migration.Id, out var appliedChecksum) ||
+                appliedChecksum is null)
+            {
+                continue;
+            }
+
+            if (!string.Equals(
+                migration.Checksum,
+                appliedChecksum,
+                StringComparison.OrdinalIgnoreCase))
+            {
+                mismatched.Add(migration);
+            }
+        }
+
+        return mismatched;
+    }
+
     public static async Task<IReadOnlyList<MigrationResult>> MigrateAsync(
         IDbClient db,
         IEnumerable<IMigration> migrations)
@@ -283,6 +310,9 @@ public static class MigrationRunner
                 sw.Stop();
 
                 var now = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture);
+                object appliedAt = db is PostgresDbClient
+                    ? DateTimeOffset.UtcNow
+                    : now;
                 var insertSql = db is MySqlDbClient
                     ? "INSERT INTO `__reptar_migrations` (`id`, `name`, `applied_at`, `checksum`) VALUES (@id, @name, @applied_at, @checksum)"
                     : @"INSERT INTO ""__reptar_migrations"" (""id"", ""name"", ""applied_at"", ""checksum"") VALUES (@id, @name, @applied_at, @checksum)";
@@ -291,7 +321,7 @@ public static class MigrationRunner
                 {
                     ["id"] = migration.Id,
                     ["name"] = migration.Name,
-                    ["applied_at"] = now,
+                    ["applied_at"] = appliedAt,
                     ["checksum"] = migration.Checksum
                 });
 
@@ -469,8 +499,20 @@ public static class MigrationRunner
         {
             case "check":
             {
-                var applied = await GetAppliedMigrationIdsAsync(db);
-                var pending = ordered.Where(m => !applied.Contains(m.Id)).ToList();
+                var applied = await GetAppliedMigrationChecksumsAsync(db);
+                var mismatched = FindChecksumMismatches(ordered, applied);
+
+                if (mismatched.Count > 0)
+                {
+                    Console.Error.WriteLine(
+                        $"{mismatched.Count} applied migration(s) were modified:");
+                    foreach (var migration in mismatched)
+                        Console.Error.WriteLine($"  [!] {migration.Id} ({migration.Name})");
+
+                    return 2;
+                }
+
+                var pending = ordered.Where(m => !applied.ContainsKey(m.Id)).ToList();
 
                 Console.WriteLine(
                     pending.Count == 0
@@ -485,8 +527,20 @@ public static class MigrationRunner
 
             case "dry-run":
             {
-                var applied = await GetAppliedMigrationIdsAsync(db);
-                var pending = ordered.Where(m => !applied.Contains(m.Id)).ToList();
+                var applied = await GetAppliedMigrationChecksumsAsync(db);
+                var mismatched = FindChecksumMismatches(ordered, applied);
+
+                if (mismatched.Count > 0)
+                {
+                    Console.Error.WriteLine(
+                        $"{mismatched.Count} applied migration(s) were modified:");
+                    foreach (var migration in mismatched)
+                        Console.Error.WriteLine($"  [!] {migration.Id} ({migration.Name})");
+
+                    return 2;
+                }
+
+                var pending = ordered.Where(m => !applied.ContainsKey(m.Id)).ToList();
 
                 if (pending.Count == 0)
                 {

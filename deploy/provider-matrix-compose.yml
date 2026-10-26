@@ -1,0 +1,37 @@
+# Local databases for the provider matrix.
+#
+#   docker compose -f deploy/provider-matrix-compose.yml up -d
+#   POSTGRES_TEST=1 \
+#   POSTGRES_URL='Host=127.0.0.1;Port=5432;Database=reptar_test;Username=reptar;Password=reptar' \
+#   MYSQL_TEST=1 \
+#   MYSQL_URL='Server=127.0.0.1;Port=3306;Database=reptar_test;User ID=reptar;Password=reptar;' \
+#   bun run test:providers --require-all
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: reptar_test
+      POSTGRES_USER: reptar
+      POSTGRES_PASSWORD: reptar
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reptar -d reptar_test"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "5432:5432"
+
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: reptar_test
+      MYSQL_USER: reptar
+      MYSQL_PASSWORD: reptar
+      MYSQL_ROOT_PASSWORD: reptar
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ureptar", "-preptar"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "3306:3306"

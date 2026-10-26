@@ -9,6 +9,16 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
     private readonly string _connectionString;
     private readonly IJsonCodec _json;
 
+#if !NETWASM && !REPTAR_SQLITE_ONLY
+    private sealed record AmbientTransactionScope(
+        Npgsql.NpgsqlConnection Connection,
+        Npgsql.NpgsqlTransaction Transaction);
+
+    // Flows with the caller's async context. When set, commands run on the
+    // transaction's connection so reads see uncommitted writes.
+    private static readonly AsyncLocal<AmbientTransactionScope?> AmbientTransaction = new();
+#endif
+
     public PostgresDbClient(string connectionString, IJsonCodec? json = null)
     {
         _connectionString = connectionString;
@@ -53,6 +63,16 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
 #elif REPTAR_SQLITE_ONLY
         throw new PlatformNotSupportedException("PostgreSQL support was excluded at compile time (ReptarSqliteOnly=true).");
 #else
+        var ambient = AmbientTransaction.Value;
+        if (ambient is not null)
+        {
+            await using var ambientBatch = new Npgsql.NpgsqlBatch(
+                ambient.Connection,
+                ambient.Transaction);
+            AddStatements(ambientBatch, statements);
+            return await ambientBatch.ExecuteNonQueryAsync();
+        }
+
         var ds = GetDataSource();
         if (ds is null)
             return statements.Count;
@@ -65,21 +85,7 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
             try
             {
                 await using var batch = new Npgsql.NpgsqlBatch(connection, transaction);
-
-                foreach (var statement in statements)
-                {
-                    var (sql, values) = NormalizeSqlAndParams(
-                        statement.Sql,
-                        statement.Param,
-                        _json);
-                    var command = new Npgsql.NpgsqlBatchCommand(sql);
-
-                    foreach (var value in values)
-                        command.Parameters.AddWithValue(value ?? DBNull.Value);
-
-                    batch.BatchCommands.Add(command);
-                }
-
+                AddStatements(batch, statements);
                 var changes = await batch.ExecuteNonQueryAsync();
                 await transaction.CommitAsync();
                 return changes;
@@ -97,6 +103,27 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
         }
 #endif
     }
+
+#if !NETWASM && !REPTAR_SQLITE_ONLY
+    private void AddStatements(
+        Npgsql.NpgsqlBatch batch,
+        IReadOnlyList<DbStatement> statements)
+    {
+        foreach (var statement in statements)
+        {
+            var (sql, values) = NormalizeSqlAndParams(
+                statement.Sql,
+                statement.Param,
+                _json);
+            var command = new Npgsql.NpgsqlBatchCommand(sql);
+
+            foreach (var value in values)
+                command.Parameters.AddWithValue(value ?? DBNull.Value);
+
+            batch.BatchCommands.Add(command);
+        }
+    }
+#endif
 
     public Task<T?> GetAsync<T>(TableDef table, object id)
     {
@@ -132,11 +159,46 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
 
         if (limit > 0)
         {
-            sql.Append($" LIMIT {limit}");
-
-            if (offset > 0)
+            if (param is object?[] positional)
             {
-                sql.Append($" OFFSET {offset}");
+                // Raw positional parameters keep their $N numbering; the
+                // page values are appended after the caller's values.
+                var values = new object?[positional.Length + (offset > 0 ? 2 : 1)];
+                positional.CopyTo(values, 0);
+                values[positional.Length] = limit;
+
+                if (offset > 0)
+                    values[positional.Length + 1] = offset;
+
+                sql.Append($" LIMIT ${positional.Length + 1}");
+
+                if (offset > 0)
+                {
+                    sql.Append($" OFFSET ${positional.Length + 2}");
+                }
+
+                param = values;
+            }
+            else if (SqlPagination.SupportsNamedParams(param))
+            {
+                sql.Append(" LIMIT @__limit");
+
+                if (offset > 0)
+                {
+                    sql.Append(" OFFSET @__offset");
+                }
+
+                param = SqlPagination.MergeNamed(param, limit, offset);
+            }
+            else
+            {
+                // Exotic parameter shapes keep the legacy literal paging.
+                sql.Append($" LIMIT {limit}");
+
+                if (offset > 0)
+                {
+                    sql.Append($" OFFSET {offset}");
+                }
             }
         }
 
@@ -660,6 +722,7 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
 
         await using var conn = await ds.OpenConnectionAsync();
         await using var tx = await conn.BeginTransactionAsync();
+        AmbientTransaction.Value = new AmbientTransactionScope(conn, tx);
 
         try
         {
@@ -673,8 +736,68 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
         }
         catch
         {
-            await tx.RollbackAsync();
+            try
+            {
+                await tx.RollbackAsync();
+            }
+            catch
+            {
+                // Preserve the original failure.
+            }
+
             throw;
+        }
+        finally
+        {
+            AmbientTransaction.Value = null;
+        }
+    }
+
+    Task IDbClient.TransactionAsync(Func<IDbClient, Task> action) =>
+        RunTransactionAsync(async () =>
+        {
+            await action(this);
+            return 0;
+        });
+
+    Task<T> IDbClient.TransactionAsync<T>(Func<IDbClient, Task<T>> action) =>
+        RunTransactionAsync(() => action(this));
+
+    private async Task<T> RunTransactionAsync<T>(Func<Task<T>> action)
+    {
+        if (AmbientTransaction.Value is not null)
+            throw new NotSupportedException("Nested PostgreSQL transactions are not supported.");
+
+        var ds = GetDataSource()
+            ?? throw new InvalidOperationException(
+                "Cannot start transaction without a valid PostgreSQL connection string.");
+
+        await using var conn = await ds.OpenConnectionAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        AmbientTransaction.Value = new AmbientTransactionScope(conn, tx);
+
+        try
+        {
+            var result = await action();
+            await tx.CommitAsync();
+            return result;
+        }
+        catch
+        {
+            try
+            {
+                await tx.RollbackAsync();
+            }
+            catch
+            {
+                // Preserve the original failure.
+            }
+
+            throw;
+        }
+        finally
+        {
+            AmbientTransaction.Value = null;
         }
     }
 #endif
@@ -718,6 +841,13 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
         LastExecutedParams = parameters;
 
 #if !NETWASM && !REPTAR_SQLITE_ONLY
+        var ambient = AmbientTransaction.Value;
+        if (ambient is not null)
+        {
+            await using var ambientCommand = CreateCommand(null, sql, parameters);
+            return await ReadAllAsync<T>(ambientCommand);
+        }
+
         var ds = GetDataSource();
         if (ds is not null)
         {
@@ -725,29 +855,8 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
             {
                 try
                 {
-                    await using var cmd = ds.CreateCommand(sql);
-                    cmd.CommandTimeout = CommandTimeoutSeconds;
-                    for (var i = 0; i < parameters.Length; i++)
-                    {
-                        cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
-                    }
-
-                    await using var reader = await cmd.ExecuteReaderAsync();
-
-                    if (EntityMapper<T>.ResolveForSql(sql, reader) is { } map)
-                    {
-                        var results = new List<T>(24);
-                        while (await reader.ReadAsync())
-                            results.Add(map(reader));
-                        return results;
-                    }
-
-                    var fallbackMap = RowMapper.Resolve<T>(reader);
-                    var fallbackResults = new List<T>(24);
-                    while (await reader.ReadAsync())
-                        fallbackResults.Add(fallbackMap(reader));
-
-                    return fallbackResults;
+                    await using var cmd = CreateCommand(ds, sql, parameters);
+                    return await ReadAllAsync<T>(cmd);
                 }
                 catch (Exception ex) when (IsTransientPostgresError(ex) && attempt < MaxTransientRetries)
                 {
@@ -777,12 +886,59 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
         return new List<T>();
     }
 
+#if !NETWASM && !REPTAR_SQLITE_ONLY
+    private Npgsql.NpgsqlCommand CreateCommand(
+        Npgsql.NpgsqlDataSource? dataSource,
+        string sql,
+        object?[] parameters)
+    {
+        var ambient = AmbientTransaction.Value;
+        var command = ambient is not null
+            ? new Npgsql.NpgsqlCommand(sql, ambient.Connection, ambient.Transaction)
+            : dataSource!.CreateCommand(sql);
+
+        command.CommandTimeout = CommandTimeoutSeconds;
+
+        for (var i = 0; i < parameters.Length; i++)
+            command.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
+
+        return command;
+    }
+
+    private static async Task<List<T>> ReadAllAsync<T>(Npgsql.NpgsqlCommand command)
+    {
+        await using var reader = await command.ExecuteReaderAsync();
+
+        if (EntityMapper<T>.ResolveForSql(command.CommandText, reader) is { } map)
+        {
+            var results = new List<T>(24);
+            while (await reader.ReadAsync())
+                results.Add(map(reader));
+            return results;
+        }
+
+        var fallbackMap = RowMapper.Resolve<T>(reader);
+        var fallbackResults = new List<T>(24);
+        while (await reader.ReadAsync())
+            fallbackResults.Add(fallbackMap(reader));
+
+        return fallbackResults;
+    }
+#endif
+
     private async Task<int> ExecuteNonQueryAsync(string sql, object?[] parameters)
     {
         LastExecutedSql = sql;
         LastExecutedParams = parameters;
 
 #if !NETWASM && !REPTAR_SQLITE_ONLY
+        var ambient = AmbientTransaction.Value;
+        if (ambient is not null)
+        {
+            await using var ambientCommand = CreateCommand(null, sql, parameters);
+            return await ambientCommand.ExecuteNonQueryAsync();
+        }
+
         var ds = GetDataSource();
         if (ds is not null)
         {
@@ -790,13 +946,7 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
             {
                 try
                 {
-                    await using var cmd = ds.CreateCommand(sql);
-                    cmd.CommandTimeout = CommandTimeoutSeconds;
-                    for (var i = 0; i < parameters.Length; i++)
-                    {
-                        cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
-                    }
-
+                    await using var cmd = CreateCommand(ds, sql, parameters);
                     return await cmd.ExecuteNonQueryAsync();
                 }
                 catch (Exception ex) when (IsTransientPostgresError(ex) && attempt < MaxTransientRetries)

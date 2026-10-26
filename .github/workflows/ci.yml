@@ -19,6 +19,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: reptar_test
+          POSTGRES_USER: reptar
+          POSTGRES_PASSWORD: reptar
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U reptar -d reptar_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_DATABASE: reptar_test
+          MYSQL_USER: reptar
+          MYSQL_PASSWORD: reptar
+          MYSQL_ROOT_PASSWORD: reptar
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ureptar -preptar"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -54,6 +84,14 @@ jobs:
       # flake in one checkout (see plans/phase1-remediation-log.md).
       - name: Framework tests
         run: bun reptar test
+
+      - name: Provider matrix (SQLite, Postgres, MySQL, D1)
+        env:
+          POSTGRES_TEST: "1"
+          POSTGRES_URL: "Host=127.0.0.1;Port=5432;Database=reptar_test;Username=reptar;Password=reptar"
+          MYSQL_TEST: "1"
+          MYSQL_URL: "Server=127.0.0.1;Port=3306;Database=reptar_test;User ID=reptar;Password=reptar;"
+        run: bun run test:providers --require-all
 
       - name: NetWasm compatibility lint
         run: bun reptar check:netwasm --strict

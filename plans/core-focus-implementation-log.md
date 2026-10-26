@@ -70,10 +70,20 @@
 - Migration runners use a lease lock table (`__reptar_migrations_lock`, 30-minute expiry) so concurrent deploys cannot apply the same migration. `db check` and `db dry-run` (or `db migrate --check/--dry-run`) report pending SQL without applying it.
 - `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message.
 - **SQLite now has real read/write transactions:** `SqliteDbClient.TransactionAsync` holds the write gate, begins a transaction on the single writer connection, and routes reads/writes through the ambient transaction. Tests verify uncommitted reads and rollback.
-- **MySQL now has real read/write transactions:** `MySqlDbClient.TransactionAsync` holds one connection/transaction and routes reads/writes through an ambient scope. D1 remains write-only buffered because the platform has no interactive transaction API.
+- **MySQL now has real read/write transactions:** `MySqlDbClient.TransactionAsync` holds one connection/transaction and routes reads/writes through an ambient scope.
+- **PostgreSQL now has real read/write transactions through `IDbClient.TransactionAsync`:** `PostgresDbClient` opens one connection/transaction and routes commands through an ambient scope, so reads see uncommitted writes. The `PostgresTransactionContext` overload remains. D1 remains write-only buffered because the platform has no interactive transaction API.
 - `DbTransactionExtensions` exposes the transaction contract on concrete clients.
 
 **Tests:** `ReliabilityTests` cover timeout 504 and module order; `TransactionTests` cover commit, rollback, uncommitted reads, and buffered-transaction behavior; `ETagTests` cover 304 revalidation and skip rules; `MetricsTests` cover Prometheus output; `MigrationChecksumTests` cover edited-migration rejection.
+
+### Provider contract matrix
+
+- `ProviderContractTests` runs the same CRUD, transaction commit/rollback, nested-transaction, batch atomicity, concurrent insert, migration apply/check/checksum, and lock-release scenarios against SQLite, PostgreSQL, and MySQL.
+- Postgres initially fell through to the buffered write-only `IDbClient.TransactionAsync`; it now uses a real ambient transaction on one connection.
+- Migration timestamps now bind as `DateTimeOffset` on Postgres (the column is `TIMESTAMPTZ`) instead of a string, which previously failed with `42804`.
+- `db check` / `db dry-run` now report checksum mismatches (exit 2) instead of only pending IDs.
+- D1 contract tests run through Miniflare against `@reptar/host`'s `d1Query` / `d1Execute` / `d1Batch`, including batch atomicity and concurrent single-statement writes.
+- `bun run test:providers` runs the matrix; `--require-all` makes missing Postgres/MySQL a CI failure. CI starts Postgres 17 and MySQL 8.4 service containers.
 
 ### 4. AI / terminal boundary
 
@@ -149,7 +159,7 @@ Explicit relation descriptors are the right v1: no reflection, no attributes, wo
 
 ### `TransactionAsync` v1 is write-only
 
-SQLite has a real ambient read/write transaction on its single writer connection. MySQL/D1 still use the write-only buffer, and Postgres has `PostgresTransactionContext` for read/write transactions. The next step is provider-specific read/write contexts for MySQL and D1.
+SQLite, PostgreSQL, and MySQL have real ambient read/write transactions. D1 uses the write-only buffer because the platform has no interactive transaction API.
 
 ### Benchmark gate needs a stable runner
 
@@ -159,7 +169,9 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Verification
 
-- `bun reptar test`: **320 passed**.
+- `bun reptar test`: **367 tests** in the tree; the provider matrix (21 native cases) and D1 contract (3 cases) pass. Six unrelated failures from concurrent pagination/mail edits were present during verification.
+- `bun run test:providers`: passes against SQLite, live PostgreSQL, and D1 via Miniflare; MySQL is skipped locally when no server is present and is required in CI.
+- `bun run test:providers --require-all`: CI gate with Postgres 17 and MySQL 8.4 service containers.
 - Lint cleanup: `scripts/reptar.ts`, `scripts/diff.ts`, `scripts/mcp.ts`, `scripts/inspect.ts`, `scripts/docs-gen.ts`, and `scripts/test-scaffold.ts` pass targeted Ultracite checks.
 - `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
 - `bun scripts/check-architecture.ts --strict`: **core is clean**.
@@ -177,7 +189,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Next priorities
 
-1. D1 interactive transactions are not available on the platform; D1 keeps the write-only buffered transaction. SQLite/MySQL have read/write ambient transactions.
+1. D1 interactive transactions are not available on the platform; D1 keeps the write-only buffered transaction. SQLite/PostgreSQL/MySQL have read/write ambient transactions.
 2. JSON context generation via build-time codegen (not a source generator) — implemented in `packages/cli/src/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
 3. DB/HTTP cancellation + command timeouts.
 4. Migration locks/check/dry-run landed; next is automatic lock renewal for very long migrations.
@@ -187,3 +199,5 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
 9. OTLP log export and the `/_reptar` dashboard landed; span export remains.
 10. CLI script lint is clean; generated browser bundles and some host/rpc package files still have pre-existing Ultracite findings.
+
+The post-matrix backlog (reference app, failure UX, API stability, residual adapters) lives in `plans/next-priorities.md`.

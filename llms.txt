@@ -19,6 +19,7 @@ Before writing code or assuming database schema, query the framework's machine-r
 - `bun reptar test:realtime [--workers|--kestrel]`: Two-host protocol smoke — runs `examples/realtime-rooms/smoke.ts` against local workerd (Durable Object + D1) AND native Kestrel (SQLite). Catches host-specific regressions (thread safety, WS event lifetime, D1 marshaling) before deploy.
 - `bun reptar dev:status`: Lists running dev servers and their listening ports — orphaned `dotnet run`/runfile processes serve stale builds and hold ports hostage in multi-agent repos.
 - `bun reptar self-check`: One-command ground truth: doctor → framework tests → netwasm lint → two-host realtime smoke. Run this after concurrent edits or before trusting cached state.
+- `bun run test:providers`: Runs the same CRUD/transaction/migration contract against SQLite, PostgreSQL, MySQL, and D1 (Miniflare); use `--require-all` in CI so a missing server fails.
 - `bun reptar mcp`: Launches the Model Context Protocol stdio server exposing `reptar_inspect`, `reptar_schema`, `reptar_routes`, `reptar_db_status`, `reptar_db_plan`, `reptar_check`, and `reptar_doctor`.
 - `bun reptar make:model <Name> [-f] [-m]`: Generates a `TableDef` + `[ReptarEntity]` DTO, wires `#:include`, updates the JSON context when present, and optionally generates a CRUD feature slice (`-f`) and migration (`-m`). The generator lives in `@reptar/cli-core`, so scaffolded projects expose the same commands as `bun run make:model`.
 - `bun reptar make:feature <Name>`: Generates a CRUD feature slice for an existing model.

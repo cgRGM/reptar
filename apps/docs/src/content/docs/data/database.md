@@ -99,6 +99,31 @@ await c.Db.TransactionAsync(async tx =>
 });
 ```
 
+### Provider transaction matrix
+
+`TransactionAsync` is a real read/write transaction on SQLite, PostgreSQL, and MySQL: reads inside the callback see uncommitted writes, and the transaction commits or rolls back as one unit. Cloudflare D1 has no interactive transaction API, so D1 uses the buffered write-only path: writes are collected and committed atomically through `batch`, but reads and table-shaped writes inside the callback fail explicitly.
+
+| Capability | SQLite | PostgreSQL | MySQL | D1 |
+| :-- | :-- | :-- | :-- | :-- |
+| CRUD + fluent queries | ✅ | ✅ | ✅ | ✅ |
+| Atomic `BatchAsync` | ✅ | ✅ | ✅ | ✅ |
+| Read/write `TransactionAsync` | ✅ | ✅ | ✅ | ❌ buffered writes only |
+| Migration checksums + lease lock | ✅ | ✅ | ✅ | ✅ |
+
+The provider contract suite runs the same CRUD, commit, rollback, nested-transaction, batch-atomicity, concurrency, and migration checks against every provider:
+
+```bash
+# SQLite always; Postgres/MySQL when reachable
+POSTGRES_URL='Host=localhost;Database=reptar_test;Username=postgres;Password=postgres;' \
+MYSQL_URL='Server=localhost;Port=3306;Database=reptar_test;User ID=root;Password=root;' \
+bun run test:providers
+
+# CI: missing Postgres/MySQL is a failure
+bun run test:providers --require-all
+```
+
+`deploy/provider-matrix-compose.yml` starts local Postgres and MySQL for the matrix. D1 runs through Miniflare against the same host bindings the C# client uses.
+
 ## 4. Fluent `TableQuery<T>` & Typed `ColumnRef<T>` Filters
 
 For single-table queries, combine `c.Db.From<T>(table)` with Roslyn-generated `ColumnRef<T>` tokens (`Schema.PostsCols.Published`, `Users.Email`, or `Post.Cols.CreatedAt`) for compile-time column safety and zero heap overhead:
