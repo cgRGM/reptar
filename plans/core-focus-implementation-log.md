@@ -65,6 +65,7 @@
 - `UseOtlp()` batches request records to an OTLP/HTTP logs endpoint and flushes on host shutdown; export failures never fail requests.
 - `MapReptarDashboard()` exposes a local-only `GET /_reptar` page with routes, tables, cache count, and metrics.
 - `UseSWR()` reports cache outcomes (`HIT`/`MISS`/`STALE`/`BYPASS`) to the same metrics registry.
+- `SwrOptions.Store` accepts an `ISwrCacheStore`; the default is a bounded in-process map, and `FileSwrCacheStore` shares entries between native processes.
 - SQL migrations store a SHA-256 checksum in `__reptar_migrations`; re-running an edited applied migration throws instead of silently diverging. Existing databases get the nullable column automatically.
 - Migration runners use a lease lock table (`__reptar_migrations_lock`, 30-minute expiry) so concurrent deploys cannot apply the same migration. `db check` and `db dry-run` (or `db migrate --check/--dry-run`) report pending SQL without applying it.
 - `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message.
@@ -158,7 +159,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Verification
 
-- `bun reptar test`: **313 passed**.
+- `bun reptar test`: **315 passed**.
 - `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
 - `bun scripts/check-architecture.ts --strict`: **core is clean**.
 - `framework/Reptar.Wasm` builds (NetWasm 0.10.1) with telemetry/preload/queue changes; the Rooms Worker module is 13.13 MB against a 16 MB budget.
@@ -179,7 +180,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 2. JSON context generation via build-time codegen (not a source generator) — implemented in `packages/cli/src/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
 3. DB/HTTP cancellation + command timeouts.
 4. Migration locks/check/dry-run landed; next is automatic lock renewal for very long migrations.
-5. Shared/distributed cache adapters (single-flight, ETag, compression, and cache metrics landed).
+5. Shared cache adapters landed (`ISwrCacheStore`, `FileSwrCacheStore`); distributed Redis/KV adapters are left to applications.
 6. `Rule<T>` typed path benchmarked (~50 ns JIT / ~66 ns AOT valid, 0 B); invalid path still allocates issues.
 7. `@reptar/cli-core` packaged and copied into scaffolds; `make:*` scaffold smoke step added.
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
