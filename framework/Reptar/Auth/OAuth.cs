@@ -189,12 +189,67 @@ public sealed class GitHubOAuthProvider : IOAuthProvider
         var email = root.TryGetProperty("email", out var ep) && ep.ValueKind == JsonValueKind.String
             ? ep.GetString()
             : null;
+        var emailVerified = false;
+
+        // The profile payload never marks emails verified, so linking an OAuth
+        // identity to an existing password account would be blocked. The
+        // user:email scope already requested above grants /user/emails, which
+        // carries primary+verified attestation.
+        try
+        {
+            var emailsReq = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/user/emails");
+            emailsReq.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+            emailsReq.Headers.UserAgent.Add(new ProductInfoHeaderValue("ReptarApp", "1.0"));
+
+            var emailsRes = _httpHandler != null
+                ? await _httpHandler(emailsReq)
+                : await _defaultHttp.SendAsync(emailsReq);
+
+            if (emailsRes.IsSuccessStatusCode)
+            {
+                var emailsJson = await emailsRes.Content.ReadAsStringAsync();
+                using var emailsDoc = JsonDocument.Parse(emailsJson);
+
+                string? verifiedPrimaryEmail = null;
+                string? verifiedAnyEmail = null;
+
+                foreach (var entry in emailsDoc.RootElement.EnumerateArray())
+                {
+                    if (entry.ValueKind != JsonValueKind.Object)
+                        continue;
+
+                    var addr = entry.TryGetProperty("email", out var e) && e.ValueKind == JsonValueKind.String
+                        ? e.GetString()
+                        : null;
+                    var isVerified = entry.TryGetProperty("verified", out var v) && v.ValueKind == JsonValueKind.True;
+                    var isPrimary = entry.TryGetProperty("primary", out var p) && p.ValueKind == JsonValueKind.True;
+
+                    if (string.IsNullOrEmpty(addr) || !isVerified)
+                        continue;
+
+                    verifiedPrimaryEmail ??= isPrimary ? addr : null;
+                    verifiedAnyEmail ??= addr;
+                }
+
+                if (verifiedPrimaryEmail is not null || verifiedAnyEmail is not null)
+                {
+                    email = verifiedPrimaryEmail ?? verifiedAnyEmail;
+                    emailVerified = true;
+                }
+            }
+        }
+        catch
+        {
+            // Unavailable scope, rate limit, or API change: fall back to the
+            // profile email, which stays unverified and therefore cannot be
+            // used to link to existing accounts.
+        }
 
         if (string.IsNullOrEmpty(email))
         {
             email = $"{login}@users.noreply.github.com";
         }
 
-        return new OAuthUserInfo("github", id, email, name, avatar);
+        return new OAuthUserInfo("github", id, email, name, avatar, emailVerified);
     }
 }

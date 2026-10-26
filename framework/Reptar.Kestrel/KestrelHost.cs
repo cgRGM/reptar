@@ -122,6 +122,11 @@ public static class KestrelHost
                 var wsRequest = ToWebSocketReptarRequest(http);
                 await app.HandleWebSocketOpenAsync(sessionId, wsRequest);
 
+                // Matches the Workers runtime's inbound WebSocket frame cap so
+                // both hosts reject oversized messages instead of letting a
+                // single connection accumulate unbounded memory.
+                const int MaxWebSocketMessageBytes = 1024 * 1024;
+
                 var buffer = new byte[8192];
                 try
                 {
@@ -129,15 +134,38 @@ public static class KestrelHost
                     {
                         using var ms = new MemoryStream();
                         System.Net.WebSockets.WebSocketReceiveResult result;
+                        var overLimit = false;
                         do
                         {
                             result = await socket.ReceiveAsync(new ArraySegment<byte>(buffer), http.RequestAborted);
                             if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close) break;
                             ms.Write(buffer, 0, result.Count);
+
+                            if (ms.Length > MaxWebSocketMessageBytes)
+                            {
+                                overLimit = true;
+                                break;
+                            }
                         } while (!result.EndOfMessage);
 
                         if (result.MessageType == System.Net.WebSockets.WebSocketMessageType.Close)
                         {
+                            break;
+                        }
+
+                        if (overLimit)
+                        {
+                            try
+                            {
+                                await socket.CloseAsync(
+                                    System.Net.WebSockets.WebSocketCloseStatus.MessageTooBig,
+                                    "Frame exceeds 1 MiB limit",
+                                    http.RequestAborted);
+                            }
+                            catch
+                            {
+                                // Socket already aborted by the peer.
+                            }
                             break;
                         }
 

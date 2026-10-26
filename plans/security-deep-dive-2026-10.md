@@ -523,6 +523,20 @@ left intact because other agents were actively committing. Bisect through `23323
 6. **Cross-language crypto must change in lockstep.** The password pre-hash had to land in `DevCrypto` and
    `crypto.ts` simultaneously or hashes hashed on one host would fail to verify on the other. Any future
    crypto parameter change needs a checklist item per provider.
+**Round 2 (same day) — deferred items landed:**
+
+| Finding | Status | Notes |
+|---|---|---|
+| F-38/F-57 native SSRF guard | ✅ | New `Data/HttpUrlPolicy.cs` mirrors the Workers shim blocklist (loopback, link-local, RFC1918, CGNAT 100.64/10, multicast/reserved, IPv6 fc/fd/fe80/::1/::ffff:127., metadata hosts) and is enforced by `DefaultHttpClient.FetchAsync`/`FetchBytesAsync` with an opt-in `allowedHosts` constructor. Closes the unauthenticated gateway `a2a/<url>` internal-network vector (`AiGateway` routes through `ctx.Http`). Divergence from the Workers guard (https-only there): native accepts http so self-hosted object storage keeps working — the private-network block is the boundary. Residual, shared with Workers: policy runs pre-DNS (decimal-IP hex octets, DNS rebinding not blocked) |
+| F-36 Kestrel WS receive loop | ✅ | Inbound frame accumulation capped at 1 MiB, closing with `MessageTooBig` — parity with the Workers runtime's own ~1 MiB cap; no more unbounded per-connection memory |
+| F-47 Wasm R2Client keys | ✅* | `StorageKey.Normalize` guards added to every R2 operation in the working tree — landing alongside (and interleaved with) the storage agent's in-flight R2 copy/bulk-delete feature commit, whose new methods also normalize. Not included in this commit to avoid capturing their half-finished JS-interop work |
+| GitHub verified email | ✅ | `/user/emails` (scope already requested) consulted for primary+verified attestation; verified email of any kind beats the unverified profile address; any failure falls back to unverified (linking stays blocked) |
+| F-56/F-58/F-06, WS auth/origin model | ⏳ deferred | Still open: workspace-tools auth gate, gateway auth/model allowlist, CSRF token middleware, WS upgrade auth+origin — these need product-behavior decisions and touch actively-contended files (`Middleware.cs`, `AiTools.cs`) |
+
 7. **Verify-before-fix, test-after-fix.** Every patch was verified against the actual file immediately before
    editing (anchors drifted twice mid-session due to concurrent edits — both caught because re-reads were
    mandatory), and every fix was pinned by a named regression test so it cannot silently regress.
+8. **Cross-language policy ports must be tested against runtime primitives, not specs.** `.NET`'s `Uri.Host`
+   returns IPv6 literals *with brackets* (`[::1]`) while JS `URL.hostname` strips them — the SSRF policy port
+   passed all hostname cases except IPv6 until an empirical scratch test revealed the divergence. Any ported
+   security policy needs a test matrix per parser, not just per rule.

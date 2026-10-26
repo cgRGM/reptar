@@ -619,8 +619,23 @@ public sealed class DefaultHttpClient : IHttpClient
                 : 100),
     };
 
+    private readonly string[]? _allowedHosts;
+
+    /// <summary>
+    /// <paramref name="allowedHosts"/>, when non-empty, is the only set of
+    /// hosts outbound requests may target (exact or subdomain match,
+    /// overriding the default private-network blocklist) — e.g. self-hosted
+    /// MinIO or internal webhooks. Without it, requests to loopback,
+    /// link-local, private, and metadata networks are rejected.
+    /// </summary>
+    public DefaultHttpClient(string[]? allowedHosts = null)
+    {
+        _allowedHosts = allowedHosts is { Length: > 0 } ? allowedHosts : null;
+    }
+
     public async Task<HttpResponseData> FetchAsync(string url, string method = "GET", Dictionary<string, string>? headers = null, string body = "")
     {
+        HttpUrlPolicy.EnsureAllowed(url, _allowedHosts);
         using var request = new System.Net.Http.HttpRequestMessage(new System.Net.Http.HttpMethod(method), url);
         var requestContentType = GetHeader(headers, "Content-Type");
         if (headers is not null)
@@ -665,6 +680,7 @@ public sealed class DefaultHttpClient : IHttpClient
         byte[]? body = null,
         string? contentType = null)
     {
+        HttpUrlPolicy.EnsureAllowed(url, _allowedHosts);
         using var request = new System.Net.Http.HttpRequestMessage(new System.Net.Http.HttpMethod(method), url);
         var requestContentType = string.IsNullOrWhiteSpace(contentType)
             ? GetHeader(headers, "Content-Type")

@@ -416,6 +416,84 @@ public sealed class SecurityRegressions
     }
 
     [Fact]
+    public void HttpUrlPolicy_BlocksPrivateAndMetadataTargets()
+    {
+        var blocked = new[]
+        {
+            "http://localhost/admin",
+            "http://api.localhost/x",
+            "http://minio.local/x",
+            "http://metadata/latest",
+            "http://metadata.google.internal/computeMetadata/v1/",
+            "http://127.0.0.1:8787/secret",
+            "http://10.0.0.1/",
+            "http://172.16.0.9/",
+            "http://172.31.255.255/",
+            "http://192.168.1.10/",
+            "http://169.254.169.254/latest/meta-data/",
+            "http://100.64.1.1/",
+            "http://224.0.0.1/",
+            "http://[::1]/",
+            "http://[fe80::1]/",
+            "http://[fd00::1]/",
+            "http://[fc00::1]/",
+            "http://[::ffff:127.0.0.1]/",
+            // Userinfo tricks do not smuggle private targets past the host check
+            "https://api.openai.com@169.254.169.254/latest",
+            "not a url",
+            "ftp://api.openai.com/x",
+        };
+
+        foreach (var url in blocked)
+            Assert.False(HttpUrlPolicy.IsAllowed(url), url);
+
+        var allowed = new[]
+        {
+            "https://api.openai.com/v1/chat/completions",
+            "https://oauth2.googleapis.com/token",
+            "http://api.github.com/user",
+        };
+
+        foreach (var url in allowed)
+            Assert.True(HttpUrlPolicy.IsAllowed(url), url);
+
+        Assert.Throws<InvalidOperationException>(
+            () => HttpUrlPolicy.EnsureAllowed("http://169.254.169.254/latest/meta-data/"));
+    }
+
+    [Fact]
+    public void HttpUrlPolicy_Allowlist_Overrides_Blocklist_For_Explicit_Hosts()
+    {
+        var allow = new[] { "minio.internal", "Corp.example.com" };
+
+        Assert.True(HttpUrlPolicy.IsAllowed("http://minio.internal:9000/bucket", allow));
+        Assert.True(HttpUrlPolicy.IsAllowed("http://s3.minio.internal/bucket", allow));
+        Assert.True(HttpUrlPolicy.IsAllowed("https://api.corp.example.com/v1", allow));
+
+        // Unlisted public hosts are rejected once an allowlist is configured
+        Assert.False(HttpUrlPolicy.IsAllowed("https://api.openai.com", allow));
+        // Suffix-match tricks do not count as subdomain matches
+        Assert.False(HttpUrlPolicy.IsAllowed("https://evilminio.internal.example.com", allow));
+        // Private hosts are still rejected when not on the allowlist
+        Assert.False(HttpUrlPolicy.IsAllowed("http://localhost/x", allow));
+    }
+
+    [Fact]
+    public void StorageKey_RejectsTraversalAndControlChars()
+    {
+        // Pins the shared normalizer the Wasm R2Client now applies to every
+        // operation (parity with LocalStorage/S3), so the guard cannot be
+        // dropped from any provider silently.
+        Assert.Equal("a/b.png", StorageKey.Normalize("/a/b.png"));
+
+        Assert.False(StorageKey.IsValid("../escape.png"));
+        Assert.False(StorageKey.IsValid("a/../../escape.png"));
+        Assert.False(StorageKey.IsValid("a/./b"));
+        Assert.False(StorageKey.IsValid("a\rb"));
+        Assert.False(StorageKey.IsValid(new string('a', StorageKey.MaxLength + 1)));
+    }
+
+    [Fact]
     public async Task LoginThrottle_SweepsExpiredWindows_UnderDistinctKeyFlood()
     {
         // Flood the map past its bound with keys whose windows expire quickly,
