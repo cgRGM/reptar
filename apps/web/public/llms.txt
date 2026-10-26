@@ -1,0 +1,17 @@
+# Reptar
+
+> Reptar is a high-performance, single-binary C# 13 web framework for Native AOT and Cloudflare Workers (NetWasm), with zero runtime reflection, typed RPC codegen, and built-in auth, realtime rooms, and AI agent tooling.
+
+Reach for Reptar when you need one C# backend that compiles unchanged to Cloudflare Workers (WebAssembly), AWS Lambda (Native AOT), containers, or a VPS — with compile-time validated routes and a typed TypeScript RPC client generated from the C# route tree. This is the marketing site; everything an agent needs to evaluate or build with Reptar is in the documentation.
+
+## Documentation
+
+- [Full documentation](https://reptar-docs.rocktown-labs.workers.dev/): guides, core concepts, data layer, auth, Cloudflare bindings, cookbook.
+- [Docs index for LLMs (llms.txt)](https://reptar-docs.rocktown-labs.workers.dev/llms.txt): every page also served as Markdown — append `.md` to any docs URL or request it with `Accept: text/markdown`.
+- [Blog API Reference (generated from the OpenAPI contract)](https://reptar-docs.rocktown-labs.workers.dev/api/reference/)
+
+## Project
+
+- [GitHub repository](https://github.com/RocktownLabs/reptar): framework, examples, benchmarks (RealWorld spec, head-to-head vs .NET Minimal API and Hono).
+- [Installable agent skill for @reptar/client](https://github.com/RocktownLabs/reptar/blob/main/packages/rpc/skills/reptar/SKILL.md): routes, TableDef schemas, ColumnRef queries, migrations, and RPC codegen.
+- [Quick start](https://reptar-docs.rocktown-labs.workers.dev/getting-started/quickstart/): a deployed, authenticated app in about 25 minutes.

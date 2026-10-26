@@ -1,0 +1,55 @@
+# Reptar landing site — https://reptar-web.rocktown-labs.workers.dev
+#
+# Machine-readable AI context for this product lives at:
+#   /llms.txt      — this site's entry point for agents
+#   https://reptar-docs.rocktown-labs.workers.dev/llms.txt — the full documentation index
+#
+# Stance: all AI agents — search, retrieval, training, and grounding — are
+# welcome to read this site. It is public marketing content for an open-source
+# framework; use it.
+
+User-agent: *
+Allow: /
+
+# AI search & answer discovery
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: meta-webindexer
+Allow: /
+
+User-agent: meta-externalfetcher
+Allow: /
+
+# Model training & grounding
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+Sitemap: https://reptar-web.rocktown-labs.workers.dev/sitemap.xml

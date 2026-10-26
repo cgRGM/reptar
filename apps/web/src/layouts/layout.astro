@@ -3,6 +3,9 @@ import "../styles/global.css";
 import Header from "../components/header.astro";
 import Footer from "../components/footer.astro";
 
+const SITE_URL = "https://reptar-web.rocktown-labs.workers.dev";
+const OG_IMAGE_URL = `${SITE_URL}/og.png`;
+
 interface Props {
   description?: string;
   title?: string;
@@ -12,6 +15,41 @@ const {
   description = "A C# web framework that compiles to Wasm and runs on Cloudflare Workers with zero frontend opinions.",
   title = "Reptar — The Backend",
 } = Astro.props;
+
+const canonicalUrl = new URL(Astro.url.pathname, SITE_URL).href;
+
+// Machine-readable identity for AI agents. Facts only — no fabricated
+// contact or license claims.
+const JSON_LD = JSON.stringify({
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@id": `${SITE_URL}/#org`,
+      "@type": "Organization",
+      name: "Rocktown Labs",
+      sameAs: ["https://github.com/RocktownLabs"],
+      url: `${SITE_URL}/`,
+    },
+    {
+      "@type": "SoftwareApplication",
+      applicationCategory: "DeveloperApplication",
+      description:
+        "High-performance, single-binary C# 13 web framework for Native AOT and Cloudflare Workers (NetWasm), with zero runtime reflection, typed RPC codegen, and built-in AI tooling.",
+      isAccessibleForFree: true,
+      name: "Reptar",
+      offers: {
+        "@type": "Offer",
+        price: "0",
+        priceCurrency: "USD",
+      },
+      operatingSystem: "Cloudflare Workers, AWS Lambda, Docker, Linux, macOS",
+      programmingLanguage: "C#",
+      publisher: { "@id": `${SITE_URL}/#org` },
+      sameAs: ["https://github.com/RocktownLabs/reptar"],
+      url: `${SITE_URL}/`,
+    },
+  ],
+});
 ---
 
 <!doctype html>
@@ -22,6 +60,18 @@ const {
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="generator" content={Astro.generator} />
     <meta name="description" content={description} />
+    <link rel="canonical" href={canonicalUrl} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Reptar" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonicalUrl} />
+    <meta property="og:image" content={OG_IMAGE_URL} />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={OG_IMAGE_URL} />
+    <script is:inline type="application/ld+json" set:html={JSON_LD} />
     <title>{title}</title>
   </head>
   <body class="min-h-screen bg-[#090a0c] text-zinc-100 flex flex-col font-sans antialiased selection:bg-emerald-900 selection:text-white">
