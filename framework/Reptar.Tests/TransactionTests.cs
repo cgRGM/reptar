@@ -49,17 +49,27 @@ public sealed class TransactionTests
     }
 
     [Fact]
-    public async Task Buffered_transaction_rejects_reads()
+    public async Task Sqlite_transaction_reads_uncommitted_writes_and_rolls_back()
     {
         using var db = new SqliteDbClient(":memory:");
         await db.EnsureCreatedAsync(Widgets);
 
-        await Assert.ThrowsAsync<NotSupportedException>(async () =>
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await db.TransactionAsync(async tx =>
             {
-                await tx.QueryAsync<TxWidget>("SELECT * FROM \"tx_widgets\"");
+                await tx.ExecuteAsync(
+                    "INSERT INTO \"tx_widgets\" (\"id\", \"name\") VALUES ('w3', 'Washer')");
+
+                var inside = await tx.GetAsync<TxWidget>(Widgets, "w3");
+                Assert.NotNull(inside);
+                Assert.Equal("Washer", inside!.Name);
+
+                throw new InvalidOperationException("rollback");
             });
         });
+
+        var outside = await db.GetAsync<TxWidget>(Widgets, "w3");
+        Assert.Null(outside);
     }
 }

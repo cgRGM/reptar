@@ -49,10 +49,11 @@
 - Kestrel response compression is enabled for JSON/text/HTML/SVG with SSE excluded.
 - `DefaultHttpClient` has a configurable timeout (`REPTAR_HTTP_TIMEOUT_SECONDS`, default 100s).
 - `PostgresDbClient` has `CommandTimeoutSeconds` (default 30s), including transaction-context commands.
-- `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message; provider-specific transaction contexts remain for read/write transactions.
+- `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message.
+- **SQLite now has real read/write transactions:** `SqliteDbClient.TransactionAsync` holds the write gate, begins a transaction on the single writer connection, and routes reads/writes through the ambient transaction. Tests verify uncommitted reads and rollback.
 - `DbTransactionExtensions` exposes the transaction contract on concrete clients.
 
-**Tests:** `ReliabilityTests` cover timeout 504 and module order; `TransactionTests` cover commit, rollback, and read rejection.
+**Tests:** `ReliabilityTests` cover timeout 504 and module order; `TransactionTests` cover commit, rollback, uncommitted reads, and buffered-transaction behavior.
 
 ### 4. AI / terminal boundary
 
@@ -126,7 +127,7 @@ Explicit relation descriptors are the right v1: no reflection, no attributes, wo
 
 ### `TransactionAsync` v1 is write-only
 
-`IDbClient.TransactionAsync` now buffers writes and commits through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside the buffer throw instead of silently escaping the transaction. Postgres still has `PostgresTransactionContext` for read/write transactions; SQLite/MySQL/D1 read/write transaction contexts are the next step.
+SQLite has a real ambient read/write transaction on its single writer connection. MySQL/D1 still use the write-only buffer, and Postgres has `PostgresTransactionContext` for read/write transactions. The next step is provider-specific read/write contexts for MySQL and D1.
 
 ### Benchmark gate needs a stable runner
 
@@ -153,7 +154,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Next priorities
 
-1. Read/write transaction contexts for SQLite/MySQL/D1 (v1 buffers writes only).
+1. Read/write transaction contexts for MySQL/D1 (SQLite now has an ambient read/write transaction; MySQL/D1 still use the write-only buffer).
 2. JSON context generation via build-time codegen (not a source generator) — implemented in `scripts/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
 3. DB/HTTP cancellation + command timeouts.
 4. Migration checksums / dry-run / lock.

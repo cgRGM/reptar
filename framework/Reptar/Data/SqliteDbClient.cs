@@ -25,6 +25,11 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     private int _drainerRunning;
     private bool _disposed;
 
+    // Flows with the caller's async context. When set, all commands use the
+    // single writer connection and the active transaction; reads see
+    // uncommitted writes, which is what a read/write transaction needs.
+    private static readonly AsyncLocal<SqliteTransaction?> AmbientTransaction = new();
+
     private const int MaxBatchSize = 64;
     private const int MaxTransientRetries = 3;
 
@@ -129,6 +134,16 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        if (AmbientTransaction.Value is not null)
+        {
+            rented = new RentedConnection(
+                _writeConnection,
+                isWriter: false,
+                this,
+                leaveOpen: true);
+            return true;
+        }
+
         if (_isMemory || (sql is not null && sql.Length <= 128 && sql.Contains("last_insert_rowid", StringComparison.OrdinalIgnoreCase)))
         {
             if (_writeGate.Wait(0))
@@ -163,6 +178,15 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        if (AmbientTransaction.Value is not null)
+        {
+            return new RentedConnection(
+                _writeConnection,
+                isWriter: false,
+                this,
+                leaveOpen: true);
+        }
+
         if (_isMemory || (sql is not null && sql.Length <= 128 && sql.Contains("last_insert_rowid", StringComparison.OrdinalIgnoreCase)))
         {
             await _writeGate.WaitAsync();
@@ -195,12 +219,18 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         private readonly SqliteConnection _connection;
         private readonly bool _isWriter;
+        private readonly bool _leaveOpen;
         private readonly SqliteDbClient _client;
 
-        public RentedConnection(SqliteConnection connection, bool isWriter, SqliteDbClient client)
+        public RentedConnection(
+            SqliteConnection connection,
+            bool isWriter,
+            SqliteDbClient client,
+            bool leaveOpen = false)
         {
             _connection = connection;
             _isWriter = isWriter;
+            _leaveOpen = leaveOpen;
             _client = client;
         }
 
@@ -208,6 +238,9 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         public void Dispose()
         {
+            if (_leaveOpen)
+                return;
+
             if (_isWriter)
             {
                 _client._writeGate.Release();
@@ -672,6 +705,22 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
 
+        var ambient = AmbientTransaction.Value;
+        if (ambient is not null)
+        {
+            command.Transaction = ambient;
+
+            try
+            {
+                using (command)
+                    return Task.FromResult(ExecuteNonQueryWithRetry(command));
+            }
+            catch (Exception ex)
+            {
+                return Task.FromException<int>(ex);
+            }
+        }
+
         var observer = WriteTimingObserver;
         long gateStarted = observer is not null ? Stopwatch.GetTimestamp() : 0;
 
@@ -961,8 +1010,76 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return row?.Count ?? 0;
     }
 
+    public Task TransactionAsync(Func<IDbClient, Task> action) =>
+        RunTransactionAsync(async () =>
+        {
+            await action(this);
+            return 0;
+        });
+
+    public Task<T> TransactionAsync<T>(Func<IDbClient, Task<T>> action) =>
+        RunTransactionAsync(() => action(this));
+
+    private async Task<T> RunTransactionAsync<T>(Func<Task<T>> action)
+    {
+        if (AmbientTransaction.Value is not null)
+            throw new NotSupportedException("Nested SQLite transactions are not supported.");
+
+        await _writeGate.WaitAsync();
+        SqliteTransaction? transaction = null;
+
+        try
+        {
+            transaction = (SqliteTransaction)await _writeConnection.BeginTransactionAsync();
+            AmbientTransaction.Value = transaction;
+            var result = await action();
+            await transaction.CommitAsync();
+            return result;
+        }
+        catch
+        {
+            if (transaction is not null)
+            {
+                try
+                {
+                    await transaction.RollbackAsync();
+                }
+                catch
+                {
+                    // Preserve the original failure.
+                }
+            }
+
+            throw;
+        }
+        finally
+        {
+            AmbientTransaction.Value = null;
+            transaction?.Dispose();
+            _writeGate.Release();
+        }
+    }
+
     public async Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
     {
+        var ambient = AmbientTransaction.Value;
+        if (ambient is not null)
+        {
+            var ambientChanges = 0;
+
+            foreach (var statement in statements)
+            {
+                await using var command = BuildCommand(
+                    _writeConnection,
+                    statement.Sql,
+                    statement.Param);
+                command.Transaction = ambient;
+                ambientChanges += await command.ExecuteNonQueryAsync();
+            }
+
+            return ambientChanges;
+        }
+
         await _writeGate.WaitAsync();
 
         try
@@ -1342,6 +1459,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
+        command.Transaction = AmbientTransaction.Value;
         var n = p1.Name.StartsWith('@') ? p1.Name : "@" + p1.Name;
         command.Parameters.AddWithValue(n, p1.Value ?? DBNull.Value);
         return command;
@@ -1351,6 +1469,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
+        command.Transaction = AmbientTransaction.Value;
         var n1 = p1.Name.StartsWith('@') ? p1.Name : "@" + p1.Name;
         var n2 = p2.Name.StartsWith('@') ? p2.Name : "@" + p2.Name;
         command.Parameters.AddWithValue(n1, p1.Value ?? DBNull.Value);
@@ -1362,6 +1481,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
+        command.Transaction = AmbientTransaction.Value;
         var n1 = p1.Name.StartsWith('@') ? p1.Name : "@" + p1.Name;
         var n2 = p2.Name.StartsWith('@') ? p2.Name : "@" + p2.Name;
         var n3 = p3.Name.StartsWith('@') ? p3.Name : "@" + p3.Name;
@@ -1375,6 +1495,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
+        command.Transaction = AmbientTransaction.Value;
         var n1 = p1.Name.StartsWith('@') ? p1.Name : "@" + p1.Name;
         var n2 = p2.Name.StartsWith('@') ? p2.Name : "@" + p2.Name;
         var n3 = p3.Name.StartsWith('@') ? p3.Name : "@" + p3.Name;
@@ -1390,6 +1511,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
+        command.Transaction = AmbientTransaction.Value;
         for (var i = 0; i < parameters.Length; i++)
         {
             var n = parameters[i].Name.StartsWith('@') ? parameters[i].Name : "@" + parameters[i].Name;
@@ -1402,6 +1524,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
+        command.Transaction = AmbientTransaction.Value;
 
         if (param is null)
             return command;
