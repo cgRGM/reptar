@@ -56,6 +56,7 @@
 - SQL migrations store a SHA-256 checksum in `__reptar_migrations`; re-running an edited applied migration throws instead of silently diverging. Existing databases get the nullable column automatically.
 - `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message.
 - **SQLite now has real read/write transactions:** `SqliteDbClient.TransactionAsync` holds the write gate, begins a transaction on the single writer connection, and routes reads/writes through the ambient transaction. Tests verify uncommitted reads and rollback.
+- **MySQL now has real read/write transactions:** `MySqlDbClient.TransactionAsync` holds one connection/transaction and routes reads/writes through an ambient scope. D1 remains write-only buffered because the platform has no interactive transaction API.
 - `DbTransactionExtensions` exposes the transaction contract on concrete clients.
 
 **Tests:** `ReliabilityTests` cover timeout 504 and module order; `TransactionTests` cover commit, rollback, uncommitted reads, and buffered-transaction behavior; `ETagTests` cover 304 revalidation and skip rules; `MetricsTests` cover Prometheus output; `MigrationChecksumTests` cover edited-migration rejection.
@@ -160,7 +161,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Next priorities
 
-1. Read/write transaction contexts for MySQL/D1 (SQLite now has an ambient read/write transaction; MySQL/D1 still use the write-only buffer).
+1. D1 interactive transactions are not available on the platform; D1 keeps the write-only buffered transaction. SQLite/MySQL have read/write ambient transactions.
 2. JSON context generation via build-time codegen (not a source generator) — implemented in `scripts/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
 3. DB/HTTP cancellation + command timeouts.
 4. Migration locks and dry-run/check mode (checksums landed).

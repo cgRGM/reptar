@@ -16,6 +16,38 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
     private readonly bool _isMock;
     private bool _disposed;
 
+    private sealed record TransactionScope(
+        MySqlConnection Connection,
+        MySqlTransaction Transaction);
+
+    private static readonly AsyncLocal<TransactionScope?> AmbientTransaction = new();
+
+    private readonly struct ConnectionLease : IAsyncDisposable
+    {
+        public MySqlConnection Connection { get; }
+        private readonly bool _owned;
+
+        public ConnectionLease(MySqlConnection connection, bool owned)
+        {
+            Connection = connection;
+            _owned = owned;
+        }
+
+        public ValueTask DisposeAsync() =>
+            _owned ? Connection.DisposeAsync() : ValueTask.CompletedTask;
+    }
+
+    private async ValueTask<ConnectionLease> RentConnectionAsync()
+    {
+        var ambient = AmbientTransaction.Value;
+        if (ambient is not null)
+            return new ConnectionLease(ambient.Connection, owned: false);
+
+        return new ConnectionLease(
+            await _dataSource!.OpenConnectionAsync(),
+            owned: true);
+    }
+
     public MySqlDbClient(string connectionString)
     {
         _connectionString = ConvertUrlToConnectionString(connectionString);
@@ -88,7 +120,8 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         if (_isMock || _dataSource is null)
             return [];
 
-        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using var lease = await RentConnectionAsync();
+        var connection = lease.Connection;
         await using var command = BuildCommand(connection, sql, param);
         await using var reader = await command.ExecuteReaderAsync();
 
@@ -129,7 +162,8 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         if (_isMock || _dataSource is null)
             return [];
 
-        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using var lease = await RentConnectionAsync();
+        var connection = lease.Connection;
         await using var command = BuildCommand(connection, sql, param);
         await using var reader = await command.ExecuteReaderAsync();
         var results = new List<T>();
@@ -155,9 +189,59 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         if (_isMock || _dataSource is null)
             return 1;
 
-        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using var lease = await RentConnectionAsync();
+        var connection = lease.Connection;
         await using var command = BuildCommand(connection, sql, param);
         return await command.ExecuteNonQueryAsync();
+    }
+
+    public Task TransactionAsync(Func<IDbClient, Task> action) =>
+        RunTransactionAsync(async () =>
+        {
+            await action(this);
+            return 0;
+        });
+
+    public Task<T> TransactionAsync<T>(Func<IDbClient, Task<T>> action) =>
+        RunTransactionAsync(() => action(this));
+
+    private async Task<T> RunTransactionAsync<T>(Func<Task<T>> action)
+    {
+        if (AmbientTransaction.Value is not null)
+            throw new NotSupportedException("Nested MySQL transactions are not supported.");
+
+        if (_isMock || _dataSource is null)
+            return await action();
+
+        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using var transaction =
+            (MySqlTransaction)await connection.BeginTransactionAsync();
+
+        AmbientTransaction.Value = new TransactionScope(connection, transaction);
+
+        try
+        {
+            var result = await action();
+            await transaction.CommitAsync();
+            return result;
+        }
+        catch
+        {
+            try
+            {
+                await transaction.RollbackAsync();
+            }
+            catch
+            {
+                // Preserve the original failure.
+            }
+
+            throw;
+        }
+        finally
+        {
+            AmbientTransaction.Value = null;
+        }
     }
 
     public async Task<int> BatchAsync(IReadOnlyList<DbStatement> statements)
@@ -165,7 +249,22 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         if (_isMock || _dataSource is null)
             return statements.Count;
 
-        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using var lease = await RentConnectionAsync();
+        var connection = lease.Connection;
+        var ambient = AmbientTransaction.Value;
+
+        if (ambient is not null)
+        {
+            var ambientChanges = 0;
+            foreach (var statement in statements)
+            {
+                await using var command = BuildCommand(connection, statement.Sql, statement.Param);
+                command.Transaction = ambient.Transaction;
+                ambientChanges += await command.ExecuteNonQueryAsync();
+            }
+            return ambientChanges;
+        }
+
         await using var transaction = await connection.BeginTransactionAsync();
 
         try
@@ -426,7 +525,8 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         if (_isMock || _dataSource is null)
             return false;
 
-        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using var lease = await RentConnectionAsync();
+        var connection = lease.Connection;
         await using var command = BuildCommand(connection, sql, param);
         var result = await command.ExecuteScalarAsync();
         return Convert.ToInt64(result, CultureInfo.InvariantCulture) == 1;
@@ -450,13 +550,15 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         if (_isMock || _dataSource is null)
             return;
 
-        await using var connection = await _dataSource.OpenConnectionAsync();
+        await using var lease = await RentConnectionAsync();
+        var connection = lease.Connection;
         foreach (var table in tables)
         {
             var ddl = SqlDialects.MySql.CreateTable(table);
             await using (var command = connection.CreateCommand())
             {
                 command.CommandText = ddl;
+                command.Transaction = AmbientTransaction.Value?.Transaction;
                 await command.ExecuteNonQueryAsync();
             }
 
@@ -466,6 +568,7 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
                 {
                     await using var command = connection.CreateCommand();
                     command.CommandText = indexSql;
+                    command.Transaction = AmbientTransaction.Value?.Transaction;
                     await command.ExecuteNonQueryAsync();
                 }
                 catch (MySqlException)
@@ -501,6 +604,7 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
+        command.Transaction = AmbientTransaction.Value?.Transaction;
 
         if (param is null)
             return command;
