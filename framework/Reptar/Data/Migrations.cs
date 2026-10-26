@@ -31,6 +31,7 @@ public sealed class SqlMigration : IMigration
 {
     public string Id { get; }
     public string Name { get; }
+    public string UpSql => _upSql;
     public string? Checksum { get; }
     private readonly string _upSql;
     private readonly string? _downSql;
@@ -64,9 +65,87 @@ public static class MigrationRunner
     private static IDbClient Unwrap(IDbClient db) =>
         db is InstrumentedDbClient instrumented ? instrumented.Inner : db;
 
+    private static async Task EnsureMigrationLockTableAsync(IDbClient db)
+    {
+        var sql = db is MySqlDbClient
+            ? """
+              CREATE TABLE IF NOT EXISTS `__reptar_migrations_lock` (
+                  `id` VARCHAR(64) PRIMARY KEY,
+                  `owner` VARCHAR(128) NOT NULL,
+                  `expires_at` VARCHAR(64) NOT NULL
+              )
+              """
+            : """
+              CREATE TABLE IF NOT EXISTS "__reptar_migrations_lock" (
+                  "id" TEXT PRIMARY KEY,
+                  "owner" TEXT NOT NULL,
+                  "expires_at" TEXT NOT NULL
+              )
+              """;
+
+        await db.ExecuteAsync(sql);
+    }
+
+    private static async Task<string> AcquireMigrationLockAsync(IDbClient db)
+    {
+        await EnsureMigrationLockTableAsync(db);
+
+        var owner = Guid.NewGuid().ToString("n");
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        var expiresAt = DateTimeOffset.UtcNow.AddMinutes(30).ToString("O");
+
+        var upsert = db is MySqlDbClient
+            ? """
+              INSERT INTO `__reptar_migrations_lock` (`id`, `owner`, `expires_at`)
+              VALUES ('migrations', @owner, @expiresAt)
+              ON DUPLICATE KEY UPDATE
+                  `owner` = IF(`expires_at` < @now, VALUES(`owner`), `owner`),
+                  `expires_at` = IF(`expires_at` < @now, VALUES(`expires_at`), `expires_at`)
+              """
+            : """
+              INSERT INTO "__reptar_migrations_lock" ("id", "owner", "expires_at")
+              VALUES ('migrations', @owner, @expiresAt)
+              ON CONFLICT("id") DO UPDATE SET
+                  "owner" = excluded."owner",
+                  "expires_at" = excluded."expires_at"
+              WHERE "__reptar_migrations_lock"."expires_at" < @now
+              """;
+
+        await db.ExecuteAsync(upsert, new Dictionary<string, object?>
+        {
+            ["owner"] = owner,
+            ["expiresAt"] = expiresAt,
+            ["now"] = now,
+        });
+
+        var select = db is MySqlDbClient
+            ? "SELECT `owner`, `expires_at` FROM `__reptar_migrations_lock` WHERE `id` = 'migrations'"
+            : """SELECT "owner", "expires_at" FROM "__reptar_migrations_lock" WHERE "id" = 'migrations'""";
+
+        var current = await db.QuerySingleOrDefaultAsync<MigrationLockRow>(select);
+        if (!string.Equals(current?.Owner, owner, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"Another migration runner holds the lock (owner {current?.Owner ?? "unknown"}, " +
+                $"expires {current?.ExpiresAt ?? "unknown"}). Retry after it finishes.");
+        }
+
+        return owner;
+    }
+
+    private static Task ReleaseMigrationLockAsync(IDbClient db, string owner)
+    {
+        var sql = db is MySqlDbClient
+            ? "DELETE FROM `__reptar_migrations_lock` WHERE `id` = 'migrations' AND `owner` = @owner"
+            : """DELETE FROM "__reptar_migrations_lock" WHERE "id" = 'migrations' AND "owner" = @owner""";
+
+        return db.ExecuteAsync(sql, new Dictionary<string, object?> { ["owner"] = owner });
+    }
+
     public static async Task EnsureMigrationTableAsync(IDbClient db)
     {
         db = Unwrap(db);
+        await EnsureMigrationLockTableAsync(db);
 
         if (db is MySqlDbClient)
         {
@@ -156,6 +235,23 @@ public static class MigrationRunner
         IEnumerable<IMigration> migrations)
     {
         db = Unwrap(db);
+        var owner = await AcquireMigrationLockAsync(db);
+
+        try
+        {
+            return await MigrateCoreAsync(db, migrations);
+        }
+        finally
+        {
+            await ReleaseMigrationLockAsync(db, owner);
+        }
+    }
+
+    private static async Task<IReadOnlyList<MigrationResult>> MigrateCoreAsync(
+        IDbClient db,
+        IEnumerable<IMigration> migrations)
+    {
+        db = Unwrap(db);
         await EnsureMigrationTableAsync(db);
         var applied = await GetAppliedMigrationChecksumsAsync(db);
         var ordered = migrations.OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
@@ -217,6 +313,27 @@ public static class MigrationRunner
         IEnumerable<IMigration> migrations,
         int steps = 1)
     {
+        if (steps <= 0)
+            return Array.Empty<MigrationResult>();
+
+        db = Unwrap(db);
+        var owner = await AcquireMigrationLockAsync(db);
+
+        try
+        {
+            return await RollbackCoreAsync(db, migrations, steps);
+        }
+        finally
+        {
+            await ReleaseMigrationLockAsync(db, owner);
+        }
+    }
+
+    private static async Task<IReadOnlyList<MigrationResult>> RollbackCoreAsync(
+        IDbClient db,
+        IEnumerable<IMigration> migrations,
+        int steps)
+    {
         if (steps <= 0) return Array.Empty<MigrationResult>();
 
         db = Unwrap(db);
@@ -263,6 +380,8 @@ public static class MigrationRunner
     public sealed record MigrationRow(string Id);
 
     public sealed record MigrationChecksumRow(string Id, string? Checksum);
+
+    public sealed record MigrationLockRow(string Owner, string ExpiresAt);
 
     public sealed record MigrationHistoryRow(string Id, string Name, string AppliedAt);
 
@@ -338,8 +457,56 @@ public static class MigrationRunner
 
         var ordered = allMigrations.Values.OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
 
+        if (subCommand is "migrate" or "up")
+        {
+            if (args.Contains("--dry-run", StringComparer.OrdinalIgnoreCase))
+                subCommand = "dry-run";
+            else if (args.Contains("--check", StringComparer.OrdinalIgnoreCase))
+                subCommand = "check";
+        }
+
         switch (subCommand)
         {
+            case "check":
+            {
+                var applied = await GetAppliedMigrationIdsAsync(db);
+                var pending = ordered.Where(m => !applied.Contains(m.Id)).ToList();
+
+                Console.WriteLine(
+                    pending.Count == 0
+                        ? "Database is up to date."
+                        : $"{pending.Count} pending migration(s):");
+
+                foreach (var migration in pending)
+                    Console.WriteLine($"  [ ] {migration.Id} ({migration.Name})");
+
+                return pending.Count == 0 ? 0 : 1;
+            }
+
+            case "dry-run":
+            {
+                var applied = await GetAppliedMigrationIdsAsync(db);
+                var pending = ordered.Where(m => !applied.Contains(m.Id)).ToList();
+
+                if (pending.Count == 0)
+                {
+                    Console.WriteLine("Database is up to date.");
+                    return 0;
+                }
+
+                foreach (var migration in pending)
+                {
+                    Console.WriteLine($"-- {migration.Id} ({migration.Name})");
+
+                    if (migration is SqlMigration sqlMigration)
+                        Console.WriteLine(sqlMigration.UpSql);
+
+                    Console.WriteLine();
+                }
+
+                return 0;
+            }
+
             case "status":
             {
                 var applied = await GetAppliedMigrationIdsAsync(db);
@@ -405,7 +572,7 @@ public static class MigrationRunner
             }
 
             default:
-                Console.Error.WriteLine($"Unknown db command '{subCommand}'. Available: status, migrate, rollback");
+                Console.Error.WriteLine($"Unknown db command '{subCommand}'. Available: status, check, dry-run, migrate, rollback");
                 return 1;
         }
     }

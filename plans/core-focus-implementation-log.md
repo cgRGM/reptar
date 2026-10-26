@@ -54,6 +54,7 @@
 - `UseETag()` / `ETag()` middleware adds strong ETags to successful JSON/text GET/HEAD responses and returns `304` on `If-None-Match`; it skips `no-store`, cookies, non-GET, and oversized bodies.
 - `UseMetrics()` / `MapMetrics()` exposes dependency-free Prometheus counters and latency histograms at `GET /metrics`, with route-template labels.
 - SQL migrations store a SHA-256 checksum in `__reptar_migrations`; re-running an edited applied migration throws instead of silently diverging. Existing databases get the nullable column automatically.
+- Migration runners use a lease lock table (`__reptar_migrations_lock`, 30-minute expiry) so concurrent deploys cannot apply the same migration. `db check` and `db dry-run` (or `db migrate --check/--dry-run`) report pending SQL without applying it.
 - `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message.
 - **SQLite now has real read/write transactions:** `SqliteDbClient.TransactionAsync` holds the write gate, begins a transaction on the single writer connection, and routes reads/writes through the ambient transaction. Tests verify uncommitted reads and rollback.
 - **MySQL now has real read/write transactions:** `MySqlDbClient.TransactionAsync` holds one connection/transaction and routes reads/writes through an ambient scope. D1 remains write-only buffered because the platform has no interactive transaction API.
@@ -144,7 +145,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Verification
 
-- `bun reptar test`: **289 passed**.
+- `bun reptar test`: **304 passed**.
 - `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
 - `bun scripts/check-architecture.ts --strict`: **core is clean**.
 - `framework/Reptar.Wasm` builds (NetWasm 0.10.1) with telemetry/preload/queue changes; the Rooms Worker module is 13.13 MB against a 16 MB budget.
@@ -164,7 +165,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 1. D1 interactive transactions are not available on the platform; D1 keeps the write-only buffered transaction. SQLite/MySQL have read/write ambient transactions.
 2. JSON context generation via build-time codegen (not a source generator) — implemented in `scripts/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
 3. DB/HTTP cancellation + command timeouts.
-4. Migration locks and dry-run/check mode (checksums landed).
+4. Migration locks/check/dry-run landed; next is automatic lock renewal for very long migrations.
 5. Cache metrics and shared/distributed cache adapters (single-flight, ETag, compression landed).
 6. Benchmark the new `Rule<T>` typed path against the manual-validation tier.
 7. Move `make:*` into the project-local CLI; add scaffold smoke test.
