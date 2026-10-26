@@ -141,7 +141,14 @@ public static class ReptarApi
         throw new PlatformNotSupportedException(
             "D1 is provided by the Workers shim. Use Db.Sqlite(...) for local development.");
 
-    public static IR2Client R2() => new NoopR2Client();
+    public static IR2Client R2(string? publicBaseUrl = null)
+    {
+#if NETWASM
+        return new R2Client(publicBaseUrl);
+#else
+        return new NoopR2Client();
+#endif
+    }
 
 #if !NETWASM
     public static LocalStorage LocalStorage(string rootDirectory = "uploads") =>

@@ -654,6 +654,34 @@ public sealed class ReptarApp
         return null;
     }
 
+    private static bool IsValidParamName(string name)
+    {
+        if (name.Length == 0)
+            return false;
+
+        var first = name[0];
+        if (first != '_' &&
+            first is not (>= 'A' and <= 'Z') &&
+            first is not (>= 'a' and <= 'z'))
+        {
+            return false;
+        }
+
+        for (var i = 1; i < name.Length; i++)
+        {
+            var character = name[i];
+            if (character != '_' &&
+                character is not (>= 'A' and <= 'Z') &&
+                character is not (>= 'a' and <= 'z') &&
+                character is not (>= '0' and <= '9'))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     // Accepts both ":param" (HTTP route style) and "{param}" (OpenAPI style).
     private static bool TryParseParamSegment(string segment, out string name)
     {
@@ -1180,8 +1208,16 @@ public sealed class ReptarApp
                     nameof(path));
             }
 
+            var name = segment[1..];
+            if (!IsValidParamName(name))
+            {
+                throw new ArgumentException(
+                    $"Catch-all parameter '{name}' must be a valid identifier.",
+                    nameof(path));
+            }
+
             isCatchAll = true;
-            catchAllName = segment[1..];
+            catchAllName = name;
             catchAllIndex = i;
             isParamSegment[i] = true;
             paramNames.Add(catchAllName);

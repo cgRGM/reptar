@@ -171,6 +171,137 @@ public sealed partial class S3Storage
             ? endpointUri.Host
             : $"{endpointUri.Host}:{endpointUri.Port}";
 
+    private SignedRequest SignObjectQueryRequest(
+        string method,
+        string key,
+        byte[] payload,
+        SortedDictionary<string, string> query,
+        Dictionary<string, string>? extraHeaders)
+    {
+        var (hostHeader, baseUri, canonicalUri) = BuildObjectEndpoint(key);
+        return SignRequest(
+            method,
+            hostHeader,
+            baseUri,
+            canonicalUri,
+            payload,
+            query,
+            extraHeaders);
+    }
+
+    private string BuildCopySource(string key)
+    {
+        var encodedKey = string.Join(
+            "/",
+            key.Split('/').Select(AwsUriEncode));
+
+        return $"/{AwsUriEncode(options.Bucket)}/{encodedKey}";
+    }
+
+    private static byte[] BuildDeleteXml(IReadOnlyList<string> keys)
+    {
+        var document = new XDocument(
+            new XElement(
+                "Delete",
+                keys.Select(key =>
+                    new XElement(
+                        "Object",
+                        new XElement("Key", key)))));
+
+        using var stream = new MemoryStream();
+        document.Save(stream);
+        return stream.ToArray();
+    }
+
+    private static byte[] BuildCompleteXml(
+        IReadOnlyList<(int Number, string ETag)> parts)
+    {
+        var document = new XDocument(
+            new XElement(
+                "CompleteMultipartUpload",
+                parts.Select(part =>
+                    new XElement(
+                        "Part",
+                        new XElement(
+                            "PartNumber",
+                            part.Number.ToString(CultureInfo.InvariantCulture)),
+                        new XElement("ETag", part.ETag)))));
+
+        using var stream = new MemoryStream();
+        document.Save(stream);
+        return stream.ToArray();
+    }
+
+    private static string? ParseUploadId(byte[] xml)
+    {
+        var document = LoadXml(xml);
+        return document?.Root?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "UploadId")
+            ?.Value;
+    }
+
+    private static string? ParseErrorCode(byte[] xml)
+    {
+        var document = LoadXml(xml);
+        var root = document?.Root;
+        if (root is null)
+            return null;
+
+        var error = root.Name.LocalName == "Error"
+            ? root
+            : root.Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "Error");
+
+        return error?
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "Code")
+            ?.Value;
+    }
+
+    private static string? ParseDeleteError(byte[] xml)
+    {
+        var document = LoadXml(xml);
+        var root = document?.Root;
+        if (root is null)
+            return null;
+
+        var error = root.Name.LocalName == "Error"
+            ? root
+            : root.Elements()
+                .FirstOrDefault(element => element.Name.LocalName == "Error");
+
+        if (error is null)
+            return null;
+
+        var key = error
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "Key")
+            ?.Value ?? "";
+        var code = error
+            .Elements()
+            .FirstOrDefault(element => element.Name.LocalName == "Code")
+            ?.Value ?? "unknown";
+
+        return $"{code} ({key})";
+    }
+
+    private static XDocument? LoadXml(byte[] xml)
+    {
+        if (xml.Length == 0)
+            return null;
+
+        try
+        {
+            using var stream = new MemoryStream(xml);
+            return XDocument.Load(stream);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static StorageObject ParseObject(
         string key,
         Dictionary<string, string> headers)

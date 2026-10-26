@@ -49,7 +49,7 @@ export interface R2ObjectsLike {
 }
 
 export interface R2BucketLike {
-  delete: (key: string) => Promise<unknown>;
+  delete: (key: string | string[]) => Promise<unknown>;
   get: (key: string, options?: R2GetOptions) => Promise<R2ObjectLike | null>;
   head: (key: string) => Promise<R2ObjectLike | null>;
   list?: (options?: {

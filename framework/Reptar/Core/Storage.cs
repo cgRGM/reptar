@@ -259,7 +259,8 @@ public static class Files
 
 public static class Storage
 {
-    public static IStorage R2() => ReptarApi.R2();
+    public static IStorage R2(string? publicBaseUrl = null) =>
+        ReptarApi.R2(publicBaseUrl);
 
 #if !NETWASM
     /// <summary>Local disk storage. Alias of <see cref="Local"/>.</summary>

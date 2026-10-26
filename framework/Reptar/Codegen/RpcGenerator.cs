@@ -301,7 +301,7 @@ internal static class TsEmitter
 
         var parameters = route.Path
             .Split('/')
-            .Where(segment => segment.StartsWith(':'))
+            .Where(segment => segment.StartsWith(':') || segment.StartsWith('*'))
             .Select(segment => segment[1..])
             .ToArray();
 
@@ -662,7 +662,14 @@ internal static class OpenApiEmitter
 
         foreach (var route in routes)
         {
-            var path = Regex.Replace(route.Path, ":([A-Za-z0-9_]+)", "{$1}");
+            var path = Regex.Replace(
+                route.Path,
+                "(^|/):([A-Za-z0-9_]+)",
+                "$1{$2}");
+            path = Regex.Replace(
+                path,
+                "(^|/)\\*([A-Za-z0-9_]+)",
+                "$1{$2}");
 
             if (!paths.TryGetValue(path, out var existing))
             {
@@ -710,7 +717,7 @@ internal static class OpenApiEmitter
             var operation = new Dictionary<string, object?>
             {
                 ["operationId"] = route.Name ??
-                    $"{route.Method.ToLowerInvariant()}{route.Path.Replace("/", "_").Replace(":", "")}",
+                    $"{route.Method.ToLowerInvariant()}{route.Path.Replace("/", "_").Replace(":", "").Replace("*", "")}",
                 ["responses"] = responses,
             };
 

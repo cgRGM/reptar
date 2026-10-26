@@ -40,6 +40,9 @@ export const r2exists = (key) => globalThis.__REPTAR_R2_EXISTS(key);
 
 export const r2delete = (key) => globalThis.__REPTAR_R2_DELETE(key);
 
+export const r2deleteMany = (keys) =>
+  globalThis.__REPTAR_R2_DELETE_MANY(keys);
+
 export const httpFetch = (url, method, headersJson, body) =>
   globalThis.__REPTAR_HTTP_FETCH(url, method, headersJson, body);
 

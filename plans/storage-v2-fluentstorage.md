@@ -71,3 +71,22 @@ Reptar's zero-dependency / zero-reflection / AOT-and-Wasm constraints.
 The result is still Reptar-shaped: one interface, default implementations for
 optional capabilities, three in-repo providers, no new packages, no reflection,
 and the same C# compiling to `net10.0` AOT and `netwasm0.1`.
+
+## Follow-up implemented
+
+- **`CopyAsync` / `MoveAsync`** — S3 uses `x-amz-copy-source` (server-side),
+  local disk uses `File.Copy` / `File.Move` plus the metadata sidecar, and the
+  default implementation reads + rewrites for any provider.
+- **Bulk delete** — S3 `DeleteObjects` in 1000-key batches with `Content-MD5`;
+  R2 array delete; local/default loop.
+- **Streaming and multipart uploads** — `PutAsync(key, Stream, ...)`. S3 switches
+  to multipart above 8 MiB, aborts on failure, and keeps memory bounded. Local
+  streams directly to disk. Providers without streaming buffer by default.
+- **R2 public URLs** — `Storage.R2("https://cdn.example.com")` and
+  `R2Client.PublicUrl`, with the `PublicUrls` capability.
+- **Named wildcard routes** — `/files/*path` captures nested keys for
+  `ctx.File(ctx.Param("path")!)`. Static and single-segment routes take
+  precedence; OpenAPI and the generated client understand the wildcard.
+
+Still deliberately deferred: directory transfer/progress reporting, transform
+sinks (gzip/encryption), queue abstractions, and non-R2/S3/local providers.

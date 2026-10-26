@@ -40,6 +40,9 @@ export const r2exists = (key) => globalThis.__REPTAR_R2_EXISTS(key);
 
 export const r2delete = (key) => globalThis.__REPTAR_R2_DELETE(key);
 
+export const r2deleteMany = (keys) =>
+  globalThis.__REPTAR_R2_DELETE_MANY(keys);
+
 export const kvGet = (key) => globalThis.__REPTAR_KV_GET(key);
 
 export const kvPut = (key, value, ttl) =>

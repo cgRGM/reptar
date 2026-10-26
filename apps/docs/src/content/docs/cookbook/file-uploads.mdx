@@ -28,13 +28,18 @@ All providers share the same core operations:
 | Operation | What it does |
 | :-- | :-- |
 | `PutAsync(key, bytes, contentType)` | Write an object. |
+| `PutAsync(key, stream, contentType)` | Stream an object; S3 uses multipart above 8 MB. |
 | `GetAsync(key)` | Read the full object, or `null` when missing. |
 | `ExistsAsync(key)` / `DeleteAsync(key)` | Cheap existence check / delete. |
+| `DeleteManyAsync(keys)` | Batch delete (native `DeleteObjects` on S3, array delete on R2). |
+| `CopyAsync(source, destination)` | Server-side copy on S3, file copy locally. |
+| `MoveAsync(source, destination)` | Copy + delete, with source cleanup. |
 | `HeadAsync(key)` | Size, content type, ETag, last-modified, user metadata. |
 | `GetRangeAsync(key, offset, length)` | Read a byte range without downloading the object. |
 | `ListAsync(options)` | Prefix listing with an opaque cursor. |
 | `PresignPutAsync(...)` | Direct browser → R2/S3 upload URL. |
 | `PresignGetAsync(...)` | Direct browser → R2/S3 download URL. |
+| `PublicUrl(key)` | CDN/custom-domain URL when configured. |
 
 Use `c.Storage.Capabilities` to branch portably:
 
@@ -132,9 +137,52 @@ If a provider only implements the four core methods, `c.File` falls back to
 `GetAsync` and still works. Range requests are served from memory in that case;
 providers with `StorageFeatures.RangeReads` avoid the full download.
 
+### Nested keys with wildcard routes
+
+A `:key` route param only matches one path segment. For nested keys, use a named
+catch-all (`*path`). Static and single-segment routes still take precedence:
+
+```csharp
+app.Get("/files/*path", ctx => ctx.File(ctx.Param("path")!));
+// GET /files/avatars/user_1/photo.png -> key "avatars/user_1/photo.png"
+
+app.Get("/files/health", ctx => ctx.Text("static wins"));
+app.Get("/files/:id", ctx => ctx.Text("one segment wins"));
+```
+
+The generated client exposes catch-all routes under their literal segment key:
+
+```ts
+await client.files["*path"]({ param: { path: "avatars/user_1/photo.png" } });
+```
+
+The client preserves `/` separators while percent-encoding each segment.
+
 ---
 
-## 4. Direct uploads and downloads
+## 4. Copy, move, and bulk delete
+
+```csharp
+var copied = await ctx.Storage.CopyAsync(
+    "avatars/source.png",
+    "avatars/copied.png",
+    new StorageCopyOptions
+    {
+        Overwrite = false,          // 412 when the destination exists
+        PreserveMetadata = true,    // content type, cache control, user metadata
+    });
+
+var moved = await ctx.Storage.MoveAsync("drafts/a.png", "published/a.png");
+await ctx.Storage.DeleteManyAsync(["drafts/b.png", "drafts/c.png"]);
+```
+
+S3 uses a native server-side copy (`x-amz-copy-source`) and the `DeleteObjects`
+batch endpoint. R2 uses an array delete. Local disk uses `File.Copy` /
+`File.Move` and moves the metadata sidecar.
+
+---
+
+## 5. Direct uploads and downloads
 
 For large files, skip the Worker/API entirely. Presign a URL and let the browser
 talk to R2/S3:
@@ -175,7 +223,64 @@ var download = await ctx.Storage.PresignGetAsync(
 
 ---
 
-## 5. Metadata and listing
+## 6. Streaming and multipart uploads
+
+`PutAsync(key, stream, contentType)` avoids buffering the whole object on
+providers that support streaming. S3 switches to multipart automatically above
+8 MB and aborts the upload if any part fails:
+
+```csharp
+await using var file = File.OpenRead("large-video.mp4");
+await ctx.Storage.PutAsync(
+    "videos/large-video.mp4",
+    file,
+    "video/mp4",
+    new StoragePutOptions
+    {
+        CacheControl = "public, max-age=31536000, immutable",
+    });
+```
+
+Check capabilities before relying on the optimized path:
+
+```csharp
+if (ctx.Storage.Capabilities.Has(StorageFeatures.MultipartUpload))
+{
+    // S3: 8 MiB parts, bounded memory.
+}
+```
+
+Providers without `StreamingPut` fall back to buffering through the default
+interface implementation.
+
+---
+
+## 7. Public URLs
+
+Set a CDN/custom domain once and use `PublicUrl` for public assets:
+
+```csharp
+Storage = Storage.R2("https://cdn.example.com");
+
+// or, on Native AOT:
+Storage = Storage.S3(new S3StorageOptions
+{
+    Endpoint = "https://acc123.r2.cloudflarestorage.com",
+    Bucket = "media",
+    AccessKeyId = "...",
+    SecretAccessKey = "...",
+    PublicBaseUrl = "https://cdn.example.com",
+});
+
+var url = ctx.Storage.PublicUrl("avatars/user_1.png");
+// https://cdn.example.com/avatars/user_1.png
+```
+
+`PublicUrl` returns null when the provider has no public base URL.
+
+---
+
+## 8. Metadata and listing
 
 ```csharp
 var info = await ctx.Storage.HeadAsync(key);
@@ -209,7 +314,7 @@ root in ordinal key order.
 
 ---
 
-## 6. Error mapping
+## 9. Error mapping
 
 Storage failures throw `StorageException` with a `StorageErrorCode`. The built-in
 HTTP helpers map them to:

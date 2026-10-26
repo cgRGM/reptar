@@ -173,7 +173,7 @@ Server-Timing: db;dur=14.2;desc="SQLite query", auth;dur=1.8;desc="JWT verificat
 | Member | Backed by | Description |
 | :-- | :-- | :-- |
 | `c.Db` | D1 / SQLite / Postgres / MySQL | Zero-reflection `[ReptarEntity]` queries, tuple parameters, CRUD helpers, and `BatchAsync`. |
-| `c.Storage` | R2 / S3 / local disk | Object operations: `PutAsync`, `GetAsync`, `ExistsAsync`, `DeleteAsync`, `HeadAsync`, `GetRangeAsync`, `ListAsync`, `PresignPutAsync`, `PresignGetAsync`. |
+| `c.Storage` | R2 / S3 / local disk | Object operations: `PutAsync` (bytes or stream), `GetAsync`, `ExistsAsync`, `DeleteAsync`, `DeleteManyAsync`, `CopyAsync`, `MoveAsync`, `HeadAsync`, `GetRangeAsync`, `ListAsync`, `PresignPutAsync`, `PresignGetAsync`, `PublicUrl`. |
 | `c.Cache` | Cloudflare KV | Low-latency key-value caching: `GetAsync`, `PutAsync`, `DeleteAsync`. |
 | `c.Queues` | Cloudflare Queues | Message queue producer: `SendAsync(queueName, message)`. |
 | `c.AI` | Workers AI | Serverless GPU inference: `RunAsync(model, prompt)`. |

@@ -216,7 +216,7 @@ await app.RunAsync(args);
 | --- | --- | --- |
 | `c.Req` | request | params, query, headers, body, files |
 | `c.Db` | D1 (via shim) | Dapper-like API |
-| `c.Storage` | R2 / S3 / local disk | `PutAsync`, `GetAsync`, `ExistsAsync`, `DeleteAsync`, `HeadAsync`, `GetRangeAsync`, `ListAsync`, `PresignPutAsync`, `PresignGetAsync`, `PublicUrl` |
+| `c.Storage` | R2 / S3 / local disk | `PutAsync` (bytes or stream), `GetAsync`, `ExistsAsync`, `DeleteAsync`, `DeleteManyAsync`, `CopyAsync`, `MoveAsync`, `HeadAsync`, `GetRangeAsync`, `ListAsync`, `PresignPutAsync`, `PresignGetAsync`, `PublicUrl` |
 | `c.AI` | Workers AI | `GenerateAsync`, `TranscribeAsync`, `EmbedAsync` |
 | `c.RateLimit` | RateLimit binding | `LimitAsync("chat", key)` |
 | `c.Cookies` | shim | get/set/delete, HttpOnly + SameSite defaults |

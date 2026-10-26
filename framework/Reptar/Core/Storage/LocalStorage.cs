@@ -35,10 +35,14 @@ public class LocalStorage : IStorage, IR2Client
         StorageFeatures.Metadata |
         StorageFeatures.RangeReads |
         StorageFeatures.Listing |
-        StorageFeatures.ConditionalPut);
+        StorageFeatures.ConditionalPut |
+        StorageFeatures.StreamingPut);
 
-    public Task<string> PutAsync(string key, byte[] body, string contentType) =>
-        PutAsync(key, body, contentType, new StoragePutOptions());
+    public async Task<string> PutAsync(string key, byte[] body, string contentType)
+    {
+        using var stream = new MemoryStream(body, writable: false);
+        return await PutAsync(key, stream, contentType, new StoragePutOptions());
+    }
 
     public async Task<string> PutAsync(
         string key,
@@ -46,40 +50,191 @@ public class LocalStorage : IStorage, IR2Client
         string contentType,
         StoragePutOptions options)
     {
+        using var stream = new MemoryStream(body, writable: false);
+        return await PutAsync(key, stream, contentType, options);
+    }
+
+    public async Task<string> PutAsync(
+        string key,
+        Stream body,
+        string contentType,
+        StoragePutOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        options ??= new StoragePutOptions();
+
         var fullPath = ResolvePath(key);
         var dir = Path.GetDirectoryName(fullPath);
         if (!string.IsNullOrEmpty(dir))
             Directory.CreateDirectory(dir);
 
-        if (options.Overwrite)
+        try
         {
-            await File.WriteAllBytesAsync(fullPath, body);
+            await using var stream = new FileStream(
+                fullPath,
+                options.Overwrite ? FileMode.Create : FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                81920,
+                useAsync: true);
+
+            await body.CopyToAsync(stream);
         }
-        else
+        catch (IOException exception) when (!options.Overwrite && File.Exists(fullPath))
         {
+            throw new StorageException(
+                StorageErrorCode.PreconditionFailed,
+                $"Object '{key}' already exists.",
+                key,
+                exception);
+        }
+        catch
+        {
+            // Do not leave a partially written object behind.
             try
             {
-                await using var stream = new FileStream(
-                    fullPath,
-                    FileMode.CreateNew,
-                    FileAccess.Write,
-                    FileShare.None,
-                    81920,
-                    useAsync: true);
-                await stream.WriteAsync(body);
+                if (File.Exists(fullPath))
+                    File.Delete(fullPath);
             }
-            catch (IOException exception) when (File.Exists(fullPath))
+            catch
             {
-                throw new StorageException(
-                    StorageErrorCode.PreconditionFailed,
-                    $"Object '{key}' already exists.",
-                    key,
-                    exception);
+                // Best-effort cleanup.
             }
+
+            throw;
         }
 
         await WriteMetadataAsync(key, contentType, options);
         return key;
+    }
+
+    public async Task<StorageObject?> CopyAsync(
+        string sourceKey,
+        string destinationKey,
+        StorageCopyOptions? options = null)
+    {
+        options ??= new StorageCopyOptions();
+
+        var sourcePath = ResolvePath(sourceKey);
+        var destinationPath = ResolvePath(destinationKey);
+
+        if (!File.Exists(sourcePath))
+        {
+            throw new StorageException(
+                StorageErrorCode.NotFound,
+                $"Object '{sourceKey}' does not exist.",
+                sourceKey);
+        }
+
+        if (!options.Overwrite && File.Exists(destinationPath))
+        {
+            throw new StorageException(
+                StorageErrorCode.PreconditionFailed,
+                $"Object '{destinationKey}' already exists.",
+                destinationKey);
+        }
+
+        var destinationDirectory = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrEmpty(destinationDirectory))
+            Directory.CreateDirectory(destinationDirectory);
+
+        try
+        {
+            File.Copy(sourcePath, destinationPath, options.Overwrite);
+        }
+        catch
+        {
+            try
+            {
+                if (File.Exists(destinationPath))
+                    File.Delete(destinationPath);
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+
+            throw;
+        }
+
+        var sourceMetadata = await ReadMetadataAsync(sourceKey);
+        var contentType = options.ContentType
+            ?? sourceMetadata?.ContentType
+            ?? Files.ContentTypeFor(sourceKey);
+        var cacheControl = options.CacheControl
+            ?? (options.PreserveMetadata ? sourceMetadata?.CacheControl : null);
+        var metadata = options.Metadata
+            ?? (options.PreserveMetadata ? sourceMetadata?.Metadata : null);
+
+        await WriteMetadataAsync(
+            destinationKey,
+            contentType,
+            new StoragePutOptions
+            {
+                Overwrite = true,
+                CacheControl = cacheControl,
+                Metadata = metadata,
+            });
+
+        return await HeadAsync(destinationKey);
+    }
+
+    public async Task<StorageObject?> MoveAsync(
+        string sourceKey,
+        string destinationKey,
+        StorageCopyOptions? options = null)
+    {
+        options ??= new StorageCopyOptions();
+
+        var sourcePath = ResolvePath(sourceKey);
+        var destinationPath = ResolvePath(destinationKey);
+
+        if (!File.Exists(sourcePath))
+        {
+            throw new StorageException(
+                StorageErrorCode.NotFound,
+                $"Object '{sourceKey}' does not exist.",
+                sourceKey);
+        }
+
+        if (!options.Overwrite && File.Exists(destinationPath))
+        {
+            throw new StorageException(
+                StorageErrorCode.PreconditionFailed,
+                $"Object '{destinationKey}' already exists.",
+                destinationKey);
+        }
+
+        var destinationDirectory = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrEmpty(destinationDirectory))
+            Directory.CreateDirectory(destinationDirectory);
+
+        var sourceMetadata = await ReadMetadataAsync(sourceKey);
+        File.Move(sourcePath, destinationPath, options.Overwrite);
+
+        var sourceMetaPath = MetaPath(sourceKey);
+        if (File.Exists(sourceMetaPath))
+            File.Delete(sourceMetaPath);
+
+        var contentType = options.ContentType
+            ?? sourceMetadata?.ContentType
+            ?? Files.ContentTypeFor(sourceKey);
+        var cacheControl = options.CacheControl
+            ?? (options.PreserveMetadata ? sourceMetadata?.CacheControl : null);
+        var metadata = options.Metadata
+            ?? (options.PreserveMetadata ? sourceMetadata?.Metadata : null);
+
+        await WriteMetadataAsync(
+            destinationKey,
+            contentType,
+            new StoragePutOptions
+            {
+                Overwrite = true,
+                CacheControl = cacheControl,
+                Metadata = metadata,
+            });
+
+        return await HeadAsync(destinationKey);
     }
 
     public async Task<byte[]?> GetAsync(string key)
@@ -104,6 +259,12 @@ public class LocalStorage : IStorage, IR2Client
             File.Delete(metaPath);
 
         return Task.CompletedTask;
+    }
+
+    public async Task DeleteManyAsync(IEnumerable<string> keys)
+    {
+        foreach (var key in keys)
+            await DeleteAsync(key);
     }
 
     public async Task<StorageObject?> HeadAsync(string key)

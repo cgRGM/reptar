@@ -146,7 +146,7 @@ Showcase app: [`examples/agent-cli`](./examples/agent-cli) — file-based `app.c
 
 Inside the Cloudflare Worker isolate, C# interacts with Cloudflare platform primitives with zero network hops:
 
-- **Storage (`ctx.Storage`)**: R2 / S3 / local object store with metadata (`HeadAsync`), byte ranges (`GetRangeAsync`), cursor listing (`ListAsync`), presigned uploads and downloads, typed `StorageException` errors, and `ctx.File` / `ctx.Attachment` for `ETag`/`304`, `Range`/`206`, and `HEAD` responses.
+- **Storage (`ctx.Storage`)**: R2 / S3 / local object store with metadata (`HeadAsync`), byte ranges (`GetRangeAsync`), cursor listing (`ListAsync`), presigned uploads and downloads, server-side copy/move, batch delete, streaming/multipart uploads, public CDN URLs, typed `StorageException` errors, and `ctx.File` / `ctx.Attachment` for `ETag`/`304`, `Range`/`206`, and `HEAD` responses.
 - **Cache (`ctx.Cache`)**: KV key-value store with TTL support.
 - **Queues (`ctx.Queue`)**: Message queue producer.
 - **Workers AI (`ctx.AI`)**: Edge LLM inferences (`@cf/meta/llama-3.2-1b-instruct`).

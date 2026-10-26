@@ -1,5 +1,6 @@
 #if !NETWASM
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Reptar;
@@ -26,6 +27,9 @@ public sealed class S3StorageOptions
 /// </summary>
 public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2Client
 {
+    private const int MultipartPartSize = 8 * 1024 * 1024;
+    private const int MaxDeleteBatch = 1000;
+
     private readonly IHttpClient _http = options.HttpClient ?? new DefaultHttpClient();
     private readonly Func<DateTimeOffset> _clock = options.Clock ?? (() => DateTimeOffset.UtcNow);
 
@@ -39,7 +43,11 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
                 StorageFeatures.Listing |
                 StorageFeatures.PresignUpload |
                 StorageFeatures.PresignDownload |
-                StorageFeatures.ConditionalPut;
+                StorageFeatures.ConditionalPut |
+                StorageFeatures.ServerSideCopy |
+                StorageFeatures.MultipartUpload |
+                StorageFeatures.StreamingPut |
+                StorageFeatures.BulkDelete;
 
             if (!string.IsNullOrWhiteSpace(options.PublicBaseUrl))
                 features |= StorageFeatures.PublicUrls;
@@ -81,6 +89,409 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
 
         ThrowForStatus(response.Status, normalizedKey, "PUT");
         return normalizedKey;
+    }
+
+    public async Task<string> PutAsync(
+        string key,
+        Stream body,
+        string contentType,
+        StoragePutOptions? putOptions = null)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+        putOptions ??= new StoragePutOptions();
+
+        var normalizedKey = StorageKey.Normalize(key);
+
+        if (!putOptions.Overwrite && await HeadAsync(normalizedKey) is not null)
+        {
+            throw new StorageException(
+                StorageErrorCode.PreconditionFailed,
+                $"Object '{normalizedKey}' already exists.",
+                normalizedKey);
+        }
+
+        var buffer = new byte[MultipartPartSize];
+        var read = await ReadFullAsync(body, buffer);
+
+        if (read == 0)
+            return await PutAsync(normalizedKey, [], contentType, putOptions);
+
+        if (read < buffer.Length)
+        {
+            var single = new byte[read];
+            Array.Copy(buffer, single, read);
+            return await PutAsync(normalizedKey, single, contentType, putOptions);
+        }
+
+        return await PutMultipartAsync(
+            normalizedKey,
+            buffer,
+            read,
+            body,
+            contentType,
+            putOptions);
+    }
+
+    public async Task<StorageObject?> CopyAsync(
+        string sourceKey,
+        string destinationKey,
+        StorageCopyOptions? copyOptions = null)
+    {
+        copyOptions ??= new StorageCopyOptions();
+
+        var source = StorageKey.Normalize(sourceKey);
+        var destination = StorageKey.Normalize(destinationKey);
+
+        var info = await HeadAsync(source);
+        if (info is null)
+        {
+            throw new StorageException(
+                StorageErrorCode.NotFound,
+                $"Object '{source}' does not exist.",
+                source);
+        }
+
+        if (!copyOptions.Overwrite && await HeadAsync(destination) is not null)
+        {
+            throw new StorageException(
+                StorageErrorCode.PreconditionFailed,
+                $"Object '{destination}' already exists.",
+                destination);
+        }
+
+        var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["x-amz-copy-source"] = BuildCopySource(source),
+        };
+
+        var replaceMetadata =
+            !copyOptions.PreserveMetadata ||
+            copyOptions.ContentType is not null ||
+            copyOptions.CacheControl is not null ||
+            copyOptions.Metadata is not null;
+
+        if (replaceMetadata)
+        {
+            extra["x-amz-metadata-directive"] = "REPLACE";
+
+            var contentType = copyOptions.ContentType ?? info.ContentType;
+            if (!string.IsNullOrWhiteSpace(contentType))
+                extra["content-type"] = contentType.Trim();
+
+            var cacheControl = copyOptions.CacheControl
+                ?? (copyOptions.PreserveMetadata
+                    ? info.MetadataValue("cache-control")
+                    : null);
+            if (!string.IsNullOrWhiteSpace(cacheControl))
+                extra["cache-control"] = cacheControl.Trim();
+
+            var metadata = copyOptions.Metadata
+                ?? (copyOptions.PreserveMetadata
+                    ? info.MetadataExcept("cache-control")
+                    : null);
+            if (metadata is { Count: > 0 })
+            {
+                foreach (var (name, value) in metadata)
+                    extra[$"x-amz-meta-{name}"] = value;
+            }
+        }
+        else
+        {
+            extra["x-amz-metadata-directive"] = "COPY";
+        }
+
+        var signed = SignObjectRequest("PUT", destination, [], extra);
+        var copyContentType = GetHeader(extra, "content-type");
+        var response = await _http.FetchBytesAsync(
+            signed.Url,
+            "PUT",
+            signed.Headers,
+            [],
+            copyContentType);
+        ThrowForStatus(response.Status, destination, "COPY");
+
+        var error = ParseErrorCode(response.Body);
+        if (error is not null)
+        {
+            throw new StorageException(
+                StorageErrorCode.Unknown,
+                $"S3 COPY failed: {error}",
+                destination);
+        }
+
+        return await HeadAsync(destination);
+    }
+
+    public async Task<StorageObject?> MoveAsync(
+        string sourceKey,
+        string destinationKey,
+        StorageCopyOptions? copyOptions = null)
+    {
+        var source = StorageKey.Normalize(sourceKey);
+        var copied = await CopyAsync(source, destinationKey, copyOptions);
+        await DeleteAsync(source);
+        return copied;
+    }
+
+    public async Task DeleteManyAsync(IEnumerable<string> keys)
+    {
+        var normalized = new List<string>();
+        foreach (var key in keys)
+            normalized.Add(StorageKey.Normalize(key));
+
+        for (var offset = 0; offset < normalized.Count; offset += MaxDeleteBatch)
+        {
+            var count = Math.Min(MaxDeleteBatch, normalized.Count - offset);
+            var batch = normalized.GetRange(offset, count);
+            var xml = BuildDeleteXml(batch);
+            var query = new SortedDictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["delete"] = "",
+            };
+
+            var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["content-md5"] = Convert.ToBase64String(MD5.HashData(xml)),
+                ["content-type"] = "application/xml",
+            };
+
+            var (hostHeader, baseUri, canonicalUri) = BuildBucketEndpoint();
+            var signed = SignRequest(
+                "POST",
+                hostHeader,
+                baseUri,
+                canonicalUri,
+                xml,
+                query,
+                extra);
+
+            var response = await _http.FetchBytesAsync(
+                signed.Url,
+                "POST",
+                signed.Headers,
+                xml,
+                "application/xml");
+
+            ThrowForStatus(response.Status, "", "DELETE objects");
+
+            var error = ParseDeleteError(response.Body);
+            if (error is not null)
+            {
+                throw new StorageException(
+                    StorageErrorCode.Unknown,
+                    $"S3 delete failed: {error}",
+                    "");
+            }
+        }
+    }
+
+    private async Task<string> PutMultipartAsync(
+        string key,
+        byte[] firstPart,
+        int firstLength,
+        Stream body,
+        string contentType,
+        StoragePutOptions putOptions)
+    {
+        var uploadId = await CreateMultipartUploadAsync(key, contentType, putOptions);
+
+        try
+        {
+            var parts = new List<(int Number, string ETag)>();
+            var partNumber = 1;
+            var buffer = firstPart;
+            var length = firstLength;
+
+            while (length > 0)
+            {
+                if (partNumber > 10_000)
+                {
+                    throw new StorageException(
+                        StorageErrorCode.TooLarge,
+                        "S3 multipart supports at most 10,000 parts; the object is too large for the current part size.",
+                        key);
+                }
+
+                var etag = await UploadPartAsync(
+                    key,
+                    uploadId,
+                    partNumber,
+                    buffer,
+                    length);
+                parts.Add((partNumber, etag));
+                partNumber++;
+
+                buffer = new byte[MultipartPartSize];
+                length = await ReadFullAsync(body, buffer);
+            }
+
+            await CompleteMultipartUploadAsync(key, uploadId, parts);
+            return key;
+        }
+        catch
+        {
+            await AbortMultipartUploadAsync(key, uploadId);
+            throw;
+        }
+    }
+
+    private async Task<string> CreateMultipartUploadAsync(
+        string key,
+        string contentType,
+        StoragePutOptions putOptions)
+    {
+        var query = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["uploads"] = "",
+        };
+
+        var extra = BuildPutHeaders(contentType, putOptions);
+        var signed = SignObjectQueryRequest("POST", key, [], query, extra);
+        var createContentType = GetHeader(extra, "content-type");
+        var response = await _http.FetchBytesAsync(
+            signed.Url,
+            "POST",
+            signed.Headers,
+            [],
+            createContentType);
+        ThrowForStatus(response.Status, key, "multipart create");
+
+        var uploadId = ParseUploadId(response.Body);
+        if (string.IsNullOrWhiteSpace(uploadId))
+        {
+            throw new StorageException(
+                StorageErrorCode.Unknown,
+                "S3 multipart create returned no upload id.",
+                key);
+        }
+
+        return uploadId;
+    }
+
+    private async Task<string> UploadPartAsync(
+        string key,
+        string uploadId,
+        int partNumber,
+        byte[] buffer,
+        int length)
+    {
+        var query = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["partNumber"] = partNumber.ToString(CultureInfo.InvariantCulture),
+            ["uploadId"] = uploadId,
+        };
+
+        var payload = length == buffer.Length
+            ? buffer
+            : buffer.AsSpan(0, length).ToArray();
+
+        var signed = SignObjectQueryRequest("PUT", key, payload, query, null);
+        var response = await _http.FetchBytesAsync(
+            signed.Url,
+            "PUT",
+            signed.Headers,
+            payload,
+            "application/octet-stream");
+
+        ThrowForStatus(response.Status, key, $"multipart part {partNumber}");
+
+        var etag = GetHeader(response.Headers, "etag")?.Trim();
+        if (string.IsNullOrWhiteSpace(etag))
+        {
+            throw new StorageException(
+                StorageErrorCode.Unknown,
+                $"S3 multipart part {partNumber} returned no ETag.",
+                key);
+        }
+
+        return etag.StartsWith('"') ? etag : $"\"{etag}\"";
+    }
+
+    private async Task CompleteMultipartUploadAsync(
+        string key,
+        string uploadId,
+        IReadOnlyList<(int Number, string ETag)> parts)
+    {
+        var xml = BuildCompleteXml(parts);
+        var query = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["uploadId"] = uploadId,
+        };
+
+        var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["content-type"] = "application/xml",
+        };
+
+        var signed = SignObjectQueryRequest("POST", key, xml, query, extra);
+        var response = await _http.FetchBytesAsync(
+            signed.Url,
+            "POST",
+            signed.Headers,
+            xml,
+            "application/xml");
+
+        ThrowForStatus(response.Status, key, "multipart complete");
+
+        var error = ParseErrorCode(response.Body);
+        if (error is not null)
+        {
+            throw new StorageException(
+                StorageErrorCode.Unknown,
+                $"S3 multipart complete failed: {error}",
+                key);
+        }
+    }
+
+    private async Task AbortMultipartUploadAsync(string key, string uploadId)
+    {
+        try
+        {
+            var query = new SortedDictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["uploadId"] = uploadId,
+            };
+
+            var signed = SignObjectQueryRequest("DELETE", key, [], query, null);
+            await _http.FetchBytesAsync(signed.Url, "DELETE", signed.Headers);
+        }
+        catch
+        {
+            // Best-effort cleanup; the original exception is more useful.
+        }
+    }
+
+    private static Dictionary<string, string> BuildPutHeaders(
+        string contentType,
+        StoragePutOptions putOptions)
+    {
+        var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(contentType))
+            extra["content-type"] = contentType.Trim();
+        if (!string.IsNullOrWhiteSpace(putOptions.CacheControl))
+            extra["cache-control"] = putOptions.CacheControl.Trim();
+        if (putOptions.Metadata is { Count: > 0 })
+        {
+            foreach (var (name, value) in putOptions.Metadata)
+                extra[$"x-amz-meta-{name}"] = value;
+        }
+
+        return extra;
+    }
+
+    private static async Task<int> ReadFullAsync(Stream stream, byte[] buffer)
+    {
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(total));
+            if (read == 0)
+                break;
+            total += read;
+        }
+
+        return total;
     }
 
     public async Task<byte[]?> GetAsync(string key)

@@ -60,9 +60,25 @@ const buildUrl = (
   let path = segments.join("/");
 
   if (args?.param) {
-    for (const [key, value] of Object.entries(args.param)) {
-      path = path.replaceAll(`:${key}`, encodeURIComponent(value));
-    }
+    // Replace each placeholder once so values containing ':' or '*' cannot be
+    // re-interpreted by a later replacement. Catch-all params preserve path
+    // separators while still encoding each segment.
+    path = path.replaceAll(
+      /(?<prefix>^|\/)(?<marker>[:*])(?<key>[A-Za-z0-9_]+)/gu,
+      (match: string, prefix: string, marker: string, key: string) => {
+        const value = args.param?.[key];
+        if (value === undefined) {
+          return match;
+        }
+
+        const encoded =
+          marker === "*"
+            ? value.split("/").map(encodeURIComponent).join("/")
+            : encodeURIComponent(value);
+
+        return `${prefix}${encoded}`;
+      }
+    );
   }
 
   let url = `${baseUrl.replace(/\/+$/u, "")}/${path.replace(/^\/+/u, "")}`;

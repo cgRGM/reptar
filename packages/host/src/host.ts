@@ -171,6 +171,7 @@ interface ReptarScope {
     messagesJson: string
   ) => Promise<void>;
   __REPTAR_R2_DELETE?: (key: string) => Promise<void>;
+  __REPTAR_R2_DELETE_MANY?: (keys: string) => Promise<void>;
   __REPTAR_R2_EXISTS?: (key: string) => Promise<boolean>;
   __REPTAR_R2_GET?: (key: string) => Promise<Uint8Array | null>;
   __REPTAR_R2_GET_RANGE?: (
@@ -420,6 +421,25 @@ const registerR2Bindings = (
   scope.__REPTAR_R2_DELETE ??= async (key) => {
     if (r2.delete) {
       await r2.delete(key);
+    }
+  };
+
+  scope.__REPTAR_R2_DELETE_MANY ??= async (keysJson) => {
+    const keys = keysJson.split("\n").filter(Boolean);
+    if (keys.length === 0) {
+      return;
+    }
+
+    if (bucket?.delete) {
+      await bucket.delete(keys);
+      return;
+    }
+
+    if (r2.delete) {
+      for (const key of keys) {
+        // eslint-disable-next-line no-await-in-loop
+        await r2.delete(key);
+      }
     }
   };
 

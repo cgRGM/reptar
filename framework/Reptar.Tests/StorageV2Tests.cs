@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Xunit;
 
 namespace Reptar.Tests;
@@ -126,6 +127,281 @@ public sealed class StorageV2Tests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task LocalStorage_StreamsCopiesMovesAndDeletesMany()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var storage = new LocalStorage(root);
+            await storage.PutAsync(
+                "source.png",
+                new MemoryStream(SampleBytes, writable: false),
+                "image/png",
+                new StoragePutOptions
+                {
+                    CacheControl = "public, max-age=60",
+                    Metadata = new Dictionary<string, string> { ["owner"] = "user_1" },
+                });
+
+            var source = await storage.HeadAsync("source.png");
+            Assert.NotNull(source);
+            Assert.Equal(SampleBytes.Length, source!.Size);
+
+            var copied = await storage.CopyAsync("source.png", "copied.png");
+            Assert.NotNull(copied);
+            Assert.Equal(SampleBytes.Length, copied!.Size);
+            Assert.Equal("image/png", copied.ContentType);
+            Assert.Equal("public, max-age=60", copied.MetadataValue("cache-control"));
+            Assert.Equal("user_1", copied.MetadataValue("owner"));
+
+            var moved = await storage.MoveAsync("copied.png", "moved.png");
+            Assert.NotNull(moved);
+            Assert.Null(await storage.HeadAsync("copied.png"));
+            Assert.NotNull(await storage.HeadAsync("moved.png"));
+
+            await storage.DeleteManyAsync(["source.png", "moved.png"]);
+            Assert.Null(await storage.HeadAsync("source.png"));
+            Assert.Null(await storage.HeadAsync("moved.png"));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task S3Storage_CopyAsync_UsesServerSideCopyAndPreservesMetadata()
+    {
+        var http = new FakeHttpClient();
+        var s3 = CreateS3(
+            new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero),
+            http);
+
+        http.Handler = request =>
+        {
+            if (request.Method == "HEAD")
+            {
+                return new HttpBytesResponse(
+                    200,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["content-length"] = SampleBytes.Length.ToString(),
+                        ["content-type"] = "image/png",
+                        ["etag"] = "\"source-etag\"",
+                        ["cache-control"] = "public, max-age=60",
+                        ["x-amz-meta-owner"] = "user_1",
+                    },
+                    []);
+            }
+
+            return new HttpBytesResponse(
+                200,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                []);
+        };
+
+        var copied = await s3.CopyAsync("avatars/source.png", "avatars/copied.png");
+
+        Assert.NotNull(copied);
+        Assert.Equal("avatars/copied.png", copied!.Key);
+        Assert.Equal("image/png", copied.ContentType);
+
+        var copyRequest = Assert.Single(
+            http.Requests,
+            request => request.Method == "PUT");
+        Assert.Equal(
+            "/media/avatars/source.png",
+            copyRequest.Headers["x-amz-copy-source"]);
+        Assert.Equal(
+            "COPY",
+            copyRequest.Headers["x-amz-metadata-directive"]);
+    }
+
+    [Fact]
+    public async Task S3Storage_PutAsyncStream_UsesMultipartAbovePartSize()
+    {
+        var http = new FakeHttpClient();
+        var s3 = CreateS3(
+            new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero),
+            http);
+
+        var partNumber = 0;
+        http.Handler = request =>
+        {
+            if (request.Url.Contains("uploads=", StringComparison.Ordinal))
+            {
+                return new HttpBytesResponse(
+                    200,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    Encoding.UTF8.GetBytes(
+                        "<InitiateMultipartUploadResult><UploadId>upload-1</UploadId></InitiateMultipartUploadResult>"));
+            }
+
+            if (request.Url.Contains("partNumber=", StringComparison.Ordinal))
+            {
+                partNumber++;
+                return new HttpBytesResponse(
+                    200,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["etag"] = $"\"etag-{partNumber}\"",
+                    },
+                    []);
+            }
+
+            if (request.Url.Contains("uploadId=upload-1", StringComparison.Ordinal))
+            {
+                return new HttpBytesResponse(
+                    200,
+                    new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                    Encoding.UTF8.GetBytes("<CompleteMultipartUploadResult/>"));
+            }
+
+            return new HttpBytesResponse(
+                200,
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                []);
+        };
+
+        var payload = new byte[(8 * 1024 * 1024) + 1];
+        payload[0] = 0x01;
+        payload[^1] = 0x02;
+
+        await s3.PutAsync(
+            "large.bin",
+            new MemoryStream(payload, writable: false),
+            "application/octet-stream");
+
+        Assert.Equal(2, partNumber);
+
+        var complete = Assert.Single(
+            http.Requests,
+            request => request.Url.Contains("uploadId=upload-1", StringComparison.Ordinal) &&
+                       request.Method == "POST");
+
+        var completeXml = Encoding.UTF8.GetString(complete.Body!);
+        Assert.Contains("<PartNumber>1</PartNumber>", completeXml);
+        Assert.Contains("<PartNumber>2</PartNumber>", completeXml);
+        Assert.Contains("\"etag-1\"", completeXml);
+        Assert.Contains("\"etag-2\"", completeXml);
+    }
+
+    [Fact]
+    public async Task S3Storage_DeleteManyAsync_UsesBatchDelete()
+    {
+        var http = new FakeHttpClient();
+        var s3 = CreateS3(
+            new DateTimeOffset(2026, 10, 25, 12, 0, 0, TimeSpan.Zero),
+            http);
+
+        http.Handler = _ => new HttpBytesResponse(
+            200,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            Encoding.UTF8.GetBytes("<DeleteResult/>"));
+
+        await s3.DeleteManyAsync(["avatars/a.png", "avatars/b.png"]);
+
+        var request = Assert.Single(http.Requests);
+        Assert.Equal("POST", request.Method);
+        Assert.Contains("delete=", request.Url);
+        Assert.True(request.Headers.ContainsKey("content-md5"));
+
+        var xml = Encoding.UTF8.GetString(request.Body!);
+        Assert.Contains("<Key>avatars/a.png</Key>", xml);
+        Assert.Contains("<Key>avatars/b.png</Key>", xml);
+    }
+
+    [Fact]
+    public async Task WildcardRoutes_CaptureNestedPathsAndServeStorageKeys()
+    {
+        var root = CreateTempRoot();
+        try
+        {
+            var storage = new LocalStorage(root);
+            await storage.PutAsync(
+                "avatars/user 1.png",
+                SampleBytes,
+                "image/png");
+
+            var app = ReptarApp.Create(new ReptarConfig { Storage = storage });
+            app.Get("/echo/*path", ctx => ctx.Text(ctx.Param("path")!));
+            app.Get("/files/*path", ctx => ctx.File(ctx.Param("path")!));
+            app.Get("/files/health", ctx => ctx.Text("static"));
+            app.Get("/files/:id", ctx => ctx.Text($"param:{ctx.Param("id")}"));
+
+            var nested = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/echo/a/b/c",
+            });
+            Assert.Equal(200, nested.Status);
+            Assert.Equal("a/b/c", Encoding.UTF8.GetString(nested.Body!));
+
+            var single = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/echo/a",
+            });
+            Assert.Equal("a", Encoding.UTF8.GetString(single.Body!));
+
+            var empty = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/echo",
+            });
+            Assert.Equal(404, empty.Status);
+
+            var staticRoute = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/files/health",
+            });
+            Assert.Equal("static", Encoding.UTF8.GetString(staticRoute.Body!));
+
+            var paramRoute = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/files/a",
+            });
+            Assert.Equal("param:a", Encoding.UTF8.GetString(paramRoute.Body!));
+
+            var file = await app.HandleAsync(new ReptarRequest
+            {
+                Method = "GET",
+                Path = "/files/avatars/user 1.png",
+            });
+            Assert.Equal(200, file.Status);
+            Assert.Equal(SampleBytes, file.Body);
+            Assert.Equal("image/png", file.ContentType);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RpcGenerator_EmitsWildcardPathsForOpenApiAndClient()
+    {
+        var route = new RouteMeta
+        {
+            Method = "GET",
+            Path = "/files/*path",
+        };
+
+        var appType = TsEmitter.EmitAppType([route], new TsTypeIndex());
+        Assert.Contains("\"*path\"", appType);
+        Assert.Contains("param: { path: string }", appType);
+
+        var openApi = OpenApiEmitter.Emit([route], new TsTypeIndex());
+        using var document = JsonDocument.Parse(openApi);
+        Assert.True(
+            document.RootElement
+                .GetProperty("paths")
+                .TryGetProperty("/files/{path}", out _));
     }
 
     [Fact]

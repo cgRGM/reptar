@@ -18,6 +18,9 @@ public enum StorageFeatures
     ConditionalPut = 1 << 5,
     PublicUrls = 1 << 6,
     BulkDelete = 1 << 7,
+    ServerSideCopy = 1 << 8,
+    MultipartUpload = 1 << 9,
+    StreamingPut = 1 << 10,
 }
 
 public sealed record StorageCapabilities(StorageFeatures Features)
@@ -88,6 +91,38 @@ public sealed record StorageObject(
 
     /// <summary>ETag formatted for an HTTP response header, or empty.</summary>
     public string HttpETag => StorageKey.FormatETag(ETag);
+
+    public string? MetadataValue(string name)
+    {
+        if (Metadata is null)
+            return null;
+
+        if (Metadata.TryGetValue(name, out var direct))
+            return direct;
+
+        foreach (var (key, value) in Metadata)
+        {
+            if (string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                return value;
+        }
+
+        return null;
+    }
+
+    public IReadOnlyDictionary<string, string>? MetadataExcept(string name)
+    {
+        if (Metadata is null)
+            return null;
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, value) in Metadata)
+        {
+            if (!string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                result[key] = value;
+        }
+
+        return result.Count == 0 ? null : result;
+    }
 }
 
 /// <summary>A single byte range read from an object.</summary>
@@ -149,6 +184,24 @@ public sealed record StoragePutOptions
         Overwrite &&
         string.IsNullOrWhiteSpace(CacheControl) &&
         (Metadata is null || Metadata.Count == 0);
+}
+
+public sealed record StorageCopyOptions
+{
+    /// <summary>When false, the provider fails with PreconditionFailed if the destination exists.</summary>
+    public bool Overwrite { get; init; } = true;
+
+    /// <summary>Copy the source content type, cache control, and user metadata.</summary>
+    public bool PreserveMetadata { get; init; } = true;
+
+    /// <summary>Overrides the destination content type.</summary>
+    public string? ContentType { get; init; }
+
+    /// <summary>Overrides the destination cache control.</summary>
+    public string? CacheControl { get; init; }
+
+    /// <summary>Overrides destination user metadata. Replaces preserved metadata when set.</summary>
+    public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 }
 
 public sealed record PresignDownloadOptions
@@ -222,6 +275,135 @@ public interface IStorage
         options.IsDefault
             ? PutAsync(key, body, contentType)
             : Task.FromException<string>(Unsupported("PutAsync with options"));
+
+    /// <summary>
+    /// Streams an object into storage. The default buffers the stream; providers
+    /// with <see cref="StorageFeatures.StreamingPut"/> or
+    /// <see cref="StorageFeatures.MultipartUpload"/> override this to avoid it.
+    /// </summary>
+    async Task<string> PutAsync(
+        string key,
+        Stream body,
+        string contentType,
+        StoragePutOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(body);
+
+        using var buffer = new MemoryStream();
+        await body.CopyToAsync(buffer);
+        var bytes = buffer.ToArray();
+
+        return options is null
+            ? await PutAsync(key, bytes, contentType)
+            : await PutAsync(key, bytes, contentType, options);
+    }
+
+    /// <summary>
+    /// Copies an object. The default reads and rewrites the bytes; providers with
+    /// <see cref="StorageFeatures.ServerSideCopy"/> override this.
+    /// </summary>
+    async Task<StorageObject?> CopyAsync(
+        string sourceKey,
+        string destinationKey,
+        StorageCopyOptions? options = null)
+    {
+        options ??= new StorageCopyOptions();
+        var source = StorageKey.Normalize(sourceKey);
+        var destination = StorageKey.Normalize(destinationKey);
+
+        StorageObject? info = null;
+        try
+        {
+            info = await HeadAsync(source);
+        }
+        catch (StorageException exception) when (exception.Code == StorageErrorCode.Unsupported)
+        {
+            // Provider only implements the core four operations.
+        }
+        catch (NotSupportedException)
+        {
+            // Provider uses the framework's non-throwing convention.
+        }
+
+        if (info is null)
+        {
+            var exists = await ExistsAsync(source);
+            if (!exists)
+            {
+                throw new StorageException(
+                    StorageErrorCode.NotFound,
+                    $"Object '{source}' does not exist.",
+                    source);
+            }
+        }
+
+        var bytes = await GetAsync(source);
+        if (bytes is null)
+        {
+            throw new StorageException(
+                StorageErrorCode.NotFound,
+                $"Object '{source}' does not exist.",
+                source);
+        }
+
+        var contentType = options.ContentType
+            ?? (string.IsNullOrWhiteSpace(info?.ContentType)
+                ? Files.ContentTypeFor(source)
+                : info!.ContentType);
+
+        var cacheControl = options.CacheControl
+            ?? (options.PreserveMetadata
+                ? info?.MetadataValue("cache-control")
+                : null);
+
+        var metadata = options.Metadata
+            ?? (options.PreserveMetadata ? info?.MetadataExcept("cache-control") : null);
+
+        await PutAsync(
+            destination,
+            bytes,
+            contentType,
+            new StoragePutOptions
+            {
+                Overwrite = options.Overwrite,
+                CacheControl = cacheControl,
+                Metadata = metadata,
+            });
+
+        StorageObject? copied = null;
+        try
+        {
+            copied = await HeadAsync(destination);
+        }
+        catch (StorageException exception) when (exception.Code == StorageErrorCode.Unsupported)
+        {
+            // Fall through to a synthesized result.
+        }
+        catch (NotSupportedException)
+        {
+            // Fall through to a synthesized result.
+        }
+
+        return copied ?? new StorageObject(
+            destination,
+            bytes.Length,
+            contentType,
+            "",
+            null,
+            metadata);
+    }
+
+    /// <summary>Moves an object by copying it and deleting the source.</summary>
+    async Task<StorageObject?> MoveAsync(
+        string sourceKey,
+        string destinationKey,
+        StorageCopyOptions? options = null)
+    {
+        var source = StorageKey.Normalize(sourceKey);
+        var copied = await CopyAsync(source, destinationKey, options);
+        await DeleteAsync(source);
+        return copied;
+    }
 
     async Task DeleteManyAsync(IEnumerable<string> keys)
     {
@@ -401,6 +583,15 @@ public static class StorageKey
         var normalized = Normalize(key);
         var slash = normalized.LastIndexOf('/');
         return slash < 0 ? normalized : normalized[(slash + 1)..];
+    }
+
+    /// <summary>Percent-encodes each path segment while preserving '/'.</summary>
+    public static string EncodePath(string key)
+    {
+        var normalized = Normalize(key);
+        return string.Join(
+            "/",
+            normalized.Split('/').Select(Uri.EscapeDataString));
     }
 
     /// <summary>
