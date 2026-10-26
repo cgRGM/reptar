@@ -60,9 +60,10 @@ ctx.SpanId;
 ctx.ParentSpanId;
 ```
 
-The framework creates the local span id; it does not yet export spans to an
-OTLP collector. `TraceContext.Current.ToTraceParent()` is available for
-propagating the context to outbound calls.
+The framework creates the local span id. Request records can be exported to an
+OTLP/HTTP collector (see below); span export is still a roadmap item.
+`TraceContext.Current.ToTraceParent()` is available for propagating the context
+to outbound calls.
 
 ## 3. Server-Timing Headers
 
@@ -103,6 +104,48 @@ with `Auth.RequireRole("admin")` or a private listener when exposed publicly.
 `UseSWR()` reports cache outcomes as `reptar_cache_requests_total{status="HIT|MISS|STALE|BYPASS"}`
 through the same registry; mount `UseMetrics()` before `UseSWR()`.
 
+## 4c. OTLP Log Export
+
+Export the same request records to any OTLP/HTTP logs endpoint:
+
+```csharp
+app.UseOtlp(new OtlpExporterOptions
+{
+    Endpoint = "http://localhost:4318/v1/logs",
+    ServiceName = "my-api",
+    BatchSize = 64,
+    FlushInterval = TimeSpan.FromSeconds(5),
+}, telemetry =>
+{
+    telemetry.SampleRate = 0.1;
+});
+```
+
+`UseOtlp` mounts telemetry and registers the exporter with the host lifecycle;
+records are queued and flushed in the background, and the queue is flushed on
+Kestrel/Lambda shutdown. Export failures never fail a request. Headers (for
+example `Authorization`) can be added through `OtlpExporterOptions.Headers`.
+
+## 4d. Developer Dashboard
+
+```csharp
+app.UseMetrics();
+app.MapReptarDashboard(); // GET /_reptar
+```
+
+The dashboard lists routes, registered tables and columns, cache count, and
+the Prometheus metrics text. It is **local-only by default**: requests with a
+non-loopback `Host` (or `CF-Connecting-IP`) get a 404. Set
+`AllowRemote = true` only when you also pass an admin-auth middleware:
+
+```csharp
+app.MapReptarDashboard(new DashboardOptions
+{
+    AllowRemote = true,
+    Middleware = Auth.RequireRole("admin"),
+});
+```
+
 ## 5. Sampling and Overhead
 
 - `SampleRate` applies to successful, non-slow requests.
@@ -128,10 +171,9 @@ returns `503` when it is unavailable.
 
 The following are roadmap items, not current behavior:
 
-- OTLP/Axiom log export (`AxiomOptions` is not implemented);
-- a `/_reptar` developer dashboard;
+- Axiom-specific log export (`AxiomOptions` is not implemented; use OTLP);
 - span export and trace sampling beyond the request log.
 
 Until those land, ship the structured JSON lines to your platform's log sink
-(Cloudflare Logpush, Axiom, Datadog, etc.) and use `Server-Timing` for local
-profiling.
+(Cloudflare Logpush, Axiom, Datadog, etc.), use `UseOtlp` for OTLP/HTTP
+collectors, and use `Server-Timing` for local profiling.

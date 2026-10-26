@@ -102,6 +102,12 @@ public sealed class TelemetryOptions
     /// Queries at or above this duration count as slow queries.
     /// </summary>
     public int SlowQueryMs { get; set; } = 100;
+
+    /// <summary>
+    /// Optional sink for structured request records (for example the OTLP
+    /// exporter). Called for the same records that are logged.
+    /// </summary>
+    public IRequestTelemetrySink? Exporter { get; set; }
 }
 
 public static class ReptarApi

@@ -198,7 +198,10 @@ public static class Middlewares
                 (slow || response.Status >= 400 || Sample(opts.SampleRate));
 
             if (shouldLog)
+            {
                 ctx.Log.Request(in telemetry);
+                opts.Exporter?.Record(telemetry);
+            }
 
             if (db.QueryCount > 0)
                 ctx.ServerTiming("db", db.TotalMs, $"{db.QueryCount} queries");

@@ -26,6 +26,8 @@ Before writing code or assuming database schema, query the framework's machine-r
 - `bun reptar check:architecture --strict`: Enforces the core/AI/terminal boundary.
 - `bun scripts/bench-gate.ts --results <result.json> --baseline bench/perf-baseline.json`: Compares a benchmark run to the baseline and fails on RPS/p95 regressions.
 - `app.UseMetrics(); app.MapMetrics();`: Exposes Prometheus counters/histograms at `GET /metrics`; protect the route when it is publicly reachable.
+- `app.UseOtlp(new OtlpExporterOptions { Endpoint = "..." });`: Batches structured request records to an OTLP/HTTP logs collector and flushes on shutdown.
+- `app.MapReptarDashboard();`: Local-only `GET /_reptar` dashboard with routes, tables, cache count, and metrics; set `AllowRemote` only behind admin auth.
 
 ---
 

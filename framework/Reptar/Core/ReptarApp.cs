@@ -214,6 +214,9 @@ public sealed class ReptarApp
     public ReptarApp UseETag(ETagOptions? options = null) =>
         Use(Middlewares.ETag(options));
 
+    public ReptarApp UseTelemetry(TelemetryOptions? options = null) =>
+        Use(Middlewares.Telemetry(options));
+
     /// <summary>
     /// Adds stale-while-revalidate caching. Cache outcomes are reported to the
     /// app's metrics registry by default.

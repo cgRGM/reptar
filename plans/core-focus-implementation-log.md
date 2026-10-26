@@ -62,6 +62,8 @@
 - `PostgresDbClient` has `CommandTimeoutSeconds` (default 30s), including transaction-context commands.
 - `UseETag()` / `ETag()` middleware adds strong ETags to successful JSON/text GET/HEAD responses and returns `304` on `If-None-Match`; it skips `no-store`, cookies, non-GET, and oversized bodies.
 - `UseMetrics()` / `MapMetrics()` exposes dependency-free Prometheus counters and latency histograms at `GET /metrics`, with route-template labels.
+- `UseOtlp()` batches request records to an OTLP/HTTP logs endpoint and flushes on host shutdown; export failures never fail requests.
+- `MapReptarDashboard()` exposes a local-only `GET /_reptar` page with routes, tables, cache count, and metrics.
 - `UseSWR()` reports cache outcomes (`HIT`/`MISS`/`STALE`/`BYPASS`) to the same metrics registry.
 - SQL migrations store a SHA-256 checksum in `__reptar_migrations`; re-running an edited applied migration throws instead of silently diverging. Existing databases get the nullable column automatically.
 - Migration runners use a lease lock table (`__reptar_migrations_lock`, 30-minute expiry) so concurrent deploys cannot apply the same migration. `db check` and `db dry-run` (or `db migrate --check/--dry-run`) report pending SQL without applying it.
@@ -156,7 +158,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Verification
 
-- `bun reptar test`: **310 passed**.
+- `bun reptar test`: **313 passed**.
 - `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
 - `bun scripts/check-architecture.ts --strict`: **core is clean**.
 - `framework/Reptar.Wasm` builds (NetWasm 0.10.1) with telemetry/preload/queue changes; the Rooms Worker module is 13.13 MB against a 16 MB budget.
@@ -181,4 +183,4 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 6. `Rule<T>` typed path benchmarked (~50 ns JIT / ~66 ns AOT valid, 0 B); invalid path still allocates issues.
 7. `@reptar/cli-core` packaged and copied into scaffolds; `make:*` scaffold smoke step added.
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
-9. OTLP exporter and the `/_reptar` developer dashboard (Prometheus `/metrics` landed).
+9. OTLP log export and the `/_reptar` dashboard landed; span export remains.

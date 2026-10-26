@@ -1,5 +1,9 @@
 using System.Buffers;
+using System.Collections.Concurrent;
 using System.Diagnostics;
+#if !NETWASM
+using System.Net.Http;
+#endif
 using System.Text;
 using System.Text.Json;
 
@@ -78,6 +82,16 @@ public readonly record struct RequestTelemetry(
 
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
+}
+
+/// <summary>
+/// Optional telemetry sink. Implementations must not throw or block the
+/// request path; the OTLP exporter queues records and flushes in the
+/// background.
+/// </summary>
+public interface IRequestTelemetrySink
+{
+    void Record(in RequestTelemetry telemetry);
 }
 
 /// <summary>
@@ -615,3 +629,300 @@ public sealed class InstrumentedDbClient(IDbClient inner) : IDbClient, IDisposab
     public Task<T> TransactionAsync<T>(Func<IDbClient, Task<T>> action) =>
         Inner.TransactionAsync(action);
 }
+
+#if !NETWASM
+/// <summary>
+/// OTLP/HTTP JSON log exporter. Records are queued and flushed in batches so
+/// the request path never waits on the collector. Register it with
+/// <see cref="TelemetryExtensions.UseOtlp"/> or assign it to
+/// <see cref="TelemetryOptions.Exporter"/>.
+/// </summary>
+public sealed class OtlpExporterOptions
+{
+    /// <summary>OTLP/HTTP logs endpoint, e.g. http://localhost:4318/v1/logs.</summary>
+    public string Endpoint { get; set; } = "http://localhost:4318/v1/logs";
+
+    public string ServiceName { get; set; } = "reptar";
+
+    public Dictionary<string, string> Headers { get; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    public int BatchSize { get; set; } = 64;
+
+    public TimeSpan FlushInterval { get; set; } = TimeSpan.FromSeconds(5);
+
+    public TimeSpan Timeout { get; set; } = TimeSpan.FromSeconds(5);
+}
+
+public sealed class OtlpExporter : IRequestTelemetrySink, IReptarModule, IAsyncDisposable
+{
+    private readonly OtlpExporterOptions _options;
+    private readonly HttpClient _http;
+    private readonly ConcurrentQueue<RequestTelemetry> _queue = new();
+    private readonly System.Threading.Timer _timer;
+    private int _flushing;
+    private bool _disposed;
+    private string? _lastError;
+
+    public OtlpExporter(
+        OtlpExporterOptions? options = null,
+        HttpMessageHandler? handler = null)
+    {
+        _options = options ?? new OtlpExporterOptions();
+        _http = handler is null ? new HttpClient() : new HttpClient(handler);
+        _http.Timeout = Timeout.InfiniteTimeSpan;
+        _timer = new System.Threading.Timer(
+            static state => _ = ((OtlpExporter)state!).FlushAsync(),
+            this,
+            _options.FlushInterval,
+            _options.FlushInterval);
+    }
+
+    /// <summary>Last transport error, if any. Telemetry failures never throw.</summary>
+    public string? LastError => _lastError;
+
+    public void Record(in RequestTelemetry telemetry)
+    {
+        if (_disposed)
+            return;
+
+        _queue.Enqueue(telemetry);
+
+        if (_queue.Count >= _options.BatchSize)
+            _ = FlushAsync();
+    }
+
+    public async Task FlushAsync(CancellationToken cancellationToken = default)
+    {
+        if (_disposed ||
+            Interlocked.CompareExchange(ref _flushing, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            var limit = Math.Max(_options.BatchSize, 256);
+            var batch = new List<RequestTelemetry>(Math.Min(_queue.Count, limit));
+
+            while (batch.Count < limit && _queue.TryDequeue(out var telemetry))
+                batch.Add(telemetry);
+
+            if (batch.Count == 0)
+                return;
+
+            var payload = BuildPayload(batch);
+
+            using var request = new HttpRequestMessage(
+                HttpMethod.Post,
+                _options.Endpoint)
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+            };
+
+            foreach (var (name, value) in _options.Headers)
+                request.Headers.TryAddWithoutValidation(name, value);
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken);
+            timeout.CancelAfter(_options.Timeout);
+
+            using var response = await _http.SendAsync(request, timeout.Token);
+            _lastError = response.IsSuccessStatusCode
+                ? null
+                : $"OTLP collector returned {(int)response.StatusCode}.";
+        }
+        catch (Exception ex)
+        {
+            // Telemetry must never break the app; retain the error for /_reptar
+            // or a health check.
+            _lastError = ex.Message;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _flushing, 0);
+        }
+
+        if (!_queue.IsEmpty)
+            _ = FlushAsync();
+    }
+
+    Task IReptarModule.StopAsync(ReptarApp app, CancellationToken cancellationToken) =>
+        FlushAsync(cancellationToken);
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed)
+            return;
+
+        _disposed = true;
+        await _timer.DisposeAsync();
+        await FlushAsync();
+        _http.Dispose();
+    }
+
+    private string BuildPayload(IReadOnlyList<RequestTelemetry> records)
+    {
+        var buffer = new ArrayBufferWriter<byte>(512 * records.Count);
+
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteStartArray("resourceLogs");
+            writer.WriteStartObject();
+
+            writer.WriteStartObject("resource");
+            writer.WriteStartArray("attributes");
+            WriteStringAttribute(writer, "service.name", _options.ServiceName);
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+
+            writer.WriteStartArray("scopeLogs");
+            writer.WriteStartObject();
+            writer.WriteStartObject("scope");
+            writer.WriteString("name", "reptar");
+            writer.WriteEndObject();
+            writer.WriteStartArray("logRecords");
+
+            foreach (var record in records)
+                WriteLogRecord(writer, record);
+
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    private static void WriteLogRecord(Utf8JsonWriter writer, in RequestTelemetry record)
+    {
+        writer.WriteStartObject();
+        writer.WriteString(
+            "timeUnixNano",
+            (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() * 1_000_000)
+                .ToString(System.Globalization.CultureInfo.InvariantCulture));
+
+        var severity = record.Status >= 500 ? 17 : record.Status >= 400 ? 13 : 9;
+        writer.WriteNumber("severityNumber", severity);
+        writer.WriteString(
+            "severityText",
+            severity == 17 ? "ERROR" : severity == 13 ? "WARN" : "INFO");
+
+        writer.WriteStartObject("body");
+        writer.WriteString(
+            "stringValue",
+            $"{record.Method} {record.Route} {record.Status} {record.DurationMs:0.0}ms");
+        writer.WriteEndObject();
+
+        if (!string.IsNullOrEmpty(record.TraceId))
+            writer.WriteString("traceId", record.TraceId);
+
+        if (!string.IsNullOrEmpty(record.SpanId))
+            writer.WriteString("spanId", record.SpanId);
+
+        writer.WriteStartArray("attributes");
+        WriteStringAttribute(writer, "http.request.method", record.Method);
+        WriteStringAttribute(writer, "http.route", record.Route);
+        WriteStringAttribute(writer, "url.path", record.Path);
+        WriteIntAttribute(writer, "http.response.status_code", record.Status);
+        WriteStringAttribute(writer, "reptar.request_id", record.RequestId);
+        WriteDoubleAttribute(writer, "reptar.duration_ms", record.DurationMs);
+        WriteDoubleAttribute(writer, "reptar.db_ms", record.DbMs);
+        WriteIntAttribute(writer, "reptar.db_queries", record.DbQueries);
+
+        if (!string.IsNullOrEmpty(record.Cache))
+            WriteStringAttribute(writer, "reptar.cache", record.Cache);
+
+        if (!string.IsNullOrEmpty(record.UserId))
+            WriteStringAttribute(writer, "enduser.id", record.UserId);
+
+        if (!string.IsNullOrEmpty(record.ErrorCode))
+            WriteStringAttribute(writer, "reptar.error_code", record.ErrorCode);
+
+        if (record.Slow)
+            WriteBoolAttribute(writer, "reptar.slow", true);
+
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteStringAttribute(
+        Utf8JsonWriter writer,
+        string key,
+        string value)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("key", key);
+        writer.WriteStartObject("value");
+        writer.WriteString("stringValue", value);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteIntAttribute(
+        Utf8JsonWriter writer,
+        string key,
+        long value)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("key", key);
+        writer.WriteStartObject("value");
+        writer.WriteString(
+            "intValue",
+            value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteDoubleAttribute(
+        Utf8JsonWriter writer,
+        string key,
+        double value)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("key", key);
+        writer.WriteStartObject("value");
+        writer.WriteNumber("doubleValue", value);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteBoolAttribute(
+        Utf8JsonWriter writer,
+        string key,
+        bool value)
+    {
+        writer.WriteStartObject();
+        writer.WriteString("key", key);
+        writer.WriteStartObject("value");
+        writer.WriteBoolean("boolValue", value);
+        writer.WriteEndObject();
+        writer.WriteEndObject();
+    }
+}
+
+public static class TelemetryExtensions
+{
+    /// <summary>
+    /// Enables request telemetry and exports it to an OTLP/HTTP collector.
+    /// The exporter flushes on host shutdown through the module lifecycle.
+    /// </summary>
+    public static ReptarApp UseOtlp(
+        this ReptarApp app,
+        OtlpExporterOptions? options = null,
+        Action<TelemetryOptions>? configure = null)
+    {
+        var exporter = new OtlpExporter(options);
+        var telemetry = new TelemetryOptions { Exporter = exporter };
+        configure?.Invoke(telemetry);
+
+        app.Use(Middlewares.Telemetry(telemetry));
+        app.AddModule(exporter);
+        return app;
+    }
+}
+#endif
