@@ -4,9 +4,14 @@
 
 A high-performance C# web framework compiled to **WebAssembly for Cloudflare Workers** and **Native AOT for Linux containers, VPS, and AWS Lambda** — with Hono-like routing, Drizzle-like schemas, Zod-like validation, built-in auth, zero-dependency Stripe checkout, first-class edge bindings, and auto-generated TypeScript contracts for any frontend.
 
-- **Live Landing Page:** [https://reptar-web.rocktown-labs.workers.dev](https://reptar-web.rocktown-labs.workers.dev)
-- **Live Documentation:** [https://reptar-docs.rocktown-labs.workers.dev](https://reptar-docs.rocktown-labs.workers.dev)
-- **Production Edge API:** [https://reptar-api.rocktown-labs.workers.dev](https://reptar-api.rocktown-labs.workers.dev)
+- **Landing Page:** [https://reptar.rocktownlabs.app](https://reptar.rocktownlabs.app)
+- **Documentation:** [https://reptar-docs.rocktownlabs.app](https://reptar-docs.rocktownlabs.app)
+- **Verified Benchmarks:** [https://reptar-bench.rocktownlabs.app](https://reptar-bench.rocktownlabs.app)
+- **Production Edge API:** [https://reptar-api.rocktownlabs.app](https://reptar-api.rocktownlabs.app)
+- **RealWorld API Demo:** [https://reptar-realworld-demo.rocktownlabs.app/api/articles](https://reptar-realworld-demo.rocktownlabs.app/api/articles)
+- **Rooms API Demo:** [https://reptar-rooms-demo.rocktownlabs.app/health](https://reptar-rooms-demo.rocktownlabs.app/health)
+
+Custom domains are managed by the existing Alchemy stack; the original `rocktown-labs.workers.dev` endpoints remain enabled during the transition.
 
 Read the canonical [design.md](./design.md) for architectural specifications, non-goals, and technical constraints.
 

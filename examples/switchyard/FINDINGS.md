@@ -2,7 +2,7 @@
 
 ## Release-integration follow-up — 2026-10-26
 
-The original observations below retain their baseline provenance. Combined-tree verification subsequently reached **396 passing framework tests**, **23 Bun tests / 73 assertions**, and a repeated **6-test / 265-assertion Linux Native AOT acceptance run**. Desktop/mobile Chromium verification also passed and now checks typed GET evaluation with `query.subject`.
+The original observations below retain their baseline provenance. Combined-tree verification subsequently reached **396 passing framework tests**, **28 Bun tests / 85 assertions**, and a repeated **6-test / 265-assertion Linux Native AOT acceptance run**. Desktop/mobile Chromium verification also passed and now checks typed GET evaluation with `query.subject`.
 
 - **S1/S2:** auth AOT and composite-migration fixes are included in integration. Published-native acceptance is now a CI gate.
 - **S3:** `.WithQuery<EvaluateInput>()` now emits scalar query inputs for the client and OpenAPI. The frontend uses typed GET evaluation; metadata does not replace handler validation.

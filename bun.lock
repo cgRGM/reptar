@@ -36,9 +36,9 @@
         "turndown-plugin-gfm": "^1.0.2",
       },
       "devDependencies": {
-        "@bruits/satteri-darwin-arm64": "^0.10.5",
         "@types/turndown": "^5.0.6",
         "happy-dom": "^21.0.4",
+        "satteri": "0.10.5",
       },
     },
     "apps/web": {

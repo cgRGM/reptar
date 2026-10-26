@@ -1,17 +1,18 @@
 # Reptar
 
-> Reptar is a high-performance, single-binary C# 13 web framework for Native AOT and Cloudflare Workers (NetWasm), with zero runtime reflection, typed RPC codegen, and built-in auth, realtime rooms, and AI agent tooling.
+> Reptar is a C# web framework targeting Native AOT and Cloudflare Workers (NetWasm), with source-generated JSON, typed RPC codegen, and built-in auth, realtime rooms, and AI agent tooling.
 
-Reach for Reptar when you need one C# backend that compiles unchanged to Cloudflare Workers (WebAssembly), AWS Lambda (Native AOT), containers, or a VPS — with compile-time validated routes and a typed TypeScript RPC client generated from the C# route tree. This is the marketing site; everything an agent needs to evaluate or build with Reptar is in the documentation.
+Routes and response metadata generate a typed TypeScript client. Target and provider guarantees differ: the verified SQLite interactive-transaction workload is not a drop-in D1 implementation, and reflection-dependent runtime fallbacks are not blanket AOT guarantees. Consult the documentation and verified examples before choosing a deployment target.
 
 ## Documentation
 
-- [Full documentation](https://reptar-docs.rocktown-labs.workers.dev/): guides, core concepts, data layer, auth, Cloudflare bindings, cookbook.
-- [Docs index for LLMs (llms.txt)](https://reptar-docs.rocktown-labs.workers.dev/llms.txt): every page also served as Markdown — append `.md` to any docs URL or request it with `Accept: text/markdown`.
-- [Blog API Reference (generated from the OpenAPI contract)](https://reptar-docs.rocktown-labs.workers.dev/api/reference/)
+- [Full documentation](https://reptar-docs.rocktownlabs.app/): guides, core concepts, data layer, auth, Cloudflare bindings, cookbook.
+- [Docs index for LLMs (llms.txt)](https://reptar-docs.rocktownlabs.app/llms.txt): every page also served as Markdown — append `.md` to any docs URL or request it with `Accept: text/markdown`.
+- [Blog API Reference (generated from the OpenAPI contract)](https://reptar-docs.rocktownlabs.app/api/reference/)
+- [Verified release benchmarks](https://reptar-bench.rocktownlabs.app): measurements, comparison controls, source revisions, and limitations.
 
 ## Project
 
-- [GitHub repository](https://github.com/RocktownLabs/reptar): framework, examples, benchmarks (RealWorld spec, head-to-head vs .NET Minimal API and Hono).
-- [Installable agent skill for @reptar/client](https://github.com/RocktownLabs/reptar/blob/main/packages/rpc/skills/reptar/SKILL.md): routes, TableDef schemas, ColumnRef queries, migrations, and RPC codegen.
-- [Quick start](https://reptar-docs.rocktown-labs.workers.dev/getting-started/quickstart/): a deployed, authenticated app in about 25 minutes.
+- [GitHub repository](https://github.com/cgRGM/reptar): framework, examples, benchmarks (RealWorld spec, head-to-head vs .NET Minimal API and Hono).
+- [Installable agent skill for @reptar/client](https://github.com/cgRGM/reptar/blob/master/packages/rpc/skills/reptar/SKILL.md): routes, TableDef schemas, ColumnRef queries, migrations, and RPC codegen.
+- [Quick start](https://reptar-docs.rocktownlabs.app/getting-started/quickstart/): setup, authentication, and deployment instructions.

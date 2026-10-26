@@ -3,7 +3,7 @@ import "../styles/global.css";
 import Header from "../components/header.astro";
 import Footer from "../components/footer.astro";
 
-const SITE_URL = "https://reptar-web.rocktown-labs.workers.dev";
+const SITE_URL = "https://reptar.rocktownlabs.app";
 const OG_IMAGE_URL = `${SITE_URL}/og.png`;
 
 interface Props {
@@ -34,7 +34,7 @@ const JSON_LD = JSON.stringify({
       "@type": "SoftwareApplication",
       applicationCategory: "DeveloperApplication",
       description:
-        "High-performance, single-binary C# 13 web framework for Native AOT and Cloudflare Workers (NetWasm), with zero runtime reflection, typed RPC codegen, and built-in AI tooling.",
+        "Single-binary C# web framework targeting Native AOT and Cloudflare Workers (NetWasm), with source-generated JSON, typed RPC codegen, and built-in AI tooling.",
       isAccessibleForFree: true,
       name: "Reptar",
       offers: {
@@ -45,7 +45,7 @@ const JSON_LD = JSON.stringify({
       operatingSystem: "Cloudflare Workers, AWS Lambda, Docker, Linux, macOS",
       programmingLanguage: "C#",
       publisher: { "@id": `${SITE_URL}/#org` },
-      sameAs: ["https://github.com/RocktownLabs/reptar"],
+      sameAs: ["https://github.com/cgRGM/reptar"],
       url: `${SITE_URL}/`,
     },
   ],

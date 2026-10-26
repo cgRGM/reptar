@@ -1,8 +1,8 @@
-# Reptar landing site — https://reptar-web.rocktown-labs.workers.dev
+# Reptar landing site — https://reptar.rocktownlabs.app
 #
 # Machine-readable AI context for this product lives at:
 #   /llms.txt      — this site's entry point for agents
-#   https://reptar-docs.rocktown-labs.workers.dev/llms.txt — the full documentation index
+#   https://reptar-docs.rocktownlabs.app/llms.txt — the full documentation index
 #
 # Stance: all AI agents — search, retrieval, training, and grounding — are
 # welcome to read this site. It is public marketing content for an open-source
@@ -52,4 +52,4 @@ Allow: /
 User-agent: CCBot
 Allow: /
 
-Sitemap: https://reptar-web.rocktown-labs.workers.dev/sitemap.xml
+Sitemap: https://reptar.rocktownlabs.app/sitemap.xml

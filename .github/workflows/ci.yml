@@ -77,6 +77,22 @@ jobs:
       - name: Lint source
         run: bunx oxlint
 
+      # Fail fast on cross-platform native renderer / Markdown issues.
+      - name: Documentation site build
+        run: |
+          bun run build
+          test -f dist/llms.txt
+          test -f dist/llms-full.txt
+          test -f dist/llms-small.txt
+          test -f dist/index.md
+          test -f dist/client/codegen.md
+          test -f dist/overview/release-benchmarks.md
+        working-directory: apps/docs
+
+      - name: Documentation markdown actions check
+        run: bun run check:markdown
+        working-directory: apps/docs
+
       - name: Initialize local SQLite database
         run: bun reptar db migrate
 
@@ -86,7 +102,7 @@ jobs:
         run: bun reptar test
 
       - name: Host boundary and CLI regression tests
-        run: bun test packages/host/src packages/rpc/src/client.test.ts scripts/diff-composite.test.ts scripts/inspect-db.test.ts
+        run: bun test packages/host/src packages/rpc/src/client.test.ts scripts/diff-composite.test.ts scripts/inspect-db.test.ts apps/docs/worker/index.test.ts
 
       - name: Rebuild all deployed Worker artifacts
         run: |
@@ -148,21 +164,9 @@ jobs:
       - name: Documentation snippet check
         run: bun run docs:check:snippets
 
-      - name: Documentation site build
-        run: |
-          bun run build
-          test -f dist/llms.txt
-          test -f dist/llms-full.txt
-          test -f dist/llms-small.txt
-          test -f dist/index.md
-          test -f dist/client/codegen.md
-        working-directory: apps/docs
-
-      - name: Documentation markdown actions check
-        run: bun run check:markdown
-        working-directory: apps/docs
-
       - name: Generated API reference drift check
         run: |
           bun reptar codegen
+          # Compare the same canonical formatting enforced by pre-commit.
+          bunx oxfmt --write apps/docs/src/content/docs/api/
           git diff --exit-code apps/docs/src/content/docs/api/

@@ -17,7 +17,7 @@ interface Env {
   ASSETS: AssetsFetcher;
 }
 
-const SITE_ORIGIN = "https://reptar-docs.rocktown-labs.workers.dev";
+const SITE_ORIGIN = "https://reptar-docs.rocktownlabs.app";
 
 const MARKDOWN_HEADERS: HeadersInit = {
   "content-type": "text/markdown; charset=utf-8",
@@ -44,6 +44,12 @@ const markdownHrefFor = (pathname: string, origin: string): string =>
 
 export default {
   fetch: async (request: Request, env: Env): Promise<Response> => {
+    if (new URL(request.url).hostname === "reptar-bench.rocktownlabs.app") {
+      return Response.redirect(
+        `${SITE_ORIGIN}/overview/release-benchmarks`,
+        302
+      );
+    }
     if (acceptsMarkdown(request)) {
       const { origin, pathname } = new URL(request.url);
       const markdownResponse = await env.ASSETS.fetch(

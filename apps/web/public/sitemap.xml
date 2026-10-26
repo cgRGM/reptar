@@ -1,15 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://reptar-web.rocktown-labs.workers.dev/</loc>
+    <loc>https://reptar.rocktownlabs.app/</loc>
     <lastmod>2026-10-26</lastmod>
   </url>
   <url>
-    <loc>https://reptar-web.rocktown-labs.workers.dev/blog</loc>
+    <loc>https://reptar.rocktownlabs.app/blog</loc>
     <lastmod>2026-10-26</lastmod>
   </url>
   <url>
-    <loc>https://reptar-web.rocktown-labs.workers.dev/login</loc>
+    <loc>https://reptar.rocktownlabs.app/login</loc>
     <lastmod>2026-10-26</lastmod>
   </url>
 </urlset>
