@@ -17,8 +17,17 @@
 - Verified with a real Native AOT publish (`PublishAot=true`, osx-arm64): `Rule<T>` validates correctly (`ok=0 bad=2`) and the `IL2091` trim warning was fixed by annotating `ReptarApi.Rule<T>`.
 
 - Added a generic `PropertyRules.Check<TProp>` fast path: strings and common numeric types no longer box through `object?`; uncommon types fall back to the object path.
+- `Rule<T>` property getters now use compiled IL on JIT and `MethodInfo.CreateDelegate<Func<T,TProp>>` on Native AOT. The old interpreted expression tree allocated ~632 B and took ~417 ns per valid validation; the AOT delegate path is ~66 ns and 0 B. Reflection `GetValue` remains the fallback for value-type receivers or runtimes that reject `CreateDelegate`.
 
-**Still open:** benchmark the typed path against the manual-validation tier.
+**Benchmark (`bench/validation`, Apple arm64):**
+
+| Case | JIT median | AOT median | JIT/AOT alloc |
+| :--- | ---: | ---: | ---: |
+| declarative/valid | ~50 ns | ~66 ns | 0 B |
+| manual/valid | ~15 ns | ~6 ns | 0 B |
+| declarative/invalid | ~207 ns | ~281 ns | 656 B |
+
+**Still open:** the invalid path allocates issue objects; that is acceptable for an error path, but pooling or a struct issue list is a possible follow-up.
 
 ### 1b. Build-time JSON context generation
 
@@ -146,7 +155,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 
 ## Verification
 
-- `bun reptar test`: **305 passed**.
+- `bun reptar test`: **310 passed**.
 - `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
 - `bun scripts/check-architecture.ts --strict`: **core is clean**.
 - `framework/Reptar.Wasm` builds (NetWasm 0.10.1) with telemetry/preload/queue changes; the Rooms Worker module is 13.13 MB against a 16 MB budget.
@@ -168,7 +177,7 @@ The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 
 3. DB/HTTP cancellation + command timeouts.
 4. Migration locks/check/dry-run landed; next is automatic lock renewal for very long migrations.
 5. Cache metrics and shared/distributed cache adapters (single-flight, ETag, compression landed).
-6. Benchmark the new `Rule<T>` typed path against the manual-validation tier.
+6. `Rule<T>` typed path benchmarked (~50 ns JIT / ~66 ns AOT valid, 0 B); invalid path still allocates issues.
 7. Move `make:*` into the project-local CLI; add scaffold smoke test.
 8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.
 9. OTLP exporter and the `/_reptar` developer dashboard (Prometheus `/metrics` landed).

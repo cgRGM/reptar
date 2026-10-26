@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace Reptar;
 
@@ -62,19 +63,20 @@ public sealed class Validator<
         var compiled = property.Compile();
 #else
         Func<T, TProp> compiled;
+
         try
         {
-            // Interpreted expression trees avoid dynamic IL generation, which
-            // is unavailable in Native AOT. This keeps Rule<T> usable there;
-            // the reflection fallback is only for runtimes that reject even
-            // the interpreter.
-            compiled = property.Compile(preferInterpretation: true);
+            // Prefer real IL when the runtime supports it (Kestrel/JIT): the
+            // interpreted tree allocates per call. Native AOT binds the
+            // property accessor directly when it can; reflection is the last
+            // resort.
+            compiled = RuntimeFeature.IsDynamicCodeSupported
+                ? property.Compile()
+                : CreateAotGetter<TProp>(propertyInfo);
         }
         catch (Exception ex) when (ex is PlatformNotSupportedException or NotSupportedException)
         {
-            compiled = value => value is null
-                ? default!
-                : (TProp)propertyInfo.GetValue(value)!;
+            compiled = CreateAotGetter<TProp>(propertyInfo);
         }
 #endif
 
@@ -86,6 +88,28 @@ public sealed class Validator<
         _propertyMetas.Add(meta);
 
         return this;
+    }
+
+    private static Func<T, TProp> CreateAotGetter<TProp>(PropertyInfo propertyInfo)
+    {
+        try
+        {
+            // A direct delegate avoids per-call reflection and boxing when the
+            // AOT runtime can bind the accessor. Value-type receivers and
+            // runtimes that reject CreateDelegate fall back to GetValue.
+            var getter = propertyInfo.GetMethod;
+            if (getter is not null)
+                return getter.CreateDelegate<Func<T, TProp>>();
+        }
+        catch (Exception ex) when (
+            ex is ArgumentException or NotSupportedException or InvalidOperationException)
+        {
+            // Fall through to reflection.
+        }
+
+        return value => value is null
+            ? default!
+            : (TProp)propertyInfo.GetValue(value)!;
     }
 
     public Validator<T> Prop<TProp>(

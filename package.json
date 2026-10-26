@@ -58,6 +58,7 @@
     "api:test": "bun scripts/reptar.ts test",
     "api:bench": "bun scripts/benchmark.ts",
     "bench:seed": "bun bench/shared/seed.ts",
+    "bench:validation": "bun scripts/bench-validation.ts",
     "bench:load": "bun bench/load/run.ts",
     "bench:mixed": "bun bench/load/mixed.ts",
     "bench:report": "bun bench/load/report.ts",
