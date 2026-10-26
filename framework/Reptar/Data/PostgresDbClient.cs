@@ -33,7 +33,12 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
     /// </summary>
     public int CommandTimeoutSeconds { get; set; } = 30;
 
-    public async Task<List<T>> QueryAsync<T>(string sql, object? param = null)
+    public async Task<List<T>> QueryAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        object? param = null)
     {
         var (normSql, paramValues) = NormalizeSqlAndParams(sql, param);
 
@@ -41,7 +46,12 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
         return await ExecuteQueryAsync<T>(normSql, paramValues);
     }
 
-    public async Task<T?> QuerySingleOrDefaultAsync<T>(string sql, object? param = null)
+    public async Task<T?> QuerySingleOrDefaultAsync<
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
+            System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string sql,
+        object? param = null)
     {
         var results = await QueryAsync<T>(sql, param);
         return results.Count == 0 ? default : results[0];
@@ -406,7 +416,11 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
             }
             else if (col.DefaultValue != null)
             {
-                line.Append($" DEFAULT {col.DefaultValue}");
+                // Mirror SqlDialect.FormatDefault: string defaults are escaped
+                // as quoted literals; other scalars are inlined. Raw
+                // interpolation would let a schema-authored value break out
+                // of the DEFAULT clause.
+                line.Append($" DEFAULT {FormatDefaultValue(col.DefaultValue)}");
             }
 
             if (col.ReferencesTable != null)
@@ -421,6 +435,14 @@ public sealed class PostgresDbClient : IDbClient, IDisposable
         sb.Append("\n);");
         return sb.ToString();
     }
+
+    // Parity with SqlDialect.FormatDefault used by the other dialects.
+    private static string FormatDefaultValue(object value) => value switch
+    {
+        string text => $"'{text.Replace("'", "''")}'",
+        bool flag => flag ? "1" : "0",
+        _ => value.ToString() ?? "NULL",
+    };
 
     public (string Sql, object?[] Params) NormalizeSqlAndParams(string sql, object? param) =>
         NormalizeSqlAndParams(sql, param, _json);

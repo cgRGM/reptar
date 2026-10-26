@@ -115,10 +115,13 @@ public sealed partial class Ctx
     /// </summary>
     public void ServerTiming(string metric, double durationMs, string? description = null)
     {
+        // Header values must never carry quotes, separators, or control
+        // characters (response-header injection).
+        var safeMetric = SanitizeServerTimingValue(metric);
         var durStr = durationMs.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
         var entry = description is { Length: > 0 }
-            ? $"{metric};dur={durStr};desc=\"{description}\""
-            : $"{metric};dur={durStr}";
+            ? $"{safeMetric};dur={durStr};desc=\"{SanitizeServerTimingValue(description)}\""
+            : $"{safeMetric};dur={durStr}";
 
         if (PendingHeaders.TryGetValue("Server-Timing", out var existing) && existing.Length > 0)
         {
@@ -129,6 +132,14 @@ public sealed partial class Ctx
             PendingHeaders["Server-Timing"] = entry;
         }
     }
+
+    private static string SanitizeServerTimingValue(string value) =>
+        value
+            .Replace("\"", "")
+            .Replace("\r", "")
+            .Replace("\n", "")
+            .Replace(";", "")
+            .Replace(",", "");
 
     /// <summary>
     /// Evaluates whether the current user is authorized to perform <paramref name="action"/> on <paramref name="resource"/>
@@ -228,7 +239,14 @@ public sealed partial class Ctx
     {
         await foreach (var message in events)
         {
-            yield return Encoding.UTF8.GetBytes($"data: {message}\n\n");
+            // Multi-line payloads must stay a single data event: raw newlines
+            // would otherwise inject new SSE fields into the stream.
+            var framed = message
+                .Replace("\r\n", "\n")
+                .Replace('\r', '\n')
+                .Replace("\n", "\ndata: ");
+
+            yield return Encoding.UTF8.GetBytes($"data: {framed}\n\n");
         }
     }
 

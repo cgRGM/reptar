@@ -721,22 +721,51 @@ public sealed class ReptarApp
             RequestId = sessionId,
         };
         var connection = new WebSocketConnection(sessionId, ctx);
-        _webSocketSessions[sessionId] = (connection, handlers);
 
-        if (handlers.Open is null)
-            return;
+        // The app middleware pipeline gates WebSocket upgrades the same way it
+        // gates HTTP requests: any middleware may refuse the connection
+        // (auth, rate limit, origin gate) and a short-circuit response closes
+        // the socket instead of reaching the open handler. The sentinel
+        // reference distinguishes "pipeline passed" from a middleware's
+        // refusal response.
+        var proceed = new ReptarResponse { Status = 0 };
+
+        Func<Task<ReptarResponse>> next = handlers.Open is null
+            ? () => Task.FromResult(proceed)
+            : async () =>
+            {
+                await handlers.Open(connection);
+                return proceed;
+            };
+
+        for (var i = _middlewares.Count - 1; i >= 0; i--)
+        {
+            var middleware = _middlewares[i];
+            var inner = next;
+            next = () => middleware(ctx, inner);
+        }
 
         try
         {
-            await handlers.Open(connection);
+            var gate = await next();
+
+            if (!ReferenceEquals(gate, proceed))
+            {
+                ctx.Log.Info(
+                    $"[WebSocket:{sessionId}] Upgrade refused by middleware (HTTP {gate.Status}).");
+                Services.WebSocket.Close(sessionId, 1008, "WebSocket upgrade refused.");
+                return;
+            }
         }
         catch (Exception exception)
         {
             ctx.Log.Error(
                 $"[WebSocket:{sessionId}] Open failed: {exception.Message}");
-            _webSocketSessions.TryRemove(sessionId, out _);
             Services.WebSocket.Close(sessionId, 1011, "WebSocket open failed.");
+            return;
         }
+
+        _webSocketSessions[sessionId] = (connection, handlers);
     }
 
     public async Task HandleWebSocketMessageAsync(

@@ -1,0 +1,121 @@
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  schedule:
+    # Weekly drift scan against new rule/CA/CVE data.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  semgrep:
+    name: Semgrep (Reptar rules)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: pip install semgrep
+
+      # --strict fails on invalid rules. Findings gate by severity:
+      # ERROR/WARNING fail the job, INFO findings are advisory (surfaced as
+      # annotations). Rules target application code (templates/, examples/,
+      # apps/) — framework internals legitimately use the audited escape
+      # hatches.
+      - name: Scan with Reptar security rules
+        run: |
+          semgrep scan --config .semgrep --strict --json --output semgrep-results.json
+          python3 - <<'EOF'
+          import json
+
+          with open("semgrep-results.json") as f:
+              results = json.load(f)["results"]
+
+          blocking = [
+              r for r in results
+              if r["extra"]["severity"] in ("ERROR", "WARNING")
+          ]
+
+          for r in blocking:
+              print(
+                  f"::error file={r['path']},line={r['start']['line']}::"
+                  f"{r['check_id']}: {r['extra']['message']}"
+              )
+
+          for r in results:
+              if r["extra"]["severity"] == "INFO":
+                  print(
+                      f"::notice file={r['path']},line={r['start']['line']}::"
+                      f"{r['check_id']}: {r['extra']['message']}"
+                  )
+
+          raise SystemExit(1 if blocking else 0)
+          EOF
+
+  codeql:
+    name: CodeQL (csharp)
+    runs-on: ubuntu-latest
+    permissions:
+      # Required to upload SARIF results.
+      security-events: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.401"
+
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+
+      # Manual build (no solution file at the repo root): building the test
+      # project compiles the full framework dependency graph for tracing.
+      - name: Build framework
+        run: dotnet build framework/Reptar.Tests/Reptar.Tests.csproj
+
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:csharp"
+
+  dependency-audit:
+    name: Dependency audit (NuGet + Bun)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.401"
+
+      - name: NuGet vulnerability audit
+        run: |
+          fail=0
+          for proj in $(find . -name "*.csproj" \
+              -not -path "*/obj/*" \
+              -not -path "*/bin/*" \
+              -not -path "*/node_modules/*" \
+              -not -path "*/artifacts/*" \
+              -not -path "*/spikes/*"); do
+            if ! dotnet list "$proj" package --vulnerable --include-transitive; then
+              echo "::error file=${proj}::vulnerable packages found"
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.10"
+
+      - name: Bun lockfile audit
+        run: bun audit --production

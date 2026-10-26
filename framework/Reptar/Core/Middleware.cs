@@ -592,6 +592,39 @@ public static class Middlewares
         return difference == 0;
     }
 
+    /// <summary>
+    /// Origin gate for browser-initiated requests, including WebSocket
+    /// upgrades (cross-site WebSocket hijacking defense). Requests without an
+    /// Origin header pass — non-browser clients carry no cross-site risk —
+    /// while browser requests must present an allowed origin. App middleware
+    /// runs on both HTTP requests and WS opens, so one registration covers
+    /// both surfaces.
+    /// </summary>
+    public static ReptarMiddleware WsOrigin(params string[] allowedOrigins) =>
+        async (ctx, next) =>
+        {
+            if (allowedOrigins.Length == 0)
+                return await next();
+
+            var origin = ctx.Req.Header("Origin");
+
+            if (string.IsNullOrEmpty(origin))
+                return await next();
+
+            for (var i = 0; i < allowedOrigins.Length; i++)
+            {
+                if (string.Equals(
+                        allowedOrigins[i],
+                        origin,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return await next();
+                }
+            }
+
+            return ctx.Error(403, "forbidden", $"Origin '{origin}' is not allowed.");
+        };
+
 #if !NETWASM
     public static ReptarMiddleware StaticFiles(
         string rootDirectory = "wwwroot",

@@ -538,7 +538,21 @@ left intact because other agents were actively committing. Bisect through `23323
 | F-56 workspace tools | ✅ | `UseWorkspaceTools` now gates every `/workspace/*` route: default accepts loopback peers and in-process AI dispatch only (the local-agent use case); any other exposure requires an explicit `WorkspaceToolOptions.Authorize` gate. The unauthenticated remote `run_command` RCE surface is closed |
 | F-06 CSRF | ✅ | New `Middlewares.Csrf` — double-submit token (JS-readable cookie + `x-csrf-token` header, constant-time compare), safe-method pass-through, exempt-path prefixes, first-visit POST rejection. Opt-in; documented as complement to SameSite=Lax, available on both hosts |
 | F-58 gateway cost control | ✅ (partial) | New `GATEWAY_ALLOWED_MODELS` env allowlist on the completions path — when set, off-catalog models are 400-rejected instead of routed (and billed) with server-held credentials. Still open: an authentication requirement for the gateway itself (app-level wiring; the gateway is intentionally a drop-in proxy) |
-| F-50/51 WS upgrade auth+origin | ⏳ deferred | Last open item: requires middleware-pipeline execution on WS opens (ReptarApp.HandleWebSocketOpenAsync) plus transport-level Origin checks — both in the most actively-contended file; sequenced for a quiet window |
+**Round 4 (same day) — all three remaining tiers landed:**
+
+| Finding | Status | Notes |
+|---|---|---|
+| F-50 WS middleware bypass | ✅ | `HandleWebSocketOpenAsync` now runs the full app middleware chain on upgrades; a short-circuit response closes the socket with 1008 before the open handler runs. Auth/rate-limit/CSRF/origin middlewares now apply to WebSockets on both hosts uniformly (the transport was already app-closeable) |
+| F-51 CSWSH | ✅ | New `Middlewares.WsOrigin(allowedOrigins)` gate: browser upgrades must present an allowed Origin, non-browser clients (no Origin header) pass — one registration covers HTTP + WS since middleware now runs on both |
+| F-21 SSE injection | ✅ | `SseBody` frames multi-line payloads as `data:` continuations — raw newlines can no longer inject new SSE fields |
+| F-22 Server-Timing injection | ✅ | `ServerTiming` metric/desc stripped of quotes, separators, and control characters |
+| F-34 Email validation | ✅ | `IsEmail` rejects control chars, non-ASCII, and `<>"'\` — the HTML/header smuggling characters |
+| F-28 Postgres DDL defaults | ✅ | `GenerateCreateTableSql` escapes string `DefaultValue`s like every other dialect (parity with `SqlDialect.FormatDefault`) |
+| F-29 Postgres AOT hazard | ✅ | `QueryAsync<T>`/`QuerySingleOrDefaultAsync<T>` carry `[DynamicallyAccessedMembers]` matching the SQLite client |
+| Tier 1: automation | ✅ | `.github/workflows/security.yml` (Semgrep with 6 Reptar-specific rules — validated live, 1 advisory finding; CodeQL csharp; NuGet `--vulnerable --include-transitive` audit; `bun audit`), `.semgrep/reptar.yaml`, `SECURITY.md` (reporting policy + security contract + known limitations), `.github/dependabot.yml` (npm/bun, NuGet framework+templates, Actions) |
+| — | ✅ | Tree repair: staged `SqlPagination.cs` (untracked but referenced by already-committed Postgres code — HEAD did not compile standalone) and the Postgres pagination test expectation pairing with that committed implementation. Verified via `git checkout-index` export: the committed snapshot passes 344/344, while the working tree keeps concurrent agents' in-flight hunks (Mail, StreamingBody, catch-all routes, MySQL parameterized LIMIT) for their own commits |
+
+**Verification discipline this round:** every staged snapshot was compiled and tested from a `git checkout-index` export rather than the working tree, after discovering that (a) HEAD did not compile due to another agent's half-commit and (b) an earlier index snapshot silently missed one hunk due to a content-marker typo ("stays" vs "stay" — the SSE framing test caught it). Hunk-level surgical staging (content-marked filter + `git apply --cached`) let security fixes land without sweeping concurrent in-flight work.
 
 7. **Verify-before-fix, test-after-fix.** Every patch was verified against the actual file immediately before
    editing (anchors drifted twice mid-session due to concurrent edits — both caught because re-reads were
