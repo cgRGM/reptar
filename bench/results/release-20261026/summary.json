@@ -1,0 +1,371 @@
+{
+  "baseline": "6c23c71baace69a082d11811586eb4d265d71678 + missing SqlPagination.cs restored from 5c86b40 (otherwise does not compile)",
+  "candidate": "fb1c4e7",
+  "candidateBinarySha256": "038a7b0c5d354286571928c69eece82712facda327464208755102c0b4825bbb",
+  "config": {
+    "secondsPerRun": 5,
+    "warmupSeconds": 2,
+    "repetitions": 3,
+    "connections": 64,
+    "serverCpu": 0,
+    "loadGeneratorCpu": 1,
+    "only": ["T0", "T1", "T4", "T5", "T10"]
+  },
+  "caveats": [
+    "2-vCPU shared VPS; pinned CPUs are SMT siblings. Existing applications remained running.",
+    "A repaired master baseline, not an untouched build of master.",
+    "All frameworks use the same harness and seed fixtures. Minimal API and Hono binaries were identical in both comparison rounds.",
+    "These are workload-specific measurements, not production-capacity or statistical-significance claims.",
+    "No overall speedup demonstrated. A final candidate rebuild/confirmation run is used for the comparison."
+  ],
+  "frameworkComparison": [
+    {
+      "name": "plaintext",
+      "tier": "T0",
+      "baselineRps": 22541.1332177987,
+      "candidateRps": 22785.392952514438,
+      "changePercent": 1.0836178126256257,
+      "baselineP95Ms": 3.593394,
+      "candidateP95Ms": 3.401692,
+      "baselineRunsRps": [
+        22541.1332177987, 22626.025905095357, 19380.37802042241
+      ],
+      "candidateRunsRps": [
+        22894.049823657286, 22454.24895956966, 22785.392952514438
+      ],
+      "errors": 0
+    },
+    {
+      "name": "json",
+      "tier": "T1",
+      "baselineRps": 21190.509627053303,
+      "candidateRps": 20814.27489788775,
+      "changePercent": -1.7754869315895316,
+      "baselineP95Ms": 3.685135,
+      "candidateP95Ms": 3.7034580000000004,
+      "baselineRunsRps": [
+        21088.14882726852, 21190.509627053303, 21331.176268502903
+      ],
+      "candidateRunsRps": [
+        20814.27489788775, 20761.56890922707, 20915.566823025976
+      ],
+      "errors": 0
+    },
+    {
+      "name": "task-detail",
+      "tier": "T4",
+      "baselineRps": 8864.005598429743,
+      "candidateRps": 8442.356836029889,
+      "changePercent": -4.756864802460747,
+      "baselineP95Ms": 9.418591000000001,
+      "candidateP95Ms": 9.903063999999999,
+      "baselineRunsRps": [
+        8840.332277612477, 8864.005598429743, 8866.233525394971
+      ],
+      "candidateRunsRps": [
+        8509.029650052542, 8442.356836029889, 7004.503354004347
+      ],
+      "errors": 0
+    },
+    {
+      "name": "task-list",
+      "tier": "T5",
+      "baselineRps": 4075.474771439115,
+      "candidateRps": 4032.6861890233886,
+      "changePercent": -1.0499042397609348,
+      "baselineP95Ms": 19.857688,
+      "candidateP95Ms": 20.373457000000002,
+      "baselineRunsRps": [
+        4127.606092333239, 4075.474771439115, 3027.626966352499
+      ],
+      "candidateRunsRps": [
+        4050.3078722982073, 3980.868911794585, 4032.6861890233886
+      ],
+      "errors": 0
+    },
+    {
+      "name": "update-task",
+      "tier": "T10",
+      "baselineRps": 4033.1161624709384,
+      "candidateRps": 3775.025542350543,
+      "changePercent": -6.399285557951117,
+      "baselineP95Ms": 27.081321,
+      "candidateP95Ms": 27.466313,
+      "baselineRunsRps": [
+        3305.4749092269026, 4033.1161624709384, 4148.520455702987
+      ],
+      "candidateRunsRps": [
+        3769.305495588448, 4019.842847676516, 3775.025542350543
+      ],
+      "errors": 0
+    }
+  ],
+  "controls": {
+    "minimal-api": {
+      "baseline": [
+        {
+          "name": "plaintext",
+          "tier": "T0",
+          "rps": 42026.79920468627,
+          "p50Ms": 1.513943,
+          "p95Ms": 1.8306360000000002,
+          "p99Ms": 2.0155160000000003,
+          "errors": 0,
+          "runsRps": [42026.27673702422, 42641.34949008757, 42026.79920468627]
+        },
+        {
+          "name": "json",
+          "tier": "T1",
+          "rps": 42379.48258914311,
+          "p50Ms": 1.521131,
+          "p95Ms": 1.783628,
+          "p99Ms": 1.9713180000000001,
+          "errors": 0,
+          "runsRps": [42721.64135902468, 42379.48258914311, 36376.1072497482]
+        },
+        {
+          "name": "task-detail",
+          "tier": "T4",
+          "rps": 12999.702058262405,
+          "p50Ms": 5.093934,
+          "p95Ms": 6.6724250000000005,
+          "p99Ms": 9.436844,
+          "errors": 0,
+          "runsRps": [12886.8145964761, 13246.302021990285, 12999.702058262405]
+        },
+        {
+          "name": "task-list",
+          "tier": "T5",
+          "rps": 5691.6629681,
+          "p50Ms": 11.036349000000001,
+          "p95Ms": 16.11804,
+          "p99Ms": 17.589997999999998,
+          "errors": 0,
+          "runsRps": [5607.760868918588, 5691.6629681, 5725.113893353562]
+        },
+        {
+          "name": "update-task",
+          "tier": "T10",
+          "rps": 1898.59316541226,
+          "p50Ms": 33.649572,
+          "p95Ms": 40.168245999999996,
+          "p99Ms": 43.914414,
+          "errors": 0,
+          "runsRps": [1912.8912514538192, 1898.59316541226, 1821.1970621880048]
+        }
+      ],
+      "candidate": [
+        {
+          "name": "plaintext",
+          "tier": "T0",
+          "rps": 42244.522466452836,
+          "p50Ms": 1.503575,
+          "p95Ms": 1.825088,
+          "p99Ms": 2.0358009999999997,
+          "errors": 0,
+          "runsRps": [42245.51589053452, 42244.522466452836, 42043.14379833114]
+        },
+        {
+          "name": "json",
+          "tier": "T1",
+          "rps": 42638.321082654256,
+          "p50Ms": 1.515063,
+          "p95Ms": 1.7510139999999998,
+          "p99Ms": 1.918371,
+          "errors": 0,
+          "runsRps": [42638.321082654256, 42870.98572968425, 42441.12690595512]
+        },
+        {
+          "name": "task-detail",
+          "tier": "T4",
+          "rps": 12936.751614061564,
+          "p50Ms": 5.209656,
+          "p95Ms": 6.642793999999999,
+          "p99Ms": 9.479556,
+          "errors": 0,
+          "runsRps": [
+            13068.601787684014, 12936.751614061564, 12796.838968746624
+          ]
+        },
+        {
+          "name": "task-list",
+          "tier": "T5",
+          "rps": 5717.0214521467105,
+          "p50Ms": 10.774783,
+          "p95Ms": 16.049312,
+          "p99Ms": 17.908522,
+          "errors": 0,
+          "runsRps": [5688.18293005551, 5780.228128957689, 5717.0214521467105]
+        },
+        {
+          "name": "update-task",
+          "tier": "T10",
+          "rps": 1897.0456751897066,
+          "p50Ms": 33.204898,
+          "p95Ms": 39.045166,
+          "p99Ms": 43.916866,
+          "errors": 0,
+          "runsRps": [
+            1880.3818292309581, 1897.0456751897066, 1959.2924561194693
+          ]
+        }
+      ]
+    },
+    "hono-compiled": {
+      "baseline": [
+        {
+          "name": "plaintext",
+          "tier": "T0",
+          "rps": 49344.477121152144,
+          "p50Ms": 1.2072420000000001,
+          "p95Ms": 2.250661,
+          "p99Ms": 2.517512,
+          "errors": 0,
+          "runsRps": [49380.25547631146, 44679.17376232924, 49344.477121152144]
+        },
+        {
+          "name": "json",
+          "tier": "T1",
+          "rps": 40494.745849151084,
+          "p50Ms": 1.5368789999999999,
+          "p95Ms": 1.817093,
+          "p99Ms": 2.9620319999999998,
+          "errors": 0,
+          "runsRps": [40583.82531683971, 40494.745849151084, 40251.735626680354]
+        },
+        {
+          "name": "task-detail",
+          "tier": "T4",
+          "rps": 18352.06394111481,
+          "p50Ms": 3.3658799999999998,
+          "p95Ms": 3.9090230000000004,
+          "p99Ms": 6.632498,
+          "errors": 0,
+          "runsRps": [18352.06394111481, 18594.356130446155, 18182.928863509438]
+        },
+        {
+          "name": "task-list",
+          "tier": "T5",
+          "rps": 6925.313174631693,
+          "p50Ms": 9.107178000000001,
+          "p95Ms": 9.880633,
+          "p99Ms": 10.564728,
+          "errors": 0,
+          "runsRps": [6931.375075210241, 6863.021026100026, 6925.313174631693]
+        },
+        {
+          "name": "update-task",
+          "tier": "T10",
+          "rps": 5248.951525231046,
+          "p50Ms": 10.412690000000001,
+          "p95Ms": 22.456404,
+          "p99Ms": 26.2085,
+          "errors": 0,
+          "runsRps": [5212.5384548177735, 5316.349907882607, 5248.951525231046]
+        }
+      ],
+      "candidate": [
+        {
+          "name": "plaintext",
+          "tier": "T0",
+          "rps": 49557.40876456533,
+          "p50Ms": 1.2040060000000001,
+          "p95Ms": 2.174353,
+          "p99Ms": 2.503221,
+          "errors": 0,
+          "runsRps": [49809.432587669704, 49557.40876456533, 49360.30253795072]
+        },
+        {
+          "name": "json",
+          "tier": "T1",
+          "rps": 39594.32477638223,
+          "p50Ms": 1.57381,
+          "p95Ms": 1.870156,
+          "p99Ms": 2.943026,
+          "errors": 0,
+          "runsRps": [39017.59471185133, 39937.07862688705, 39594.32477638223]
+        },
+        {
+          "name": "task-detail",
+          "tier": "T4",
+          "rps": 18459.571812922764,
+          "p50Ms": 3.3950489999999998,
+          "p95Ms": 3.7989159999999997,
+          "p99Ms": 6.607551,
+          "errors": 0,
+          "runsRps": [
+            18606.088162462587, 18459.571812922764, 18446.339148910374
+          ]
+        },
+        {
+          "name": "task-list",
+          "tier": "T5",
+          "rps": 6848.014394621397,
+          "p50Ms": 9.213135000000001,
+          "p95Ms": 9.910197,
+          "p99Ms": 10.661463,
+          "errors": 0,
+          "runsRps": [6490.59751330358, 6848.014394621397, 6898.149220966653]
+        },
+        {
+          "name": "update-task",
+          "tier": "T10",
+          "rps": 5304.823282966451,
+          "p50Ms": 10.460373,
+          "p95Ms": 22.057147,
+          "p99Ms": 25.170393,
+          "errors": 0,
+          "runsRps": [5259.621797241237, 5304.823282966451, 5334.843292060356]
+        }
+      ]
+    }
+  },
+  "baselineManifest": {
+    "stamp": "20261026-release-baseline",
+    "hostname": "ip-172-26-11-201",
+    "kernel": "Linux 7.0.0-1012-aws x86_64",
+    "cpu": "CPU(s):                                  2|Model name:                              Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz|Thread(s) per core:                      2|Core(s) per socket:                      1|Socket(s):                               1|",
+    "memory": "Mem:           3.7Gi       885Mi       1.2Gi       2.9Mi       2.0Gi       2.9Gi",
+    "bun": "1.4.4",
+    "dotnet": "10.0.402",
+    "oha": "oha 1.16.0",
+    "gitCommit": "baseline-20261026",
+    "builderImageId": "sha256:febf78bfc6e823542ed80427ba84f9da71378737bfc6848f4c4cba2e28e7af1f",
+    "binarySizes": {
+      "reptar": 12181400,
+      "minimalApi": 10920632,
+      "hono": 109365424
+    },
+    "config": {
+      "connections": 64,
+      "duration": 5,
+      "warmup": 2,
+      "reps": 3,
+      "only": "T0,T1,T4,T5,T10"
+    }
+  },
+  "candidateManifest": {
+    "stamp": "20261026-release-final",
+    "hostname": "ip-172-26-11-201",
+    "kernel": "Linux 7.0.0-1012-aws x86_64",
+    "cpu": "CPU(s):                                  2|Model name:                              Intel(R) Xeon(R) Platinum 8259CL CPU @ 2.50GHz|Thread(s) per core:                      2|Core(s) per socket:                      1|Socket(s):                               1|",
+    "memory": "Mem:           3.7Gi       854Mi       1.7Gi       2.9Mi       1.5Gi       2.9Gi",
+    "bun": "1.4.4",
+    "dotnet": "10.0.402",
+    "oha": "oha 1.16.0",
+    "gitCommit": "fb1c4e7",
+    "builderImageId": "sha256:febf78bfc6e823542ed80427ba84f9da71378737bfc6848f4c4cba2e28e7af1f",
+    "binarySizes": {
+      "reptar": 12527320,
+      "minimalApi": 10920632,
+      "hono": 109365424
+    },
+    "config": {
+      "connections": 64,
+      "duration": 5,
+      "warmup": 2,
+      "reps": 3,
+      "only": "T0,T1,T4,T5,T10"
+    }
+  }
+}
