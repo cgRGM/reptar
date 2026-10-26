@@ -9,6 +9,7 @@ public sealed class RouteMeta
     public required string Method { get; init; }
     public required string Path { get; init; }
     public Type? InputType { get; internal set; }
+    public Type? QueryType { get; internal set; }
     public List<(int Status, Type? Type)> Produces { get; } = new();
     public string? Name { get; internal set; }
     public string? Summary { get; internal set; }
@@ -31,6 +32,7 @@ public sealed class RouteMeta
             Method = Method,
             Path = path,
             InputType = InputType,
+            QueryType = QueryType,
             Name = Name,
             Summary = Summary,
             Description = Description,
@@ -1781,7 +1783,7 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
 {
     public ReptarApp Build() => app;
 
-    public RouteBuilder Produces<T>(int status)
+    public RouteBuilder Produces<T>(int status = 200)
     {
         meta.Produces.Add((status, typeof(T)));
         return this;
@@ -1790,6 +1792,17 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
     public RouteBuilder Produces(int status)
     {
         meta.Produces.Add((status, null));
+        return this;
+    }
+
+    /// <summary>
+    /// Declares the query-string contract for codegen and OpenAPI. The handler
+    /// still parses/validates values explicitly; this does not bind a JSON body.
+    /// Query records should contain scalar string, number, boolean, or enum fields.
+    /// </summary>
+    public RouteBuilder WithQuery<T>()
+    {
+        meta.QueryType = typeof(T);
         return this;
     }
 

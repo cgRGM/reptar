@@ -138,8 +138,7 @@ app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
   ```http
   Cache-Control: public, max-age=15, stale-while-revalidate=30
   ```
-- **Pluggable store**: the default is a bounded in-process map. Pass an
-  `ISwrCacheStore` to share entries between processes:
+- **Pluggable store**: the default is a bounded in-process map. Pass an `ISwrCacheStore` to share entries between processes:
 
   ```csharp
   app.UseSWR(ttlSeconds: 15, swrSeconds: 30, options =>
@@ -148,10 +147,7 @@ app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
   });
   ```
 
-  `FileSwrCacheStore` writes entries atomically to disk (native hosts only);
-  implement `ISwrCacheStore` to back the cache with Redis, a KV namespace, or
-  another shared service. `ResponseCache.Invalidate(...)` and
-  `PurgeAll()` reach every registered store.
+  `FileSwrCacheStore` writes entries atomically to disk (native hosts only); implement `ISwrCacheStore` to back the cache with Redis, a KV namespace, or another shared service. `ResponseCache.Invalidate(...)` and `PurgeAll()` reach every registered store.
 
 ---
 

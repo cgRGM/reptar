@@ -212,10 +212,6 @@ export const useAgentChat = (
         };
 
         const processFrame = (dataStr: string) => {
-          if (!dataStr || dataStr === "[DONE]") {
-            return;
-          }
-
           let event: AgentStreamEvent;
           try {
             event = JSON.parse(dataStr) as AgentStreamEvent;
@@ -261,11 +257,14 @@ export const useAgentChat = (
               const targetIdx = currentTools.findIndex(
                 (t) => t.id === event.id
               );
-              const idx =
-                targetIdx !== -1 ? targetIdx : currentTools.length - 1;
-              if (idx >= 0 && currentTools[idx]) {
+              let idx = currentTools.length - 1;
+              if (targetIdx !== -1) {
+                idx = targetIdx;
+              }
+              const tool = currentTools[idx];
+              if (idx >= 0 && tool) {
                 currentTools[idx] = {
-                  ...currentTools[idx],
+                  ...tool,
                   ms: event.elapsedMs,
                   result: event.result,
                   state: event.success ? "ok" : "bad",
@@ -288,10 +287,15 @@ export const useAgentChat = (
               updateAssistantState();
               break;
             }
+            default: {
+              // Ignore extension events from a newer server.
+              break;
+            }
           }
         };
 
         while (true) {
+          // eslint-disable-next-line no-await-in-loop -- SSE chunks must be decoded in stream order.
           const { done, value } = await reader.read();
           if (done) {
             break;
@@ -330,13 +334,13 @@ export const useAgentChat = (
         });
 
         onFinish?.(finalAssistantMessage);
-      } catch (err: unknown) {
-        if ((err as Error)?.name === "AbortError") {
+      } catch (error_: unknown) {
+        if ((error_ as Error)?.name === "AbortError") {
           return;
         }
 
         const normalizedError =
-          err instanceof Error ? err : new Error(String(err));
+          error_ instanceof Error ? error_ : new Error(String(error_));
         setError(normalizedError);
         onError?.(normalizedError);
 
@@ -346,9 +350,9 @@ export const useAgentChat = (
           if (lastIdx >= 0 && copy[lastIdx]?.id === assistantId) {
             copy[lastIdx] = {
               ...copy[lastIdx],
-              content:
-                accumulatedContent +
-                `\n\n**Error:** ${normalizedError.message}`,
+              content: `${
+                accumulatedContent
+              }\n\n**Error:** ${normalizedError.message}`,
               isStreaming: false,
             };
           }
@@ -381,13 +385,14 @@ export const useAgentChat = (
     [send]
   );
 
-  useEffect(() => {
-    return () => {
+  useEffect(
+    () => () => {
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
-    };
-  }, []);
+    },
+    []
+  );
 
   return {
     activeSteps,

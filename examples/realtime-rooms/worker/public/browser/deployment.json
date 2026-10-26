@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "0b7e4a03318a161369fbed370f7e1879db3817e028aa052cfb7a22d7593677aa",
+  "semanticBuildId": "fbd2667f6bfad82ef10ba2162f469fe941e039f074c94843661dbef77f07635d",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "803e045969933191af29e771b87e1c784d7574cc5edbc83a15c3d9feda6cf6eb",
+  "buildFingerprint": "c10a335e82a1ee06283dc270a35c64b934b3301a8e0495718f1bd62e0ff0b995",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,7 +23,7 @@
       "relativePath": "RoomsWorker.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types+json;version=2",
-      "sha256": "7bf8a7006c10cb55d1970651c33476ba51cb7b131640815c72c5fba9f8599c24",
+      "sha256": "480b1d8eba7ab1b1d676d36c5277d53f0afafeb9d2926d1e8b0034a88e5ee242",
       "schemaVersion": 2
     },
     {
@@ -44,21 +44,21 @@
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "98aabd83cb88b90a675744be2df62be88600c1f45ab13bd43138b227d8566cd8",
+      "sha256": "7fbf05114273d8a8b644634bd9701ad06e605a5709f55e6b88a4268852f365c0",
       "schemaVersion": 1
     },
     {
       "relativePath": "netwasm.page.mjs",
       "role": "hosting-javascript",
       "mediaType": "text/javascript",
-      "sha256": "b9b403f10a50f5b10ab69d211387e5bf90654ee144319578fadf2faf8c2def5f",
+      "sha256": "46e1aaef00919a3384dfee75c2aa978eb5325c2f75ba5c4ac14e600772e0ab03",
       "schemaVersion": null
     },
     {
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "e7b98d3740159d242bec4bc8d02a711b5a9fc5b8652baa1246dda4b1a6407a10",
+      "sha256": "1739237ce9e69d2fefe1cad3357c4261905dcc921c9b40bd829515ca65d6c8ab",
       "schemaVersion": 1
     }
   ],

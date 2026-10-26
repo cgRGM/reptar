@@ -5,7 +5,7 @@
 **Scope:** the three proposals in the pasted transcript (Ace-style CLI, Lucid-style preload, service lifecycles), plus its AOT/JSON, middleware, and RPS warnings.  
 **Related:** `design.md` §2/§13, `llms.txt` §2/§5b/§6/§7, `plans/master-audit-and-roadmap.md`, `plans/scaffolding-and-auth.md`, `plans/agent-engine.md`, `plans/core-focus-roadmap.md`.
 
-> **Priority note:** this document audits the three AdonisJS-derived proposals. For the broader question — what makes Reptar fastest, most reliable, and most observable without adding bloat — see [`plans/core-focus-roadmap.md`](./core-focus-roadmap.md). That roadmap puts performance gates, observability, and reliability hardening *ahead* of the CLI/preload/lifecycle features discussed here.
+> **Priority note:** this document audits the three AdonisJS-derived proposals. For the broader question — what makes Reptar fastest, most reliable, and most observable without adding bloat — see [`plans/core-focus-roadmap.md`](./core-focus-roadmap.md). That roadmap puts performance gates, observability, and reliability hardening _ahead_ of the CLI/preload/lifecycle features discussed here.
 
 ---
 
@@ -23,7 +23,7 @@ The transcript points at three real gaps, but none of its three implementation s
 | **"Rule 5"** | **Does not exist** | The repo has `AGENTS.md` principles and `llms.txt` §7 "Strict Agent Conventions"; there is no numbered "Rule 5" about JSON. |
 | **Offered `Schema.PostsCols` generator** | **Already implemented** | `ReptarTableGenerator` emits `<Table>Cols` (and `Users.Email`-style tokens when the field is named `Table`). `ReptarEntityGenerator` emits `[ReptarEntity]` `Cols` and row mappers. |
 
-**Bottom line:** steal the AdonisJS *ergonomics*, not its runtime architecture. The highest-value new capability is preload; the easiest is CLI generators; the least valuable as proposed is the source-generated lifecycle. None of them should be built on top of the current template/AOT issues — fix those first.
+**Bottom line:** steal the AdonisJS _ergonomics_, not its runtime architecture. The highest-value new capability is preload; the easiest is CLI generators; the least valuable as proposed is the source-generated lifecycle. None of them should be built on top of the current template/AOT issues — fix those first.
 
 ### What the transcript got right
 
@@ -155,8 +155,8 @@ Lucid models declare relationships (`@hasMany`, `@belongsTo`, `@manyToMany`) and
 
 ```ts
 const posts = await Post.query()
-  .preload('user', (query) => query.preload('profile'))
-  .preload('comments', (query) => query.preload('author'))
+  .preload("user", (query) => query.preload("profile"))
+  .preload("comments", (query) => query.preload("author"));
 ```
 
 For a list of parents, Lucid runs one query per relation with `WHERE foreign_key IN (...)`; for a single parent, it uses `WHERE foreign_key = ?`. It then assigns the related models to each parent. This is side-loading, not a SQL join.

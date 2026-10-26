@@ -929,7 +929,9 @@ if (command === "inspect") {
   if (appIdx !== -1 && rest[appIdx + 1]) {
     targetDir = path.resolve(process.cwd(), rest[appIdx + 1]);
   }
-  const inspection = inspectProject(repoRoot, targetDir);
+  const inspection = inspectProject(repoRoot, targetDir, {
+    dbPath: argValue(rest, "--db"),
+  });
   if (isJson) {
     console.log(JSON.stringify(inspection, null, 2));
     process.exit(0);
@@ -986,7 +988,10 @@ if (command === "doctor") {
   }
   const isJson = rest.includes("--json");
   const strict = rest.includes("--strict");
-  const report = doctorProject(repoRoot, targetDir, { strict });
+  const report = doctorProject(repoRoot, targetDir, {
+    dbPath: argValue(rest, "--db"),
+    strict,
+  });
   if (isJson) {
     console.log(JSON.stringify(report, null, 2));
     process.exit(report.healthy ? 0 : 1);

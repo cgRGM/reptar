@@ -1,8 +1,6 @@
 # Research: Microsoft Agent Framework "Harness" → What Fits Reptar
 
-**Source:** [microsoft/agent-framework · dotnet/samples/02-agents/Harness](https://github.com/microsoft/agent-framework/tree/main/dotnet/samples/02-agents/Harness) and `dotnet/src/Microsoft.Agents.AI/Harness/` (read 2026-10-25).
-**Context:** input for the in-flight `framework/Reptar/AI/` agent engine (StreamingAgentHarness, AgentSessionStore, WorkspaceTools, TerminalAgent already exist).
-**Filter rule (per the repo owner):** steal the *ideas*, translated to what Reptar does — zero reflection, Native AOT, NetWasm, `TableDef`/`IReptarEntity`, static classes + records, env-var config — not the .NET-isms (DI builders, OTel, Microsoft.Extensions.AI abstraction onions).
+**Source:** [microsoft/agent-framework · dotnet/samples/02-agents/Harness](https://github.com/microsoft/agent-framework/tree/main/dotnet/samples/02-agents/Harness) and `dotnet/src/Microsoft.Agents.AI/Harness/` (read 2026-10-25). **Context:** input for the in-flight `framework/Reptar/AI/` agent engine (StreamingAgentHarness, AgentSessionStore, WorkspaceTools, TerminalAgent already exist). **Filter rule (per the repo owner):** steal the _ideas_, translated to what Reptar does — zero reflection, Native AOT, NetWasm, `TableDef`/`IReptarEntity`, static classes + records, env-var config — not the .NET-isms (DI builders, OTel, Microsoft.Extensions.AI abstraction onions).
 
 ---
 
@@ -18,8 +16,7 @@ That's the whole idea: **agent = base loop + composable (instructions, tools, st
 
 ### G1. The module contract: instructions + tools + state key in one unit
 
-MSFT: `abstract class AIContextProvider { Instructions, Tools, StateKeys }`.
-Reptar already has the ingredients scattered (`WorkspaceTools` is static, session store is separate, instructions live in callers). One small interface unifies them without DI:
+MSFT: `abstract class AIContextProvider { Instructions, Tools, StateKeys }`. Reptar already has the ingredients scattered (`WorkspaceTools` is static, session store is separate, instructions live in callers). One small interface unifies them without DI:
 
 ```csharp
 public sealed record AgentModule(
@@ -38,7 +35,7 @@ var modules = new List<AgentModule>
 var systemPrompt = baseInstructions + string.Concat(m => m.Instructions for m in modules);
 ```
 
-This is a *design rule*, not code volume: every capability ships as one of these, never as scattered wiring.
+This is a _design rule_, not code volume: every capability ships as one of these, never as scattered wiring.
 
 ### G2. `TodoModule` — copy the tools, and especially the prompt
 
@@ -57,7 +54,7 @@ Reptar mapping: mode is a column on `agent_sessions`; the harness interpolates `
 MSFT's rules, distilled:
 
 1. Dangerous tools are **default-deny** (each exposed as "approval required" and the host decides).
-2. Standing auto-approval rules match **tool-level** (`Arguments == null` → all calls) or **tool + exact arguments** (non-null dict). Crucially: *a non-null empty dict matches only zero-arg calls* — it can never silently widen into a tool-level rule. That null/non-null discipline is the part worth copying exactly.
+2. Standing auto-approval rules match **tool-level** (`Arguments == null` → all calls) or **tool + exact arguments** (non-null dict). Crucially: _a non-null empty dict matches only zero-arg calls_ — it can never silently widen into a tool-level rule. That null/non-null discipline is the part worth copying exactly.
 3. Tools come in **read-only vs mutating groups** (`read/read_lines/ls/grep` vs `write/delete/replace/replace_lines`) — approve by group.
 
 Reptar version without their `ApprovalRequiredAIFunction` wrapper classes:
@@ -152,7 +149,7 @@ Same filter as Part 1: **steal ideas translated to Reptar primitives; skip the .
 
 ## G11. Structured output with typed validation — `Rule<T>` is the missing half of `RunAsync<T>`
 
-MSFT's `AIAgent.RunAsync<T>(...)` requests a response of type `T` (JSON schema derived via source-gen serializers). Reptar already owns the *better* half of this — `Rule<T>` validators — and currently only uses them on inbound routes. The gem: use them on **outbound LLM output** with a validation-retry loop:
+MSFT's `AIAgent.RunAsync<T>(...)` requests a response of type `T` (JSON schema derived via source-gen serializers). Reptar already owns the _better_ half of this — `Rule<T>` validators — and currently only uses them on inbound routes. The gem: use them on **outbound LLM output** with a validation-retry loop:
 
 ```csharp
 public static async Task<T?> RunStructuredAsync<T>(this ILlmClient client, Validator<T> rule,
@@ -178,7 +175,7 @@ One helper turns any Reptar route handler into "LLM returns a validated C# recor
 Every update chunk carries `AgentId`, `MessageId`, `CreatedAt`, `FinishReason`, `ContinuationToken`, `RawRepresentation`, `AdditionalProperties`. Two gems over Reptar's current `AgentEvent` union:
 
 1. **Stable `MessageId`/`CallId` on every streaming frame** — lets UIs key, merge, and reorder parts (Reptar's `ToolCallStarted/Finished` have `Id` already; text deltas don't).
-2. **`ContinuationToken` on the update stream** — the A2A samples use it for *stream reconnection* and *polling for long-running task completion*. For the gateway: a `X-Reptar-Continuation` header + `?continuation=` replay would make browser reconnects survive network blips and Workers isolate eviction.
+2. **`ContinuationToken` on the update stream** — the A2A samples use it for _stream reconnection_ and _polling for long-running task completion_. For the gateway: a `X-Reptar-Continuation` header + `?continuation=` replay would make browser reconnects survive network blips and Workers isolate eviction.
 
 Also copy their discipline: buffered-response ⇄ update-stream are **bidirectionally convertible, and documented as lossy** — keep both shapes explicit.
 
@@ -191,16 +188,16 @@ Reptar mapping — add two concepts to the `examples/ai-gateway` provider table:
 - `"a2a/<url>"` model routing: fetch the **agent card** once, expose each advertised skill as a tool (`A2AAgent_AsFunctionTool` = whole agent as one tool; `A2AAgent_Skills` = one tool per skill — steal both shapes), translate chat-completions → A2A task submission, poll/subscribe until terminal state.
 - Long-running task rows in SQLite/D1 (`a2a_tasks`: id, status, continuation, result) give the gateway free durable task tracking — the state store Reptar already ships is what MSFT builds entire hosting packages for.
 
-And the inverse: Reptar agents *exposed* as A2A servers is a natural `app.MapA2A("/a2a", agent)` — but that's a bigger commitment; catalog it, don't build it yet.
+And the inverse: Reptar agents _exposed_ as A2A servers is a natural `app.MapA2A("/a2a", agent)` — but that's a bigger commitment; catalog it, don't build it yet.
 
-## G14. Request ports — human-in-the-loop *as a first-class graph primitive* (the biggest workflow gem)
+## G14. Request ports — human-in-the-loop _as a first-class graph primitive_ (the biggest workflow gem)
 
 `Workflows` lets any executor register a **RequestPort**, emit a `RequestInfoEvent` mid-run, and **suspend** until the host posts an `ExternalResponse`. Combined with `CheckpointManager` (resumable runs) this means: a multi-step agent workflow can pause for days waiting on a human, then resume from durable state.
 
 Reptar mapping, keeping it small:
 
 - A workflow/agent run that needs input emits a `RequestInfo` event → serialized over SSE/data-stream to the client → client POSTs the answer to a `POST /agent/runs/{id}/continue` route → the run resumes from its checkpointed state.
-- Checkpoint = a row in a `agent_run_checkpoints` `TableDef` (session id, step, state JSON, created_at) — written through the existing SQLite/D1 client. Reptar's durable session store already gives this for free; the *port/resume* semantics are the only new code.
+- Checkpoint = a row in a `agent_run_checkpoints` `TableDef` (session id, step, state JSON, created_at) — written through the existing SQLite/D1 client. Reptar's durable session store already gives this for free; the _port/resume_ semantics are the only new code.
 
 This composes with G4 (approval) from Part 1 — approval is just a request port with two buttons.
 
@@ -212,17 +209,17 @@ This composes with G4 (approval) from Part 1 — approval is just a request port
 - **Replan-on-failure prompt**: "explain the root cause of the failure, then a new plan that avoids repeating the same mistakes."
 - Plan + progress-ledger templates with named `{placeholders}` and a documented "overrides must keep `{schema}`" rule.
 
-Same as the Harness todo/mode prompts: the *text* is the gem; port it into whatever multi-agent module Reptar grows (or a `PromptPack` static class users can compose into instructions).
+Same as the Harness todo/mode prompts: the _text_ is the gem; port it into whatever multi-agent module Reptar grows (or a `PromptPack` static class users can compose into instructions).
 
 ## G16. `Workflows.Generators` validates Reptar's whole approach — and adds one idea
 
-MSFT uses a Roslyn incremental generator so `[MessageHandler]` methods become **compile-time route tables** (zero runtime reflection — same philosophy as Reptar's `AsAiTool`/`ColumnRef` generators). The new idea worth taking: `[SendsMessage]/[YieldsOutput]` attributes generate **protocol metadata**, so message flow between executors is statically analyzable. A future Reptar workflow module could emit build errors like *"executor `Fetcher` yields `RawHtml`, but no executor handles it"* — compile-time graph validation is exactly "what we do," and it's a genuine differentiator vs every runtime-wired agent framework.
+MSFT uses a Roslyn incremental generator so `[MessageHandler]` methods become **compile-time route tables** (zero runtime reflection — same philosophy as Reptar's `AsAiTool`/`ColumnRef` generators). The new idea worth taking: `[SendsMessage]/[YieldsOutput]` attributes generate **protocol metadata**, so message flow between executors is statically analyzable. A future Reptar workflow module could emit build errors like _"executor `Fetcher` yields `RawHtml`, but no executor handles it"_ — compile-time graph validation is exactly "what we do," and it's a genuine differentiator vs every runtime-wired agent framework.
 
 ## G17. Declarative workflows — take three ideas, skip the platform
 
 The YAML no-code platform itself (PowerFx interpreter, sensitivity-checked expressions, Foundry bindings) is too big and too .NET. But three details are excellent:
 
-1. **Sensitivity metadata on expressions**: control-flow expressions must evaluate to *non-sensitive* values; diagnostics reference variable *names*, never values. Any Reptar feature that runs user-influenced expressions (filters, templates, workflow conditions) should adopt the same privacy rule.
+1. **Sensitivity metadata on expressions**: control-flow expressions must evaluate to _non-sensitive_ values; diagnostics reference variable _names_, never values. Any Reptar feature that runs user-influenced expressions (filters, templates, workflow conditions) should adopt the same privacy rule.
 2. **Capture decisions at checkpoint time**: "changes to workflow state while a request is pending do not change that invocation's behavior" — resume determinism. Reptar's resume (G14) should snapshot the decision alongside the checkpoint.
 3. **File-based workflow definition** fits Reptar's philosophy perfectly: a `workflow.yaml` next to `app.cs`, validated by a source generator into route registrations — the same `app.cs` story applied to orchestration. (Design sketch only; not urgent.)
 
@@ -242,7 +239,7 @@ This is the natural extension of `examples/ai-gateway`: the gateway already prov
 
 ## G20. Skills at runtime — load `SKILL.md` directories as agent tools
 
-The repo itself (`.agents/skills/*/SKILL.md`) already follows this convention for *developer* agents. MSFT's `AgentSkills` makes the same shape a **runtime** capability: skill = metadata + resources + scripts; file-based / code-defined / class-based sources; scripts run through a `SubprocessScriptRunner`; skills can also arrive over MCP. Reptar mapping: `WorkspaceTools` gains a `SkillsDirectory(path)` that turns each skill into an `AiToolDefinition` (description from SKILL.md, scripts executed via the subprocess runner or, on NetWasm, through `IQueueClient`/DO isolation). Keep it file-based-first — that's the Reptar house style.
+The repo itself (`.agents/skills/*/SKILL.md`) already follows this convention for _developer_ agents. MSFT's `AgentSkills` makes the same shape a **runtime** capability: skill = metadata + resources + scripts; file-based / code-defined / class-based sources; scripts run through a `SubprocessScriptRunner`; skills can also arrive over MCP. Reptar mapping: `WorkspaceTools` gains a `SkillsDirectory(path)` that turns each skill into an `AiToolDefinition` (description from SKILL.md, scripts executed via the subprocess runner or, on NetWasm, through `IQueueClient`/DO isolation). Keep it file-based-first — that's the Reptar house style.
 
 ## G21. Isolation keys + DevUI (two hosting notes)
 
@@ -256,7 +253,7 @@ The repo itself (`.agents/skills/*/SKILL.md`) already follows this convention fo
 | `Microsoft.Extensions.AI` `IChatClient` decorator onion (`AsIChatClient().AsAIAgent()`) | Reptar keeps `ILlmClient` + factory |
 | DI `ServiceCollection` hosting (`AddA2AServer`, `HostedAgentBuilder`) | `app.Use...`/records/`new` |
 | OpenTelemetry SDK in the agent core | `AgentEvent` stream + telemetry tables (already agreed in Part 1) |
-| Workflows' `Reflection/` directory + delayed external-request sink plumbing | Request ports *concept* (G14) without the host plumbing |
+| Workflows' `Reflection/` directory + delayed external-request sink plumbing | Request ports _concept_ (G14) without the host plumbing |
 | PowerFx interpreter for expressions | Not in scope; steal only its privacy discipline (G17) |
 | Azure/Foundry, Cosmos/Valkey/Mem0, Purview adapters | Reptar already maps SQLite/D1/R2/KV/Storage in `ReptarConfig` |
 | Aspire DevUI app model | Studio page (G21) |
@@ -276,10 +273,7 @@ The repo itself (`.agents/skills/*/SKILL.md`) already follows this convention fo
 
 # Part 3: Implementation log (2026-10-25, same session)
 
-All gems below are **implemented in `framework/Reptar/AI/` and the ai-gateway**, zero
-leave-behinds copied, all behind the existing `#if !NETWASM` folder convention, all
-zero-reflection in request paths, all with tests in `AgentEngineTests.cs`.
-Suite went **148 → 187 passing**.
+All gems below are **implemented in `framework/Reptar/AI/` and the ai-gateway**, zero leave-behinds copied, all behind the existing `#if !NETWASM` folder convention, all zero-reflection in request paths, all with tests in `AgentEngineTests.cs`. Suite went **148 → 187 passing**.
 
 | Gem | File(s) | Notes |
 | :-- | :-- | :-- |
@@ -299,20 +293,11 @@ Suite went **148 → 187 passing**.
 | **G6** background agents | `AI/BackgroundAgents.cs` | The four-tool MSFT set (`start_task` / `wait_for_first_completion` / `get_task_results` / `get_all_tasks`), each child in its own concurrent session via `Task.Run`; unknown agents rejected structurally; clear-completed hook for session release. |
 | **G7** module state slices | `AI/BackgroundAgents.cs` | `agent_module_state` TableDef (composite PK, upsert) + `ModuleStateStore` — the durable version of the MSFT session state bag. |
 
-**Deliberately not implemented (design notes in Part 2):** G16 compile-time graph
-validation (needs a workflow-module type first — the `Workflows.Generators` pattern
-remains the reference), G17 declarative YAML workflows (sketch only), and every confirmed
-leave-behind.
+**Deliberately not implemented (design notes in Part 2):** G16 compile-time graph validation (needs a workflow-module type first — the `Workflows.Generators` pattern remains the reference), G17 declarative YAML workflows (sketch only), and every confirmed leave-behind.
 
-**Known limitations, honestly stated:** the in-memory `BackgroundAgentsModule` doesn't
-cancel abandoned tasks on dispose (documented; the durable version belongs on
-`IQueueClient`/`IDurableBridge` under NetWasm); `SkillsDirectory` reads skill content but
-does not execute skill scripts (deferred until it composes with the G4 approval gate);
-`Rule<T>`'s expression-based `Prop()` still relies on the existing validator internals
-(the AOT-safe `Prop(name, getter)` overload exists for strict AOT paths).
+**Known limitations, honestly stated:** the in-memory `BackgroundAgentsModule` doesn't cancel abandoned tasks on dispose (documented; the durable version belongs on `IQueueClient`/`IDurableBridge` under NetWasm); `SkillsDirectory` reads skill content but does not execute skill scripts (deferred until it composes with the G4 approval gate); `Rule<T>`'s expression-based `Prop()` still relies on the existing validator internals (the AOT-safe `Prop(name, getter)` overload exists for strict AOT paths).
 
-**Late additions, same session (Part 3 update):** G16 and G17 are now implemented
-too — the gem list is complete, nothing left as a design note.
+**Late additions, same session (Part 3 update):** G16 and G17 are now implemented too — the gem list is complete, nothing left as a design note.
 
 | Gem | File(s) | Notes |
 | :-- | :-- | :-- |

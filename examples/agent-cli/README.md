@@ -36,53 +36,24 @@ bun reptar agent --providers           # show connection status and exit
 
 In-session: `/connect`, `/providers`, `/models`, `/disconnect`.
 
-The flow mirrors Pi and OpenCode, with a zero-dependency terminal UI
-(Spectre.Console ideas, ~0 MB: arrow-key selection with type-to-search and
-paging, hidden API-key entry with validation re-ask, a live spinner for the
-connection test, and bordered auto-measured tables — every component falls
-back to plain numbered input when stdin is piped, so scripted and CI flows
-keep working):
+The flow mirrors Pi and OpenCode, with a zero-dependency terminal UI (Spectre.Console ideas, ~0 MB: arrow-key selection with type-to-search and paging, hidden API-key entry with validation re-ask, a live spinner for the connection test, and bordered auto-measured tables — every component falls back to plain numbered input when stdin is piped, so scripted and CI flows keep working):
 
-- **Provider picker** with live status per row (`✓ env: OPENAI_API_KEY`,
-  `✓ saved`, `• not connected`) — arrow keys navigate, typing filters
+- **Provider picker** with live status per row (`✓ env: OPENAI_API_KEY`, `✓ saved`, `• not connected`) — arrow keys navigate, typing filters
 - **Connection test under a live spinner** against the provider's model list
-- **Model picker** enriched with the [models.dev](https://models.dev)
-  curated catalog (display names like `Claude Opus 4.5 · 200k ctx`, and it
-  works with **zero credentials** — `/models anthropic` browses before you
-  ever connect)
-- Saves to `~/.reptar/agent/auth.json` (flat map, `0600` permissions,
-  last-connect becomes the default provider)
+- **Model picker** enriched with the [models.dev](https://models.dev) curated catalog (display names like `Claude Opus 4.5 · 200k ctx`, and it works with **zero credentials** — `/models anthropic` browses before you ever connect)
+- Saves to `~/.reptar/agent/auth.json` (flat map, `0600` permissions, last-connect becomes the default provider)
 
-Built-in providers: OpenAI, Anthropic, Google Gemini, Ollama (local),
-OpenRouter, Vercel AI Gateway, **OpenCode Zen** (`opencode.ai/zen/v1`), and
-**Cloudflare AI Gateway** (your `gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}`
-URL + the upstream provider's key). `Other` registers any custom
-OpenAI-compatible endpoint (id + base URL + key + model), like OpenCode's
-custom provider flow.
-**Precedence — env always wins over saved, and the status table shows which source is live:**
-`--model`/`--provider` flags → `REPTAR_AGENT_*` env vars → provider env keys
-(`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_HOST` /
-`OPENROUTER_API_KEY` / `AI_GATEWAY_API_KEY`) → credentials saved by
-`/connect` → offline Echo provider (deterministic reply, tools still real).
+Built-in providers: OpenAI, Anthropic, Google Gemini, Ollama (local), OpenRouter, Vercel AI Gateway, **OpenCode Zen** (`opencode.ai/zen/v1`), and **Cloudflare AI Gateway** (your `gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}` URL + the upstream provider's key). `Other` registers any custom OpenAI-compatible endpoint (id + base URL + key + model), like OpenCode's custom provider flow. **Precedence — env always wins over saved, and the status table shows which source is live:** `--model`/`--provider` flags → `REPTAR_AGENT_*` env vars → provider env keys (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `OLLAMA_HOST` / `OPENROUTER_API_KEY` / `AI_GATEWAY_API_KEY`) → credentials saved by `/connect` → offline Echo provider (deterministic reply, tools still real).
 
 ## The Input Editor
 
 The prompt is a pi-style line editor (raw ANSI, zero dependencies):
 
-- **`/` → command dropdown** — every slash command with its description,
-  filtered as you type (name *and* description, pi-style fuzzy), arrow keys to
-  navigate, Enter to accept the top suggestion, ESC to dismiss
-- **`@path` → file attach** — workspace files (respecting the ignore list)
-  match as you type; Enter accepts the top match, a second Enter submits.
-  Text files inline as `[file: path]` context blocks; **images
-  (`.png .jpg .jpeg .webp .gif`) attach as vision content blocks** for
-  OpenAI, Anthropic, and Gemini
-- **`!command` → shell passthrough** — runs in the workspace, shows output,
-  never goes to the model
+- **`/` → command dropdown** — every slash command with its description, filtered as you type (name _and_ description, pi-style fuzzy), arrow keys to navigate, Enter to accept the top suggestion, ESC to dismiss
+- **`@path` → file attach** — workspace files (respecting the ignore list) match as you type; Enter accepts the top match, a second Enter submits. Text files inline as `[file: path]` context blocks; **images (`.png .jpg .jpeg .webp .gif`) attach as vision content blocks** for OpenAI, Anthropic, and Gemini
+- **`!command` → shell passthrough** — runs in the workspace, shows output, never goes to the model
 - **Ctrl+P → command palette** — open the command menu from anywhere
-- **Status bar** above every prompt: `~/workspace (branch) · model · tokens/ctx · $cost`
-  — tokens come from each provider's usage stream, cost/context from models.dev,
-  git branch parsed from `.git/HEAD`
+- **Status bar** above every prompt: `~/workspace (branch) · model · tokens/ctx · $cost` — tokens come from each provider's usage stream, cost/context from models.dev, git branch parsed from `.git/HEAD`
 - ↑/↓ history, cursor editing, and piped-stdin fallback for scripts/CI
 
 ## Terminal Session
@@ -118,6 +89,7 @@ Every path is resolved against the workspace root and **any escape is rejected**
 ## Web UI & API
 
 The web companion (`bun reptar agent --web`) is a modern, responsive chat interface inspired by **shadcn/ui AI Elements**:
+
 - **Centered thread layout** with fluid reading column and collapsible glass sidebar
 - **Interactive Tool Cards**: expandable execution inspector for `read_file`, `write_file`, `edit_file`, `list_dir`, `run_command` with stdout viewer, elapsed ms, and diffs
 - **Trace / Reasoning Accordion**: collapsible multi-step thinking indicator

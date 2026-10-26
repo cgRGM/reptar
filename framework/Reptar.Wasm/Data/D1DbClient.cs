@@ -79,17 +79,10 @@ public sealed class D1DbClient : IDbClient
             sql.Append(' ').Append(clause);
         }
 
-        if (limit > 0)
-        {
-            sql.Append($" limit {limit}");
-
-            if (offset > 0)
-            {
-                sql.Append($" offset {offset}");
-            }
-        }
-
-        return QueryAsync<T>(sql.ToString(), param);
+        if (limit <= 0) return QueryAsync<T>(sql.ToString(), param);
+        var (normalizedSql, paramsJson) = NormalizeSqlAndParams(sql.ToString(), param);
+        var page = SqlPagination.AppendPositionalJson(normalizedSql, paramsJson, limit, offset);
+        return QueryAsync<T>(page.Sql, page.ParamsJson);
     }
 
     public Task<int> InsertAsync<T>(TableDef table, T values) where T : class =>

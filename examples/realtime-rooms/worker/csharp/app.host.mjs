@@ -46,8 +46,7 @@ export const r2exists = (key) => globalThis.__REPTAR_R2_EXISTS(key);
 
 export const r2delete = (key) => globalThis.__REPTAR_R2_DELETE(key);
 
-export const r2deleteMany = (keys) =>
-  globalThis.__REPTAR_R2_DELETE_MANY(keys);
+export const r2deleteMany = (keys) => globalThis.__REPTAR_R2_DELETE_MANY(keys);
 
 export const r2multipartcreate = (
   key,
@@ -87,16 +86,8 @@ export const kvDelete = (key) => globalThis.__REPTAR_KV_DELETE(key);
 export const queueSend = (queueName, messageJson) =>
   globalThis.__REPTAR_QUEUE_SEND(queueName, messageJson);
 
-export const queueSendWithOptions = (
-  queueName,
-  messageJson,
-  delaySeconds
-) =>
-  globalThis.__REPTAR_QUEUE_SEND_OPTIONS(
-    queueName,
-    messageJson,
-    delaySeconds
-  );
+export const queueSendWithOptions = (queueName, messageJson, delaySeconds) =>
+  globalThis.__REPTAR_QUEUE_SEND_OPTIONS(queueName, messageJson, delaySeconds);
 
 export const queueSendBatch = (queueName, messagesJson) =>
   globalThis.__REPTAR_QUEUE_SEND_BATCH(queueName, messagesJson);
@@ -110,13 +101,7 @@ export const durableFetch = (namespace, id, path, method, body) =>
 export const httpFetch = (url, method, headersJson, body) =>
   globalThis.__REPTAR_HTTP_FETCH(url, method, headersJson, body);
 
-export const httpFetchBytes = (
-  url,
-  method,
-  headersJson,
-  body,
-  contentType
-) =>
+export const httpFetchBytes = (url, method, headersJson, body, contentType) =>
   globalThis.__REPTAR_HTTP_FETCH_BYTES(
     url,
     method,
@@ -147,7 +132,7 @@ export const wsCommand = (sessionId, json) => {
   try {
     if (command.type === "send") {
       if (typeof globalThis.__REPTAR_WS_SEND !== "function") {
-        throw new Error("__REPTAR_WS_SEND is not installed");
+        throw new TypeError("__REPTAR_WS_SEND is not installed");
       }
       globalThis.__REPTAR_WS_SEND(sessionId, command.message);
     } else if (command.type === "close") {
@@ -156,9 +141,11 @@ export const wsCommand = (sessionId, json) => {
   } catch (error) {
     console.error(
       "wsCommand failure:",
-      error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      error instanceof Error
+        ? `${error.name}: ${error.message}`
+        : String(error),
       "| session:",
-      sessionId,
+      sessionId
     );
     throw error;
   }
@@ -170,8 +157,7 @@ export const wsMessageDone = (sessionId) =>
 export const respond = (requestId, json) =>
   globalThis.__REPTAR_RESPOND(requestId, json);
 
-export const telemetry = (json) =>
-  globalThis.__REPTAR_TELEMETRY(json);
+export const telemetry = (json) => globalThis.__REPTAR_TELEMETRY(json);
 
 export const streamStart = (requestId, status, headersJson, cookiesJson) =>
   globalThis.__REPTAR_STREAM_START(requestId, status, headersJson, cookiesJson);

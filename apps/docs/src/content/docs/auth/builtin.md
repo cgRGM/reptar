@@ -49,11 +49,7 @@ var app = ReptarApp.Create(new ReptarConfig
 app.Route("/auth", Reptar.Auth.Routes());
 ```
 
-Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` by default. Set
-`SecureCookies = false` only when serving plain HTTP locally (for example the
-scaffolded app does this under `#if DEBUG`). Login throttling uses
-`RateLimitMaxAttempts` / `RateLimitWindowMinutes` on both Kestrel and the Wasm
-auth slice (per-isolate best effort on Workers).
+Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` by default. Set `SecureCookies = false` only when serving plain HTTP locally (for example the scaffolded app does this under `#if DEBUG`). Login throttling uses `RateLimitMaxAttempts` / `RateLimitWindowMinutes` on both Kestrel and the Wasm auth slice (per-isolate best effort on Workers).
 
 ---
 

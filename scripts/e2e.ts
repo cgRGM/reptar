@@ -42,8 +42,8 @@ const killPort = (portToKill: string): void => {
       { encoding: "utf-8" }
     );
     for (const line of listeners.stdout.trim().split("\n")) {
-      const pid = Number.parseInt(line, 10);
-      if (Number.isFinite(pid) && pid !== process.pid) {
+      const pid = Number(line);
+      if (Number.isInteger(pid) && pid > 0 && pid !== process.pid) {
         try {
           process.kill(pid, "SIGKILL");
         } catch {
@@ -331,7 +331,7 @@ const run = async (): Promise<void> => {
 
     // Streaming path: >8 MiB forces R2 multipart, and the route consumes
     // ctx.Req.BodyStream instead of the buffered ctx.Req.Body.
-    const largePng = new Uint8Array((8 * 1024 * 1024) + 4096);
+    const largePng = new Uint8Array(8 * 1024 * 1024 + 4096);
     largePng.set(pngBytes, 0);
     largePng[largePng.length - 1] = 0xff;
 

@@ -94,42 +94,19 @@ Reproduction: `bun examples/ai-gateway/bench.ts` then watch `GET /gateway/stats`
 
 ## 5. Addendum (later the same day): building the agent-engine gems under multi-agent co-editing
 
-While implementing G1–G21 into `framework/Reptar/AI/`, a second agent was
-simultaneously developing the agent engine in the same folder. Five+ concrete
-incidents, now part of the evidence base for F9:
+While implementing G1–G21 into `framework/Reptar/AI/`, a second agent was simultaneously developing the agent engine in the same folder. Five+ concrete incidents, now part of the evidence base for F9:
 
-1. **Trunk went red 5+ times** from uncommitted WIP: `framework/Reptar/AI/*`
-   (three separate states), `AiTools.cs` (`CS0307`), `Auth.cs`
-   (`Ctx.Config` mid-rename), `LlmGemini.cs` (`usageSeen`/`parts` scoping). Each
-   flap breaks **every** example app, because file-based apps build the
-   framework first. Poll-and-wait loops cost real session time (~2–5 min each).
+1. **Trunk went red 5+ times** from uncommitted WIP: `framework/Reptar/AI/*` (three separate states), `AiTools.cs` (`CS0307`), `Auth.cs` (`Ctx.Config` mid-rename), `LlmGemini.cs` (`usageSeen`/`parts` scoping). Each flap breaks **every** example app, because file-based apps build the framework first. Poll-and-wait loops cost real session time (~2–5 min each).
 2. **Live co-edit collisions on the same files**:
-   - My `StructuredOutput.cs` gained an `onRetry` snapshot fix (`[.. issues]`)
-     minutes after I wrote it — correct, but undiscussed.
-   - My `ScriptedLlmClient` test fake was fixed to snapshot (`[.. messages]`)
-     while I was debugging my own aliasing bug.
-   - My `AgentModules.cs` was refactored mid-flight (`Create` → `ForSession` +
-     `ToModule()` + implicit operator) between my write and my next compile —
-     luckily the refactor was good and my tests passed against it unchanged.
-   - An `LlmJson` → `LlmHttp` rename rippled through my files — discovered via
-     compiler errors, fixed by mirroring.
-3. **What worked well**: explicit `onRetry`-style snapshot semantics survive
-   aliasing bugs; the generator house style (`IIncrementalGenerator` +
-   `ForAttributeWithMetadataName` + per-type emission) made the new workflow
-   graph generator build and pass tests on the **first compile**; warning-severity
-   diagnostics (not errors) let negative graph cases stay unit-testable while
-   still surfacing in builds.
+   - My `StructuredOutput.cs` gained an `onRetry` snapshot fix (`[.. issues]`) minutes after I wrote it — correct, but undiscussed.
+   - My `ScriptedLlmClient` test fake was fixed to snapshot (`[.. messages]`) while I was debugging my own aliasing bug.
+   - My `AgentModules.cs` was refactored mid-flight (`Create` → `ForSession` + `ToModule()` + implicit operator) between my write and my next compile — luckily the refactor was good and my tests passed against it unchanged.
+   - An `LlmJson` → `LlmHttp` rename rippled through my files — discovered via compiler errors, fixed by mirroring.
+3. **What worked well**: explicit `onRetry`-style snapshot semantics survive aliasing bugs; the generator house style (`IIncrementalGenerator` + `ForAttributeWithMetadataName` + per-type emission) made the new workflow graph generator build and pass tests on the **first compile**; warning-severity diagnostics (not errors) let negative graph cases stay unit-testable while still surfacing in builds.
 
 **Concrete asks** (extending F9):
-- A `bun reptar preflight` that builds `framework/Reptar` and prints red/green,
-  so agents poll the trunk state in seconds instead of discovering breakage
-  through their app builds.
-- A convention that framework-level WIP lands in `spikes/` until it compiles,
-  or that `framework/Reptar/AI/`-class WIP gets committed at each compiling state
-  (the folder already compiles cleanly today — 200/200 tests green).
-- For multi-agent sessions on shared files: claim-by-comment at the top of the
-  file (owner + ETA), or a merge queue. The `edit` tool's exact-match oldText
-  guard caught several collisions before they happened — keep that discipline.
-- Rename sweeps (`LlmJson` → `LlmHttp`) should go through a deprecation alias
-  or be announced in a shared plan doc; three of my compile failures were
-  someone else's rename rippling.
+
+- A `bun reptar preflight` that builds `framework/Reptar` and prints red/green, so agents poll the trunk state in seconds instead of discovering breakage through their app builds.
+- A convention that framework-level WIP lands in `spikes/` until it compiles, or that `framework/Reptar/AI/`-class WIP gets committed at each compiling state (the folder already compiles cleanly today — 200/200 tests green).
+- For multi-agent sessions on shared files: claim-by-comment at the top of the file (owner + ETA), or a merge queue. The `edit` tool's exact-match oldText guard caught several collisions before they happened — keep that discipline.
+- Rename sweeps (`LlmJson` → `LlmHttp`) should go through a deprecation alias or be announced in a shared plan doc; three of my compile failures were someone else's rename rippling.

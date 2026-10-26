@@ -16,6 +16,25 @@ internal static class SqlPagination
     public const string LimitParam = "__limit";
     public const string OffsetParam = "__offset";
 
+    /// <summary>Appends D1 pagination bindings to an already-normalized JSON parameter array.</summary>
+    internal static (string Sql, string ParamsJson) AppendPositionalJson(
+        string sql, string paramsJson, int limit, int offset)
+    {
+        if (limit <= 0) return (sql, paramsJson);
+        var json = paramsJson.Trim();
+        if (json.Length < 2 || json[0] != '[' || json[^1] != ']')
+            throw new ArgumentException("D1 pagination requires a JSON parameter array.", nameof(paramsJson));
+        var bindings = limit.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        sql += " limit ?";
+        if (offset > 0)
+        {
+            sql += " offset ?";
+            bindings += "," + offset.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+        var separator = json.AsSpan(1, json.Length - 2).Trim().IsEmpty ? "" : ",";
+        return (sql, json[..^1] + separator + bindings + "]");
+    }
+
     /// <summary>
     /// True when <paramref name="param"/> is null or a named shape the
     /// ADO.NET drivers can bind (<see cref="IReptarEntity"/>, dictionary,

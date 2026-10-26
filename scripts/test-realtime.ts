@@ -34,6 +34,7 @@ const waitForHealth = async (
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     try {
+      // eslint-disable-next-line no-await-in-loop -- Poll until this host becomes ready.
       const response = await fetch(url);
       if (response.ok) {
         return true;
@@ -41,6 +42,7 @@ const waitForHealth = async (
     } catch {
       // not up yet
     }
+    // eslint-disable-next-line no-await-in-loop -- Back off between readiness attempts.
     await Bun.sleep(1500);
   }
   return false;
@@ -68,10 +70,14 @@ const killTree = (pid: number | undefined, port: number): void => {
   if (pid) {
     try {
       process.kill(pid, "SIGKILL");
-    } catch {}
+    } catch {
+      // Parent may already have exited.
+    }
     try {
       spawnSync("pkill", ["-P", String(pid)]);
-    } catch {}
+    } catch {
+      // Children may already have exited.
+    }
   }
   // Kill the wrangler parent too; otherwise it respawns workerd on the port
   // after the listener is killed.
@@ -92,14 +98,22 @@ const killTree = (pid: number | undefined, port: number): void => {
       { encoding: "utf-8" }
     );
     for (const line of listeners.stdout.trim().split("\n")) {
-      const listenerPid = Number.parseInt(line, 10);
-      if (Number.isFinite(listenerPid) && listenerPid !== process.pid) {
+      const listenerPid = Number(line);
+      if (
+        Number.isInteger(listenerPid) &&
+        listenerPid > 0 &&
+        listenerPid !== process.pid
+      ) {
         try {
           process.kill(listenerPid, "SIGKILL");
-        } catch {}
+        } catch {
+          // Listener may have exited during teardown.
+        }
       }
     }
-  } catch {}
+  } catch {
+    // lsof is optional on minimal Linux hosts.
+  }
 };
 
 const runWorkersSmoke = async (port: number): Promise<boolean> => {

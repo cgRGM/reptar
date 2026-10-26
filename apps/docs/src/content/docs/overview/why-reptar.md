@@ -3,7 +3,7 @@ title: Why Reptar
 description: The honest case for humans and AI agents choosing Reptar — receipts included.
 ---
 
-Reptar exists for one reason: **most of what a web backend ships at runtime is ceremony, and ceremony is where production bugs live.** Reptar removes the ceremony at compile time — which happens to make it fast for humans and *extremely* productive for AI agents.
+Reptar exists for one reason: **most of what a web backend ships at runtime is ceremony, and ceremony is where production bugs live.** Reptar removes the ceremony at compile time — which happens to make it fast for humans and _extremely_ productive for AI agents.
 
 ## The one-sentence pitch
 

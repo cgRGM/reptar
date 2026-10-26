@@ -3,7 +3,7 @@
   "compilerOptions": {
     "lib": ["ESNext", "DOM"],
     "jsx": "react-jsx",
-    "types": ["node"]
+    "types": ["bun", "node"]
   },
   "include": ["src/**/*"]
 }

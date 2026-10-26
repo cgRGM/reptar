@@ -68,8 +68,8 @@ const runProvider = async (
       .stdout.toString()
       .trim();
     for (const pid of listeners.split("\n")) {
-      const parsed = Number.parseInt(pid, 10);
-      if (!Number.isNaN(parsed)) {
+      const parsed = Number(pid);
+      if (Number.isInteger(parsed) && parsed > 0) {
         try {
           process.kill(parsed, "SIGKILL");
         } catch {
@@ -85,7 +85,8 @@ const runProvider = async (
     for (let attempt = 0; attempt < 60 && !up; attempt += 1) {
       await Bun.sleep(1000); // eslint-disable-line no-await-in-loop -- polling loop
       try {
-        const response = await fetch(`${base}/stats`, { // eslint-disable-line no-await-in-loop -- polling loop
+        // eslint-disable-next-line no-await-in-loop -- Poll this provider until it becomes ready.
+        const response = await fetch(`${base}/stats`, {
           signal: AbortSignal.timeout(3000),
         });
         up = response.ok;
@@ -112,10 +113,12 @@ const runProvider = async (
     let processed = 0;
     for (let attempt = 0; attempt < timeoutSeconds; attempt += 1) {
       await Bun.sleep(1000); // eslint-disable-line no-await-in-loop -- polling loop
-      const response = await fetch(`${base}/stats`, { // eslint-disable-line no-await-in-loop -- polling loop
+      // eslint-disable-next-line no-await-in-loop -- Poll sequential delivery/retry progress.
+      const response = await fetch(`${base}/stats`, {
         signal: AbortSignal.timeout(5000),
       });
-      const { processed: nowProcessed } = (await response.json()) as { // eslint-disable-line no-await-in-loop
+      // eslint-disable-next-line no-await-in-loop -- Decode each progress response before the next poll.
+      const { processed: nowProcessed } = (await response.json()) as {
         processed: number;
       };
       processed = nowProcessed;

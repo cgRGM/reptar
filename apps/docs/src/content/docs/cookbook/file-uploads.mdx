@@ -3,9 +3,7 @@ title: File Uploads & Object Storage
 description: Validate uploads with magic bytes, stream them to R2/S3/local disk, and serve them with ETags, byte ranges, and presigned URLs.
 ---
 
-Reptar's `c.Storage` is a small, provider-agnostic object store. The same C# code
-runs against Cloudflare R2 on Workers, S3-compatible storage on Native AOT, and
-local disk during development.
+Reptar's `c.Storage` is a small, provider-agnostic object store. The same C# code runs against Cloudflare R2 on Workers, S3-compatible storage on Native AOT, and local disk during development.
 
 ---
 
@@ -57,8 +55,7 @@ if (c.Storage.Capabilities.Has(StorageFeatures.PresignUpload))
 
 ## 2. Validate and upload
 
-Never trust the client `Content-Type`. `Files.Check` sniffs magic bytes, enforces
-a size limit, and accepts MIME families such as `image/*`:
+Never trust the client `Content-Type`. `Files.Check` sniffs magic bytes, enforces a size limit, and accepts MIME families such as `image/*`:
 
 ```csharp
 app.Post("/api/avatar", Auth.RequireUser, async ctx =>
@@ -95,17 +92,13 @@ app.Post("/api/avatar", Auth.RequireUser, async ctx =>
 });
 ```
 
-`StorageKey` normalizes every provider key and rejects traversal, control
-characters, empty segments, and over-long segments before any I/O happens.
+`StorageKey` normalizes every provider key and rejects traversal, control characters, empty segments, and over-long segments before any I/O happens.
 
 ---
 
 ## 3. Serve with ETags, 304s, and byte ranges
 
-`c.File(key)` is the one-liner file server. It uses `HeadAsync` for metadata,
-emits `ETag` / `Last-Modified` / `Cache-Control`, answers `If-None-Match` with
-`304`, and answers `Range` with `206 Partial Content`. `HEAD` is handled
-automatically by the router.
+`c.File(key)` is the one-liner file server. It uses `HeadAsync` for metadata, emits `ETag` / `Last-Modified` / `Cache-Control`, answers `If-None-Match` with `304`, and answers `Range` with `206 Partial Content`. `HEAD` is handled automatically by the router.
 
 ```csharp
 app.Get("/files/:key", ctx =>
@@ -129,18 +122,13 @@ Downloads use `c.Attachment`:
 app.Get("/download/:key", ctx => ctx.Attachment(ctx.Param("key")!));
 ```
 
-`c.File` defaults to `Cache-Control: private, max-age=0, must-revalidate` so a
-private object is never stored by a shared cache. Public assets opt in with
-`Immutable = true` or an explicit `CacheControl`.
+`c.File` defaults to `Cache-Control: private, max-age=0, must-revalidate` so a private object is never stored by a shared cache. Public assets opt in with `Immutable = true` or an explicit `CacheControl`.
 
-If a provider only implements the four core methods, `c.File` falls back to
-`GetAsync` and still works. Range requests are served from memory in that case;
-providers with `StorageFeatures.RangeReads` avoid the full download.
+If a provider only implements the four core methods, `c.File` falls back to `GetAsync` and still works. Range requests are served from memory in that case; providers with `StorageFeatures.RangeReads` avoid the full download.
 
 ### Nested keys with wildcard routes
 
-A `:key` route param only matches one path segment. For nested keys, use a named
-catch-all (`*path`). Static and single-segment routes still take precedence:
+A `:key` route param only matches one path segment. For nested keys, use a named catch-all (`*path`). Static and single-segment routes still take precedence:
 
 ```csharp
 app.Get("/files/*path", ctx => ctx.File(ctx.Param("path")!));
@@ -156,8 +144,7 @@ The generated client exposes catch-all routes under their literal segment key:
 await client.files["*path"]({ param: { path: "avatars/user_1/photo.png" } });
 ```
 
-The client preserves `/` separators while percent-encoding each segment.
-WebSocket routes support the same named catch-all syntax:
+The client preserves `/` separators while percent-encoding each segment. WebSocket routes support the same named catch-all syntax:
 
 ```csharp
 app.OnWebSocket("/ws/files/*path", new WebSocketHandlers
@@ -185,22 +172,15 @@ var moved = await ctx.Storage.MoveAsync("drafts/a.png", "published/a.png");
 await ctx.Storage.DeleteManyAsync(["drafts/b.png", "drafts/c.png"]);
 ```
 
-S3 uses a native server-side copy (`x-amz-copy-source`) and the `DeleteObjects`
-batch endpoint. R2 uses an array delete. Local disk uses `File.Copy` /
-`File.Move` and moves the metadata sidecar.
+S3 uses a native server-side copy (`x-amz-copy-source`) and the `DeleteObjects` batch endpoint. R2 uses an array delete. Local disk uses `File.Copy` / `File.Move` and moves the metadata sidecar.
 
-Copies preserve `Content-Type`, `Cache-Control`, `Content-Disposition`,
-`Content-Encoding`, `Content-Language`, and user metadata by default. Set
-`PreserveMetadata = false` or pass overrides to replace them. `ctx.File` serves
-the stored `Content-Encoding` / `Content-Language` / `Content-Disposition`
-headers automatically.
+Copies preserve `Content-Type`, `Cache-Control`, `Content-Disposition`, `Content-Encoding`, `Content-Language`, and user metadata by default. Set `PreserveMetadata = false` or pass overrides to replace them. `ctx.File` serves the stored `Content-Encoding` / `Content-Language` / `Content-Disposition` headers automatically.
 
 ---
 
 ## 5. Direct uploads and downloads
 
-For large files, skip the Worker/API entirely. Presign a URL and let the browser
-talk to R2/S3:
+For large files, skip the Worker/API entirely. Presign a URL and let the browser talk to R2/S3:
 
 ```csharp
 app.Post("/api/uploads/presign", Auth.RequireUser, async ctx =>
@@ -221,8 +201,7 @@ app.Post("/api/uploads/presign", Auth.RequireUser, async ctx =>
 });
 ```
 
-Presigned downloads can override the response headers without mutating the
-stored object:
+Presigned downloads can override the response headers without mutating the stored object:
 
 ```csharp
 var download = await ctx.Storage.PresignGetAsync(
@@ -240,10 +219,7 @@ var download = await ctx.Storage.PresignGetAsync(
 
 ## 6. Streaming and multipart uploads
 
-`PutAsync(key, stream, contentType)` avoids buffering the whole object on
-providers that support streaming. S3 and R2 switch to multipart automatically
-above the configured part size (8 MiB by default) and abort the upload if any
-part fails:
+`PutAsync(key, stream, contentType)` avoids buffering the whole object on providers that support streaming. S3 and R2 switch to multipart automatically above the configured part size (8 MiB by default) and abort the upload if any part fails:
 
 ```csharp
 await using var file = File.OpenRead("large-video.mp4");
@@ -288,9 +264,7 @@ Values below 5 MiB are clamped to the provider minimum.
 
 ### Streaming the request body
 
-By default the framework buffers the request body so `ctx.Req.Body`,
-`ctx.Req.Form`, and `ctx.BindJsonAsync<T>()` keep working. Routes that only need
-to forward bytes can opt into a live stream with `StreamBody()`:
+By default the framework buffers the request body so `ctx.Req.Body`, `ctx.Req.Form`, and `ctx.BindJsonAsync<T>()` keep working. Routes that only need to forward bytes can opt into a live stream with `StreamBody()`:
 
 ```csharp
 app.Put("/upload/stream", Auth.RequireUser, async ctx =>
@@ -315,17 +289,11 @@ app.Put("/upload/stream", Auth.RequireUser, async ctx =>
 .StreamBody(maxBytes: 20_000_000);
 ```
 
-- **Kestrel** hands the handler the live `HttpRequest.Body`; the body is never
-  buffered by the framework. `StreamBody(maxBytes)` wraps it in a limit that
-  returns 413 when exceeded.
-- **Workers** still receive the body in the request envelope, but
-  `ctx.Req.BodyStream` is a memory stream and the storage path reads it in
-  parts instead of making another full copy.
-- `StreamBody()` routes must not use `ctx.Req.Form`, `ctx.Req.Body`, or
-  `ctx.BindJsonAsync<T>()`; those APIs need the buffered body.
+- **Kestrel** hands the handler the live `HttpRequest.Body`; the body is never buffered by the framework. `StreamBody(maxBytes)` wraps it in a limit that returns 413 when exceeded.
+- **Workers** still receive the body in the request envelope, but `ctx.Req.BodyStream` is a memory stream and the storage path reads it in parts instead of making another full copy.
+- `StreamBody()` routes must not use `ctx.Req.Form`, `ctx.Req.Body`, or `ctx.BindJsonAsync<T>()`; those APIs need the buffered body.
 
-Providers without `StreamingPut` fall back to buffering through the default
-interface implementation.
+Providers without `StreamingPut` fall back to buffering through the default interface implementation.
 
 ---
 
@@ -382,29 +350,24 @@ if (page.HasMore)
 }
 ```
 
-On S3-compatible storage, listing uses `ListObjectsV2` with continuation tokens.
-On R2, it uses the bucket's native cursor. On local disk, it walks the upload
-root in ordinal key order.
+On S3-compatible storage, listing uses `ListObjectsV2` with continuation tokens. On R2, it uses the bucket's native cursor. On local disk, it walks the upload root in ordinal key order.
 
 ---
 
 ## 9. Error mapping
 
-Storage failures throw `StorageException` with a `StorageErrorCode`. The built-in
-HTTP helpers map them to:
+Storage failures throw `StorageException` with a `StorageErrorCode`. The built-in HTTP helpers map them to:
 
-| Code | HTTP |
-| :-- | :-- |
-| `NotFound` | 404 |
-| `InvalidKey` | 400 |
-| `Unauthorized` / `Forbidden` | 403 |
-| `PreconditionFailed` | 412 |
-| `Conflict` | 409 |
-| `TooLarge` | 413 |
-| `RangeNotSatisfiable` | 416 |
-| `Unsupported` | 501 |
-| `Unavailable` | 503 |
+| Code                         | HTTP |
+| :--------------------------- | :--- |
+| `NotFound`                   | 404  |
+| `InvalidKey`                 | 400  |
+| `Unauthorized` / `Forbidden` | 403  |
+| `PreconditionFailed`         | 412  |
+| `Conflict`                   | 409  |
+| `TooLarge`                   | 413  |
+| `RangeNotSatisfiable`        | 416  |
+| `Unsupported`                | 501  |
+| `Unavailable`                | 503  |
 
-`c.File` performs this mapping for you. For custom routes, catch
-`StorageException` and return the matching status, or let the framework's
-`internal_error` path handle genuinely unexpected failures.
+`c.File` performs this mapping for you. For custom routes, catch `StorageException` and return the matching status, or let the framework's `internal_error` path handle genuinely unexpected failures.

@@ -11,7 +11,7 @@ An independent architectural and developer experience (DX) scan identified 10 st
 ### Status at a Glance
 
 | # | Domain | Finding | Verified Status | Target Resolution |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | **1** | **Scaffolding** | `bun reptar new` generates apps that fail to build; template ignores `--template`; `{{ PROJECT_TITLE }}` unreplaced; uses anonymous `ctx.Json(new { ... })`. | ✅ **Resolved** (Phase 1: template resolution, spaced placeholders, pinned SDK, typed records, scaffold E2E). | **Phase 1** (High) |
 | **2** | **Doctor & Trust** | `doctor` passes database check even if DB is missing or unreachable; treats `postgres://` as SQLite path; ignores schema drift. | ✅ **Resolved** (Phase 1: fail-closed probe, PostgreSQL TCP probe, `--strict`). | **Phase 1** (High) |
 | **3** | **Multi-App Context** | Repo root commands hardcode `examples/blog` for codegen/diff, while `inspect` targets `spikes/netwasm-worker`. | ✅ **Resolved** (Phase 2: `--app` for `dev`/`codegen`/`db`, app-local discovery). | **Phase 2** (Med) |
@@ -45,6 +45,7 @@ Before starting on the remaining gaps, note what has already landed in the codeb
 ## 3. Deep-Dive Remediation Specifications
 
 ### Item 1: Scaffolding Dogfooding & Template Correctness
+
 - **Problem**:
   1. `templates/fullstack/scripts/reptar.ts` invokes system `dotnet` on PATH instead of inheriting the pinned `.reptar/sdk` when run outside the monorepo root.
   2. `templates/fullstack/apps/web/src/components/header.tsx` and `sign-up-form.tsx` contain `{{ PROJECT_TITLE }}` with spaces, which was omitted from the template replacement dictionary.
@@ -70,10 +71,9 @@ Before starting on the remaining gaps, note what has already landed in the codeb
 ---
 
 ### Item 2: Doctor Must Fail Closed & Support Non-SQLite URLs
+
 - **Problem**:
-  - In [`scripts/inspect.ts`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/scripts/inspect.ts) line 532:
-    `passed: inspection.database.connected || inspection.tables.length > 0`
-    If C# schema classes exist in code, `doctor` reports `passed: true` even if `app.db` does not exist or PostgreSQL is unreachable!
+  - In [`scripts/inspect.ts`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/scripts/inspect.ts) line 532: `passed: inspection.database.connected || inspection.tables.length > 0` If C# schema classes exist in code, `doctor` reports `passed: true` even if `app.db` does not exist or PostgreSQL is unreachable!
   - `inspectProject` line 393 hardcodes `dialect: "sqlite"` and runs `existsSync(dbPath)`. When `DATABASE_URL=postgres://...` is supplied, it treats the URL as a file path, fails `existsSync`, and still marks doctor healthy.
 - **Remediation**:
   - In [`scripts/inspect.ts`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/scripts/inspect.ts):
@@ -86,6 +86,7 @@ Before starting on the remaining gaps, note what has already landed in the codeb
 ---
 
 ### Item 3: Multi-App Context & Consistent CLI Targeting
+
 - **Problem**:
   - `bun reptar codegen`, `bun reptar dev`, and `scripts/diff.ts` hardcode paths to `examples/blog`.
   - In monorepos containing multiple apps (`examples/agent-cli`, `examples/realtime-rooms`, `templates/fullstack`), agents cannot target a specific app.
@@ -103,6 +104,7 @@ Before starting on the remaining gaps, note what has already landed in the codeb
 ---
 
 ### Item 4: Multi-Agent Concurrency & Stale Process Handling
+
 - **Problem**:
   - Background `dotnet run app.cs` processes can hold file locks on `bin/Debug/net10.0/Reptar.deps.json`, causing other agents running `dotnet test` or `bun reptar self-check` to fail with `MSB4018`.
 - **Remediation**:
@@ -113,10 +115,9 @@ Before starting on the remaining gaps, note what has already landed in the codeb
 ---
 
 ### Item 5: Agent Safety & Explicit Opt-In Defaults
+
 - **Problem**:
-  - In [`framework/Reptar/Core/AiTools.cs`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/framework/Reptar/Core/AiTools.cs) line 201:
-    `public static List<AiToolDefinition> GetAiTools(..., bool onlyExplicit = false)`
-    All routes (including auth mutations and administrative deletions) are exposed as LLM tools by default unless the caller passes `onlyExplicit: true`.
+  - In [`framework/Reptar/Core/AiTools.cs`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/framework/Reptar/Core/AiTools.cs) line 201: `public static List<AiToolDefinition> GetAiTools(..., bool onlyExplicit = false)` All routes (including auth mutations and administrative deletions) are exposed as LLM tools by default unless the caller passes `onlyExplicit: true`.
   - [`WorkspaceTools.cs`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/framework/Reptar/AI/WorkspaceTools.cs) sets `AllowRunCommand = true` by default and runs `/bin/bash -c` without a command allowlist.
   - `WorkspaceRoot.Resolve` does not resolve symlinks via `ResolveLinkTarget(true)`, allowing workspace escape if a symlink points outside.
   - In [`scripts/inspect.ts`](file:///Users/newrgm/dev/RocktownLabs/projects/reptar/scripts/inspect.ts) line 294: `toolName: op["x-ai-tool-name"] ?? op.operationId` assigns `toolName` to standard HTTP routes even when `isAiTool: false`.
@@ -132,6 +133,7 @@ Before starting on the remaining gaps, note what has already landed in the codeb
 ---
 
 ### Item 6: Documentation Truth Pass
+
 - **Problem**:
   - `README.md` states "37 tests" (actual: 212).
   - `apps/docs/src/content/docs/overview/the-one-rule.md` and `architecture.md` cite "native scrypt" (implementation: PBKDF2 HMAC-SHA256).
@@ -179,75 +181,55 @@ flowchart TD
 When picking up any task from this roadmap, run the following verification gate before reporting completion:
 
 1. **Build & Unit Tests**:
+
    ```bash
    bun reptar test
    ```
-   *(Must pass all 388 tests with 0 failures).*
+
+   _(Must pass all 388 tests with 0 failures)._
 
 2. **Toolchain Self-Check**:
+
    ```bash
    bun reptar self-check
    ```
-   *(Must report `self-check: ALL GREEN` across Doctor, Tests, Host Boundary, Host Contract, Generated Contracts, NetWasm Lint, and dual-host smokes).*
+
+   _(Must report `self-check: ALL GREEN` across Doctor, Tests, Host Boundary, Host Contract, Generated Contracts, NetWasm Lint, and dual-host smokes)._
 
 3. **Interactive Terminal TUI Smoke**:
+
    ```bash
    python3 .gemini/antigravity-cli/brain/11ac4bf6-af9e-4a85-870b-b0f2d7eceea8/scratch/test_pty_navigation.py
    ```
-   *(Must verify all 9 PTY scenarios with 0 assertion errors).*
+
+   _(Must verify all 9 PTY scenarios with 0 assertion errors)._
 
 4. **Scaffold End-to-End**:
    ```bash
    bun reptar new /tmp/test-reptar-app --database sqlite --auth better-auth
    cd /tmp/test-reptar-app && bun run api:build
    ```
-   *(Must compile without unrecognized directives or missing replacement tokens).*
+   _(Must compile without unrecognized directives or missing replacement tokens)._
 
 ---
 
 ## 6. Phase 1 Execution Update (2026-10-26)
 
-Phase 1 (Items 1, 2, 7, and 9) is implemented and verified. See
-[`phase1-remediation-log.md`](./phase1-remediation-log.md) for the full change
-list, the new `scripts/test-scaffold.ts` gate (scaffold → build → codegen →
-`tsc` → runtime health/auth/CRUD), and the bugs that gate uncovered
-(`$get`/`$post` mismatch, stale `app-type.ts` shadowing, missing `.Produces<T>`
-metadata, missing auth JSON metadata).
+Phase 1 (Items 1, 2, 7, and 9) is implemented and verified. See [`phase1-remediation-log.md`](./phase1-remediation-log.md) for the full change list, the new `scripts/test-scaffold.ts` gate (scaffold → build → codegen → `tsc` → runtime health/auth/CRUD), and the bugs that gate uncovered (`$get`/`$post` mismatch, stale `app-type.ts` shadowing, missing `.Produces<T>` metadata, missing auth JSON metadata).
 
-Current gate: **215 unit tests pass**, `bun reptar self-check` is **ALL GREEN**,
-and `bun scripts/test-scaffold.ts` passes. Still open from this document:
-`AllowRunCommand` default/allowlist, real `minimal-api`/`agent` templates,
-AOT publish assertion, CI workflow, docs truth pass, and multi-app `--app`
-targeting for `codegen`/`db`.
+Current gate: **215 unit tests pass**, `bun reptar self-check` is **ALL GREEN**, and `bun scripts/test-scaffold.ts` passes. Still open from this document: `AllowRunCommand` default/allowlist, real `minimal-api`/`agent` templates, AOT publish assertion, CI workflow, docs truth pass, and multi-app `--app` targeting for `codegen`/`db`.
 
 ---
 
 ## 7. Phase 2 & 3 Execution Update (2026-10-26)
 
-Phase 2 (Items 3, 4, 6, 10) and Phase 3 (Items 5, 7, 8) are implemented and
-verified. See [`phase2-3-remediation-log.md`](./phase2-3-remediation-log.md)
-for the change list and the failures the gates uncovered.
+Phase 2 (Items 3, 4, 6, 10) and Phase 3 (Items 5, 7, 8) are implemented and verified. See [`phase2-3-remediation-log.md`](./phase2-3-remediation-log.md) for the change list and the failures the gates uncovered.
 
-- **Multi-app:** `dev`, `codegen`, and `db` accept `--app`; app-local database
-  and contract discovery; no blog/realworld schema leakage into other apps.
-- **Concurrency:** build-lock preflight with `--kill-orphans`, stale-port
-  reaping in realtime/E2E, and pinned-SDK usage in docs checks.
-- **Docs truth:** 388 tests, PBKDF2, roadmap banners for Clerk/Custom,
-  cached-vs-uncached benchmark caveat, NetWasm JSON context guidance.
-- **Security:** `SecureCookies` defaults to true (template disables only under
-  `#if DEBUG`), Wasm login throttling, duplicate `Set-Cookie` removed,
-  `run_command` off by default with an optional prefix allowlist.
-- **AOT/Workers:** Docker publish assertions, NetWasm context/options
-  correctness, D1 dictionary writes, and skipping the wasm static-asset fetch
-  (the module is compiled from the imported `WebAssembly.Module`).
-- **CI:** GitHub Actions runs framework tests, host boundary/contract, provider
-  matrix (SQLite/Postgres/MySQL/D1), NetWasm lint, architecture, strict doctor,
-  two-host realtime, scaffold E2E, contracts, docs snippets, docs build, and
-  generated-reference drift.
+- **Multi-app:** `dev`, `codegen`, and `db` accept `--app`; app-local database and contract discovery; no blog/realworld schema leakage into other apps.
+- **Concurrency:** build-lock preflight with `--kill-orphans`, stale-port reaping in realtime/E2E, and pinned-SDK usage in docs checks.
+- **Docs truth:** 388 tests, PBKDF2, roadmap banners for Clerk/Custom, cached-vs-uncached benchmark caveat, NetWasm JSON context guidance.
+- **Security:** `SecureCookies` defaults to true (template disables only under `#if DEBUG`), Wasm login throttling, duplicate `Set-Cookie` removed, `run_command` off by default with an optional prefix allowlist.
+- **AOT/Workers:** Docker publish assertions, NetWasm context/options correctness, D1 dictionary writes, and skipping the wasm static-asset fetch (the module is compiled from the imported `WebAssembly.Module`).
+- **CI:** GitHub Actions runs framework tests, host boundary/contract, provider matrix (SQLite/Postgres/MySQL/D1), NetWasm lint, architecture, strict doctor, two-host realtime, scaffold E2E, contracts, docs snippets, docs build, and generated-reference drift.
 
-Current gate: **388 unit tests pass**, `bun reptar self-check` is **ALL GREEN**,
-`bun e2e`, `bun reptar test:realtime`, `bun scripts/test-scaffold.ts`,
-`bun reptar check:worker`, docs build/snippets, and contract checks pass.
-Remaining product gaps are tracked in the Phase 2/3 log: real
-`minimal-api`/`agent` templates, first CI run on GitHub, and the NetWasm
-optimizer workaround.
+Current gate: **388 unit tests pass**, `bun reptar self-check` is **ALL GREEN**, `bun e2e`, `bun reptar test:realtime`, `bun scripts/test-scaffold.ts`, `bun reptar check:worker`, docs build/snippets, and contract checks pass. Remaining product gaps are tracked in the Phase 2/3 log: real `minimal-api`/`agent` templates, first CI run on GitHub, and the NetWasm optimizer workaround.

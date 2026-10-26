@@ -32,7 +32,17 @@ try {
   await page
     .getByText("Immutable version published with its audit record.")
     .waitFor();
+  const evaluation = page.waitForRequest((request) =>
+    new URL(request.url()).pathname.startsWith("/api/evaluate/")
+  );
   await page.getByRole("button", { exact: true, name: "Evaluate" }).click();
+  const evaluationRequest = await evaluation;
+  if (
+    evaluationRequest.method() !== "GET" ||
+    !new URL(evaluationRequest.url()).searchParams.has("subject")
+  ) {
+    throw new Error("Evaluation did not use the generated GET query contract");
+  }
   await page.getByText("SIGNAL ON ↗", { exact: true }).waitFor();
   await page.screenshot({ fullPage: true, path: "browser-desktop.png" });
   await page.setViewportSize({ height: 844, width: 390 });

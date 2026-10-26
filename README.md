@@ -176,11 +176,7 @@ VPS Native AOT results with 300 seeded articles and autocannon:
 | `GET /api/articles?tag=bench` |     592 | 164 ms |
 | `POST /api/articles`          |     210 |  42 ms |
 
-> **Cache caveat:** the list, tag-filter, and single-article figures include
-> Kestrel's anonymous SWR cache. On the same 2-core benchmark VPS,
-> cache-busted `/api/tags` measured ~4.2k req/s and cache-busted
-> `/api/articles?limit=20` ~236 req/s (p50 ~211 ms). Treat cached and
-> uncached numbers separately; authenticated/write paths bypass the cache.
+> **Cache caveat:** the list, tag-filter, and single-article figures include Kestrel's anonymous SWR cache. On the same 2-core benchmark VPS, cache-busted `/api/tags` measured ~4.2k req/s and cache-busted `/api/articles?limit=20` ~236 req/s (p50 ~211 ms). Treat cached and uncached numbers separately; authenticated/write paths bypass the cache.
 
 List responses now omit the article body and fetch tags, favorite counts, favorite state, and follow state in page-level batches instead of per-row correlated subqueries. The SQLite WAL read pool added in `461be2e` lets those reads run concurrently, and article creation batches the article, tag, and junction writes into one transaction. The image remains **38.3 MB uncompressed / 11.6 MB compressed** after removing the 22 MB `.dbg` symbols.
 
@@ -237,26 +233,37 @@ Under concurrent write pressure, SQLite WAL mode with Reptar's group-commit batc
 
 ### 1. Cloudflare Workers (Edge Serverless)
 
-Deploy the full stack (API Worker, Static Docs, Astro Web, D1, R2, KV, Queues) with Alchemy:
+Deploy the API, RealWorld and Rooms Workers, docs, web, D1, R2, KV, Queues and Durable Objects with Alchemy. All three Worker artifacts must be rebuilt together; the infra deploy script now does this.
+
+Store a random `REALWORLD_JWT_SECRET` of at least 32 characters in a private environment file **outside the repository** (for example, generate it with `openssl rand -hex 32`). There is no production fallback. Alchemy deploys the value as `secret_text`, not a public/plain-text binding.
 
 ```bash
-# Deploy to Cloudflare Workers
-bun run deploy
-
-# Deploy non-interactively
-bun run deploy -- -y
+cd packages/infra
+bun run build:workers
+# Use the existing deployment's stage when updating it; a new stage owns new resources.
+bunx alchemy plan --env-file "$HOME/.config/reptar/production.env" --stage live_newrgm
+bunx alchemy deploy --env-file "$HOME/.config/reptar/production.env" --stage live_newrgm --yes
 ```
+
+Review the plan before deploying. Existing database, storage and Durable Object bindings should remain unchanged. Rotating the signing key invalidates previously issued RealWorld JWTs.
 
 ### 2. Docker / Distroless Container (VPS or Kubernetes)
 
-Build the minimal Google Distroless container (~38 MB uncompressed, ~11.6 MB compressed):
+The Dockerfile builds a Linux Native AOT executable in an Ubuntu Chiseled `.NET runtime-deps` image. Size depends on the app; it is not a Google Distroless image. Run with a writable data directory and an app-specific configuration:
 
 ```bash
-docker build -t reptar-app -f deploy/Dockerfile .
-docker run -p 8787:8787 -e DATABASE_URL="postgres://user:pass@host:5432/db" reptar-app
+docker build -t reptar-switchyard -f deploy/Dockerfile --build-arg APP_DIR=examples/switchyard .
+mkdir -p .reptar/switchyard
+docker run --user "$(id -u):$(id -g)" \
+  -v "$PWD/.reptar/switchyard:/data" -e SWITCHYARD_DB=/data/switchyard.db \
+  -p 127.0.0.1:8787:8787 reptar-switchyard
 ```
 
-Or deploy to any Ubuntu/Debian VPS with one command:
+Put a TLS reverse proxy in front of this loopback listener; Switchyard defaults to secure cookies. `SWITCHYARD_INSECURE_LOCAL=1` is only for local HTTP testing. The repeatable published-artifact check is `bash examples/switchyard/test-native.sh`.
+
+For RealWorld, `deploy/realworld-compose.yml` requires a private JWT key and persists SQLite under `.reptar/realworld`. Prepare that directory and set `REPTAR_UID`/`REPTAR_GID` to its non-root owner before starting Compose. Do not use an ephemeral `/tmp` database for persistent deployments. The default listener is loopback; opt into public binding only behind an appropriate network/TLS policy.
+
+The generic VPS helper targets its configured sample app; verify its data, auth and health settings before using it:
 
 ```bash
 bash deploy/vps-deploy.sh

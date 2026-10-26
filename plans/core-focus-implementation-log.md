@@ -21,11 +21,11 @@
 
 **Benchmark (`bench/validation`, Apple arm64):**
 
-| Case | JIT median | AOT median | JIT/AOT alloc |
-| :--- | ---: | ---: | ---: |
-| declarative/valid | ~50 ns | ~66 ns | 0 B |
-| manual/valid | ~15 ns | ~6 ns | 0 B |
-| declarative/invalid | ~207 ns | ~281 ns | 656 B |
+| Case                | JIT median | AOT median | JIT/AOT alloc |
+| :------------------ | ---------: | ---------: | ------------: |
+| declarative/valid   |     ~50 ns |     ~66 ns |           0 B |
+| manual/valid        |     ~15 ns |      ~6 ns |           0 B |
+| declarative/invalid |    ~207 ns |    ~281 ns |         656 B |
 
 **Still open:** the invalid path allocates issue objects; that is acceptable for an error path, but pooling or a struct issue list is a possible follow-up.
 

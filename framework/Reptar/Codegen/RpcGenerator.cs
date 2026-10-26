@@ -18,6 +18,11 @@ public static class RpcGenerator
         {
             if (route.InputType is not null)
                 index.Add(route.InputType);
+            if (route.QueryType is not null)
+            {
+                QueryContract.Parameters(route.QueryType);
+                index.Add(route.QueryType);
+            }
 
             foreach (var (_, type) in route.Produces)
             {
@@ -85,6 +90,37 @@ internal sealed class TsTypeIndex
 
         foreach (var property in target.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             Add(property.PropertyType);
+    }
+}
+
+internal static class QueryContract
+{
+    public static List<Dictionary<string, object?>> Parameters(Type type)
+    {
+        if (TsMapper.IsPrimitive(type) || type.IsEnum || type.IsArray || type.IsGenericType)
+            throw new NotSupportedException("WithQuery<T>() requires a record with scalar properties, not a primitive or collection root.");
+        var parameters = new List<Dictionary<string, object?>>();
+        foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var target = Nullable.GetUnderlyingType(property.PropertyType) ?? property.PropertyType;
+            if ((!TsMapper.IsPrimitive(target) || target == typeof(object)) && !target.IsEnum)
+                throw new NotSupportedException($"Query property '{type.Name}.{property.Name}' must be a scalar string, number, boolean, or enum. Parse collections explicitly instead.");
+            var schema = new Dictionary<string, object?>
+            {
+                ["type"] = target == typeof(bool) ? "boolean" :
+                    target == typeof(int) || target == typeof(long) || target == typeof(short) || target == typeof(byte) ? "integer" :
+                    target == typeof(double) || target == typeof(float) || target == typeof(decimal) ? "number" : "string",
+            };
+            if (target.IsEnum) schema["enum"] = Enum.GetNames(target);
+            parameters.Add(new Dictionary<string, object?>
+            {
+                ["name"] = TsMapper.Camel(property.Name),
+                ["in"] = "query",
+                ["required"] = !TsMapper.IsNullable(property) && !TsMapper.IsOptional(property),
+                ["schema"] = schema,
+            });
+        }
+        return parameters;
     }
 }
 
@@ -238,6 +274,8 @@ internal static class TsEmitter
         {
             if (route.InputType is not null)
                 CollectRouteType(route.InputType, usedTypes);
+            if (route.QueryType is not null)
+                CollectRouteType(route.QueryType, usedTypes);
 
             foreach (var (_, type) in route.Produces)
             {
@@ -298,6 +336,8 @@ internal static class TsEmitter
 
         if (route.InputType is not null)
             inputParts.Add($"json: {TsMapper.Type(route.InputType, index)}");
+        if (route.QueryType is not null)
+            inputParts.Add($"query: {TsMapper.Type(route.QueryType, index)}");
 
         var parameters = route.Path
             .Split('/')
@@ -333,7 +373,16 @@ internal static class TsEmitter
 
         var status = statuses.Length == 0 ? "200" : string.Join(" | ", statuses);
 
-        return $"Endpoint<{input}, {output}, {status}>";
+        var responseMap = string.Join("; ", (statuses.Length == 0 ? new[] { 200 } : statuses)
+            .Select(code =>
+            {
+                if (code is 204 or 205 or 304) return $"{code}: never";
+                var bodies = route.Produces.Where(produced => produced.Status == code)
+                    .Select(produced => produced.Type is null ? "unknown" : TsMapper.Type(produced.Type, index))
+                    .Distinct().ToArray();
+                return $"{code}: {(bodies.Length == 0 ? "unknown" : string.Join(" | ", bodies))}";
+            }));
+        return $"Endpoint<{input}, {output}, {status}, {{ {responseMap} }}>";
     }
 
     private static void EmitNode(StringBuilder builder, RouteNode node, string indent)
@@ -682,7 +731,7 @@ internal static class OpenApiEmitter
 
             foreach (var (status, type) in route.Produces)
             {
-                responses[status.ToString()] = new Dictionary<string, object?>
+                var response = new Dictionary<string, object?>
                 {
                     ["description"] = status switch
                     {
@@ -696,19 +745,15 @@ internal static class OpenApiEmitter
                         409 => "Conflict",
                         _ => "Response",
                     },
-                    ["content"] = type is null
-                        ? null
-                        : new Dictionary<string, object?>
-                        {
-                            ["application/json"] = new Dictionary<string, object?>
-                            {
-                                ["schema"] = new Dictionary<string, object?>
-                                {
-                                    ["$ref"] = $"#/components/schemas/{TsMapper.CleanName(type.Name)}",
-                                },
-                            },
-                        },
                 };
+                if (type is not null && status is not 204 and not 205 and not 304)
+                {
+                    response["content"] = new Dictionary<string, object?>
+                    {
+                        ["application/json"] = new Dictionary<string, object?> { ["schema"] = TypeSchema(type) },
+                    };
+                }
+                responses[status.ToString()] = response;
             }
 
             if (responses.Count == 0)
@@ -730,14 +775,22 @@ internal static class OpenApiEmitter
                     {
                         ["application/json"] = new Dictionary<string, object?>
                         {
-                            ["schema"] = new Dictionary<string, object?>
-                            {
-                                ["$ref"] = $"#/components/schemas/{TsMapper.CleanName(route.InputType.Name)}",
-                            },
+                            ["schema"] = TypeSchema(route.InputType),
                         },
                     },
                 };
             }
+
+            var parameters = route.Path.Split('/')
+                .Where(segment => segment.StartsWith(':') || segment.StartsWith('*'))
+                .Select(segment => new Dictionary<string, object?>
+                {
+                    ["name"] = segment[1..], ["in"] = "path", ["required"] = true,
+                    ["schema"] = new Dictionary<string, object?> { ["type"] = "string" },
+                }).ToList();
+            if (route.QueryType is not null)
+                parameters.AddRange(QueryContract.Parameters(route.QueryType));
+            if (parameters.Count > 0) operation["parameters"] = parameters;
 
             operations[route.Method.ToLowerInvariant()] = operation;
         }
@@ -755,31 +808,59 @@ internal static class OpenApiEmitter
 
             foreach (var property in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
             {
-                properties[TsMapper.Camel(property.Name)] = new Dictionary<string, object?>
-                {
-                    ["type"] = JsonType(property.PropertyType),
-                };
+                var schema = TypeSchema(property.PropertyType);
+                properties[TsMapper.Camel(property.Name)] = TsMapper.IsNullable(property)
+                    ? new Dictionary<string, object?> { ["anyOf"] = new object[] { schema, new Dictionary<string, object?> { ["type"] = "null" } } }
+                    : schema;
             }
 
             schemas[TsMapper.CleanName(type.Name)] = new Dictionary<string, object?>
             {
                 ["type"] = "object",
                 ["properties"] = properties,
+                ["required"] = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(property => !TsMapper.IsNullable(property) && !TsMapper.IsOptional(property))
+                    .Select(property => TsMapper.Camel(property.Name)).ToArray(),
             };
         }
 
         return schemas;
     }
 
+    private static Dictionary<string, object?> TypeSchema(Type type)
+    {
+        var target = Nullable.GetUnderlyingType(type) ?? type;
+        if (target.IsArray)
+            return new() { ["type"] = "array", ["items"] = TypeSchema(target.GetElementType()!) };
+        if (target.IsGenericType)
+        {
+            var definition = target.GetGenericTypeDefinition();
+            var arguments = target.GetGenericArguments();
+            if (definition == typeof(List<>) || definition == typeof(IReadOnlyList<>) ||
+                definition == typeof(IList<>) || definition == typeof(IEnumerable<>))
+                return new() { ["type"] = "array", ["items"] = TypeSchema(arguments[0]) };
+            if (definition == typeof(Dictionary<,>) && arguments[0] == typeof(string))
+                return new() { ["type"] = "object", ["additionalProperties"] = TypeSchema(arguments[1]) };
+            // Match the TS emitter's unknown fallback rather than emit a dangling $ref.
+            return new();
+        }
+        if (target.IsEnum)
+            return new() { ["type"] = "string", ["enum"] = Enum.GetNames(target) };
+        if (target == typeof(object)) return new();
+        if (!TsMapper.IsPrimitive(target))
+            return new() { ["$ref"] = $"#/components/schemas/{TsMapper.CleanName(target.Name)}" };
+        return new() { ["type"] = JsonType(target) };
+    }
+
     private static string JsonType(Type type)
     {
         var target = Nullable.GetUnderlyingType(type) ?? type;
 
-        if (target == typeof(string) || target == typeof(Guid) ||
-            target == typeof(DateTime) || target == typeof(DateTimeOffset))
+        if (target == typeof(string) || target == typeof(Guid) || target == typeof(char) ||
+            target == typeof(DateTime) || target == typeof(DateTimeOffset) || target == typeof(DateOnly))
             return "string";
 
-        if (target == typeof(int) || target == typeof(long) || target == typeof(short) ||
+        if (target == typeof(int) || target == typeof(long) || target == typeof(short) || target == typeof(byte) ||
             target == typeof(double) || target == typeof(float) || target == typeof(decimal))
             return "number";
 

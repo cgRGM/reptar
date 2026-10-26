@@ -71,7 +71,7 @@ var app = ReptarApp.Create(new ReptarConfig
 
 ## How each runtime consumes
 
-- **Cloudflare Workers**: the platform invokes you. The `@reptar/host` `queue()` handler dispatches to `HandleQueueBatchAsync`, acks successes, and retries failures — honoring `RetryIn` delays through `message.retry({ delaySeconds })`. Consumer batching, `max_retries`, `dead_letter_queue`, and `max_concurrency` come from `wrangler.jsonc`. **One mapping to remember:** workerd delivers the *physical* queue name (`batch.queue`), while `OnQueue` registers *logical* names — map it in the Worker's `queue()` handler (`{ ...batch, queue: "events" }`) exactly like the producer binding does.
+- **Cloudflare Workers**: the platform invokes you. The `@reptar/host` `queue()` handler dispatches to `HandleQueueBatchAsync`, acks successes, and retries failures — honoring `RetryIn` delays through `message.retry({ delaySeconds })`. Consumer batching, `max_retries`, `dead_letter_queue`, and `max_concurrency` come from `wrangler.jsonc`. **One mapping to remember:** workerd delivers the _physical_ queue name (`batch.queue`), while `OnQueue` registers _logical_ names — map it in the Worker's `queue()` handler (`{ ...batch, queue: "events" }`) exactly like the producer binding does.
 - **Kestrel / native**: the framework is the scheduler. A bounded poller drains every configured `IQueueConsumer` (`REPTAR_QUEUE_POLL_SECS=2`, `REPTAR_QUEUE_BATCH=25`), and a cron scheduler evaluates `OnScheduled` expressions (`REPTAR_CRON_TICK_SECS=15`). Both start with the module lifecycle and stop with the host.
 - **AWS Lambda**: an SQS event source mapping with `FunctionResponseTypes: ReportBatchItemFailures` feeds `HandleQueueBatchAsync` directly; failed IDs return to SQS for redrive.
 
@@ -86,11 +86,7 @@ On Workers, Cron Triggers invoke the `scheduled` handler and the registered expr
 
 ## Durable Object alarms
 
-`app.OnAlarm(ctx => ...)` registers the alarm handler behind the reserved
-`/_reptar/alarm` path. `createReptarDurableObjectHost` implements the runtime's
-`alarm()` handler and dispatches through the normal fetch pipeline — no extra
-JS exports — and a throwing handler rethrows so the runtime retries with its
-built-in backoff. Schedule a wake-up from C# through the Durable bridge:
+`app.OnAlarm(ctx => ...)` registers the alarm handler behind the reserved `/_reptar/alarm` path. `createReptarDurableObjectHost` implements the runtime's `alarm()` handler and dispatches through the normal fetch pipeline — no extra JS exports — and a throwing handler rethrows so the runtime retries with its built-in backoff. Schedule a wake-up from C# through the Durable bridge:
 
 ```csharp
 // POST the reserved schedule path on the scheduler object; the DO host
@@ -100,16 +96,11 @@ await ctx.Durable.FetchAsync(
     DateTimeOffset.UtcNow.AddMinutes(30).ToUnixTimeMilliseconds().ToString());
 ```
 
-Alarms are the Workers-native primitive for delayed work past Queues' 24-hour
-delay cap and for "run exactly once at time T". On native targets the
-equivalent is a delayed DB-queue message — or any HTTP client hitting the
-reserved path.
+Alarms are the Workers-native primitive for delayed work past Queues' 24-hour delay cap and for "run exactly once at time T". On native targets the equivalent is a delayed DB-queue message — or any HTTP client hitting the reserved path.
 
 ## Observing the queue
 
-- `reptar inspect --app .` prints queue stats directly from the jobs table
-  (`3 pending, oldest 62s, 0 completed, 1 dead`), and the same section rides
-  into `inspect --json` and the `reptar_inspect` MCP tool.
+- `reptar inspect --app .` prints queue stats directly from the jobs table (`3 pending, oldest 62s, 0 completed, 1 dead`), and the same section rides into `inspect --json` and the `reptar_inspect` MCP tool.
 - `ReptarConfig.QueueObserver` is a null-by-default lifecycle hook — zero cost when unset, no tracing dependency in the framework:
 
 ```csharp
@@ -128,18 +119,14 @@ The default `SyncQueueClient` executes the registered handler inline through the
 
 ## Live-fire against real providers
 
-`bun examples/jobs/livefire.ts` runs a full enqueue → retry → process cycle
-against real cloud infrastructure for every adapter whose credentials are
-present (SQS, Azure Storage Queues, Pub/Sub), reporting PASS/FAIL/MISSING
-with the exact variables to set — nothing is silently skipped:
+`bun examples/jobs/livefire.ts` runs a full enqueue → retry → process cycle against real cloud infrastructure for every adapter whose credentials are present (SQS, Azure Storage Queues, Pub/Sub), reporting PASS/FAIL/MISSING with the exact variables to set — nothing is silently skipped:
 
 ```bash
 aws sso login && export SQS_QUEUE_URL=https://sqs.us-east-1.amazonaws.com/.../reptar-livefire
 bun examples/jobs/livefire.ts sqs
 ```
 
-The harness sets `REPTAR_JOBS_FAIL_FIRST=1` so every job fails its first
-delivery and exercises the adapter's retry path before landing.
+The harness sets `REPTAR_JOBS_FAIL_FIRST=1` so every job fails its first delivery and exercises the adapter's retry path before landing.
 
 ## Recipes (not shipped in core)
 

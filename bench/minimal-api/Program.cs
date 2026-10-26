@@ -13,7 +13,7 @@ var port = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var conf
 var builder = WebApplication.CreateSlimBuilder(args);
 
 builder.Logging.ClearProviders();
-builder.WebHost.ConfigureKestrel(options => options.ListenAnyIP(port));
+builder.WebHost.ConfigureKestrel(options => options.ListenLocalhost(port));
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.TypeInfoResolverChain.Insert(0, AppJson.Default);

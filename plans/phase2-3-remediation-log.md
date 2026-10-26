@@ -1,12 +1,8 @@
 # Phase 2 & 3 Remediation Log — Multi-App, Auth, AOT, and CI
 
-**Date:** 2026-10-26 · **Scope:** CLI targeting, multi-agent locks, docs truth,
-cookie security, Wasm rate limiting, AOT publish assertions, Worker asset size,
-Worker JSON/WebSocket correctness, D1 dictionary writes, and CI.
+**Date:** 2026-10-26 · **Scope:** CLI targeting, multi-agent locks, docs truth, cookie security, Wasm rate limiting, AOT publish assertions, Worker asset size, Worker JSON/WebSocket correctness, D1 dictionary writes, and CI.
 
-Companion to [`phase1-remediation-log.md`](./phase1-remediation-log.md). The
-working tree is shared; the numbers below were captured with no other
-build/test process running in this checkout.
+Companion to [`phase1-remediation-log.md`](./phase1-remediation-log.md). The working tree is shared; the numbers below were captured with no other build/test process running in this checkout.
 
 ---
 
@@ -33,68 +29,41 @@ build/test process running in this checkout.
 
 ### 2.1 `--app` targeting
 
-`scripts/reptar.ts` now resolves an app directory for `dev`, `codegen`, and
-`db` commands:
+`scripts/reptar.ts` now resolves an app directory for `dev`, `codegen`, and `db` commands:
 
 1. explicit `--app <dir>` / `-a <dir>`;
 2. a file-based `app.cs` in the current directory;
 3. the reference blog (`examples/blog`).
 
-- `codegen` refuses apps that do not implement `--codegen` instead of starting
-  a server.
-- `codegen --out <dir>` is supported; non-blog apps format their own output
-  and are not synced into `packages/rpc`.
-- `db status|plan|generate|migrate` use the target app's database and
-  migrations directory. `plan`/`generate` work before a migrations directory
-  exists.
-- `inspect`/`doctor` already accepted `--app`; `inspect` now reports
-  `project.root` as the app directory, discovers `packages/client/src` and
-  `*.db` files (including `.reptar/agent.db` and `blog.db`), and computes
-  contract freshness from the app's own `types.ts`.
-- `scripts/diff.ts` no longer leaks `examples/blog`/`examples/realworld`
-  schemas into an explicitly targeted app, and uses the pinned SDK for the
-  `--schema` probe.
+- `codegen` refuses apps that do not implement `--codegen` instead of starting a server.
+- `codegen --out <dir>` is supported; non-blog apps format their own output and are not synced into `packages/rpc`.
+- `db status|plan|generate|migrate` use the target app's database and migrations directory. `plan`/`generate` work before a migrations directory exists.
+- `inspect`/`doctor` already accepted `--app`; `inspect` now reports `project.root` as the app directory, discovers `packages/client/src` and `*.db` files (including `.reptar/agent.db` and `blog.db`), and computes contract freshness from the app's own `types.ts`.
+- `scripts/diff.ts` no longer leaks `examples/blog`/`examples/realworld` schemas into an explicitly targeted app, and uses the pinned SDK for the `--schema` probe.
 
 ### 2.2 Multi-agent build locks
 
-`scripts/reptar.ts` now runs a preflight on `codegen`, `test`, `build`,
-`test:scaffold`, and `self-check`:
+`scripts/reptar.ts` now runs a preflight on `codegen`, `test`, `build`, `test:scaffold`, and `self-check`:
 
-- `lsof` checks the framework and test build outputs (`Reptar.dll`,
-  `Reptar.deps.json`, `Reptar.Tests.*`).
-- If a process holds them, it prints the PID and command and exits with a
-  clear message instead of MSB4018.
+- `lsof` checks the framework and test build outputs (`Reptar.dll`, `Reptar.deps.json`, `Reptar.Tests.*`).
+- If a process holds them, it prints the PID and command and exits with a clear message instead of MSB4018.
 - `--kill-orphans` releases stale locks automatically.
 
-`scripts/test-realtime.ts` and `scripts/e2e.ts` now reap stale listeners on
-their ports before starting, and `e2e.ts` uses a correct `wrangler.*--port`
-pattern (the old `wrangler dev --port` pattern did not match the actual
-`wrangler-dist/cli.js dev --port` command).
+`scripts/test-realtime.ts` and `scripts/e2e.ts` now reap stale listeners on their ports before starting, and `e2e.ts` uses a correct `wrangler.*--port` pattern (the old `wrangler dev --port` pattern did not match the actual `wrangler-dist/cli.js dev --port` command).
 
 ### 2.3 Docs truth pass
 
-- `README.md`: 37 → **219** tests, package layout corrected
-  (`@reptar/client` lives in `packages/rpc`), and a **cache caveat** under the
-  VPS table (cached vs cache-busted throughput).
-- `design.md`: scrypt → PBKDF2 (100k), 14 → 219 tests, and a status note that
-  `Clerk(...)`/`Custom(...)` are roadmap-only.
+- `README.md`: 37 → **219** tests, package layout corrected (`@reptar/client` lives in `packages/rpc`), and a **cache caveat** under the VPS table (cached vs cache-busted throughput).
+- `design.md`: scrypt → PBKDF2 (100k), 14 → 219 tests, and a status note that `Clerk(...)`/`Custom(...)` are roadmap-only.
 - `overview/architecture.md` and `overview/the-one-rule.md`: scrypt → PBKDF2.
-- `auth/adapters.md`: roadmap banner for Clerk/Custom; corrected the Better
-  Auth mount example to
-  `app.Route("/api/auth", BetterAuthProtocol.Routes(authOptions));`.
-- `auth/builtin.md`: documents `SecureCookies` and the per-isolate Workers
-  rate limiter.
-- `ai/agent-harness.mdx`, `cookbook/ai-agent-tools.mdx`, and `llms.txt`:
-  document the explicit-tool default and the `run_command` opt-in.
-- `scripts/check-doc-snippets.ts` uses the pinned SDK and repo-root resolution,
-  so the docs gate works on machines where PATH `dotnet` is older.
+- `auth/adapters.md`: roadmap banner for Clerk/Custom; corrected the Better Auth mount example to `app.Route("/api/auth", BetterAuthProtocol.Routes(authOptions));`.
+- `auth/builtin.md`: documents `SecureCookies` and the per-isolate Workers rate limiter.
+- `ai/agent-harness.mdx`, `cookbook/ai-agent-tools.mdx`, and `llms.txt`: document the explicit-tool default and the `run_command` opt-in.
+- `scripts/check-doc-snippets.ts` uses the pinned SDK and repo-root resolution, so the docs gate works on machines where PATH `dotnet` is older.
 
 ### 2.4 Duplicate `Set-Cookie`
 
-`BetterAuthRoutes` now has a single `SetSessionCookie` helper. When
-`AuthOptions.CookieName` equals `better-auth.session_token`, it sets the cookie
-once; otherwise it sets both names as before. Sign-out uses the same
-deduplication. A regression test asserts a single header.
+`BetterAuthRoutes` now has a single `SetSessionCookie` helper. When `AuthOptions.CookieName` equals `better-auth.session_token`, it sets the cookie once; otherwise it sets both names as before. Sign-out uses the same deduplication. A regression test asserts a single header.
 
 ---
 
@@ -104,38 +73,27 @@ deduplication. A regression test asserts a single header.
 
 - `CookieJar.Set`/`SetSigned`/`SetSignedAsync`/`Delete` accept `secure`.
 - `AuthOptions.SecureCookies` defaults to **true**.
-- The built-in and Better Auth session cookies, OAuth PKCE/state cookies, and
-  sign-out deletions pass the option through on both Kestrel and Wasm.
-- The scaffold template sets `SecureCookies = false` only under `#if DEBUG`
-  (local HTTP); Release/AOT keeps `Secure`. `examples/blog` and `examples/baas`
-  do the same explicitly.
+- The built-in and Better Auth session cookies, OAuth PKCE/state cookies, and sign-out deletions pass the option through on both Kestrel and Wasm.
+- The scaffold template sets `SecureCookies = false` only under `#if DEBUG` (local HTTP); Release/AOT keeps `Secure`. `examples/blog` and `examples/baas` do the same explicitly.
 - Tests: `Auth_session_cookie_is_secure_by_default`.
 
 ### 3.2 Wasm login throttling
 
-- Moved `RateLimitMaxAttempts`, `RateLimitWindowMinutes`, and
-  `EnableRateLimiting` out of `#if !NETWASM` in `AuthOptions`.
-- Ported the portable sign-in limiter to `framework/Reptar.Wasm/Auth/Auth.cs`
-  (per-isolate dictionary + lock; best effort, not a substitute for the
-  Cloudflare RateLimit binding).
-- Successful sign-in resets the counter; failures record it; 429 uses the
-  standard error envelope.
+- Moved `RateLimitMaxAttempts`, `RateLimitWindowMinutes`, and `EnableRateLimiting` out of `#if !NETWASM` in `AuthOptions`.
+- Ported the portable sign-in limiter to `framework/Reptar.Wasm/Auth/Auth.cs` (per-isolate dictionary + lock; best effort, not a substitute for the Cloudflare RateLimit binding).
+- Successful sign-in resets the counter; failures record it; 429 uses the standard error envelope.
 
 ### 3.3 Agent shell safety
 
 - `WorkspaceToolOptions.AllowRunCommand` now defaults to **false**.
 - `AllowedCommandPrefixes` adds an optional allowlist.
-- `examples/agent-cli` opts in explicitly; the self-test still covers
-  `run_command`.
-- `WorkspaceToolOptions` properties are now settable so the documented
-  `configure` callback actually works.
-- Tests: default absence of `run_command`, allowlist allow/deny, symlink
-  escape (Phase 1), and existing timeout coverage.
+- `examples/agent-cli` opts in explicitly; the self-test still covers `run_command`.
+- `WorkspaceToolOptions` properties are now settable so the documented `configure` callback actually works.
+- Tests: default absence of `run_command`, allowlist allow/deny, symlink escape (Phase 1), and existing timeout coverage.
 
 ### 3.4 AOT publish assertion
 
-`deploy/Dockerfile` and `templates/fullstack/deploy/Dockerfile` now fail the
-build if publish silently produces a JIT apphost:
+`deploy/Dockerfile` and `templates/fullstack/deploy/Dockerfile` now fail the build if publish silently produces a JIT apphost:
 
 ```dockerfile
 if [ -f /app/publish/app ]; then mv /app/publish/app /app/publish/reptar; fi
@@ -143,8 +101,7 @@ test -x /app/publish/reptar
 test ! -f /app/publish/app.dll
 ```
 
-`build:worker`, `build:realworld`, and `build:worker:rooms` also pass
-`-p:DebugType=None -p:DebugSymbols=false`.
+`build:worker`, `build:realworld`, and `build:worker:rooms` also pass `-p:DebugType=None -p:DebugSymbols=false`.
 
 ### 3.5 Worker asset size (new blocker found by `bun e2e`)
 
@@ -155,24 +112,14 @@ Asset too large. Cloudflare Workers supports assets with sizes of up to 25 MiB.
 We found HelloReptar.wasm with a size of 26 MiB.
 ```
 
-The wasm does not need to be a static asset at all: it is imported as a
-`CompiledWasm` module and the patched loader compiles
-`globalThis.__REPTAR_WASM_MODULE`. The fix is to stop uploading it twice:
+The wasm does not need to be a static asset at all: it is imported as a `CompiledWasm` module and the patched loader compiles `globalThis.__REPTAR_WASM_MODULE`. The fix is to stop uploading it twice:
 
-- `public/.assetsignore` excludes `browser/*.wasm` in the blog, realworld, and
-  rooms Workers.
-- `@reptar/host`'s `patchNetWasmHost` makes the loader return an empty byte
-  array for the `application` artifact instead of fetching it.
-- `refreshDeploymentHashes` records the empty SHA-256 for that artifact, so the
-  integrity check passes.
-- Only Cloudflare's 64 MiB Worker script limit applies. `check:worker` enforces
-  a 48 MiB hard ceiling and warns above the 32 MiB optimization target.
+- `public/.assetsignore` excludes `browser/*.wasm` in the blog, realworld, and rooms Workers.
+- `@reptar/host`'s `patchNetWasmHost` makes the loader return an empty byte array for the `application` artifact instead of fetching it.
+- `refreshDeploymentHashes` records the empty SHA-256 for that artifact, so the integrity check passes.
+- Only Cloudflare's 64 MiB Worker script limit applies. `check:worker` enforces a 48 MiB hard ceiling and warns above the 32 MiB optimization target.
 
-The module is left unoptimized by default (38.4 MiB upload / ~4.5 MiB gzip on
-the current source). `wasm-opt` on this module is slow and fragile: core `-Oz`
-does not converge, and a post-link `-O3` pass invalidates the interop manifest.
-`REPTAR_OPTIMIZE_WORKER=1` remains an opt-in slow pass for size experiments;
-`REPTAR_SKIP_WASM_OPT=1` is still honored.
+The module is left unoptimized by default (38.4 MiB upload / ~4.5 MiB gzip on the current source). `wasm-opt` on this module is slow and fragile: core `-Oz` does not converge, and a post-link `-O3` pass invalidates the interop manifest. `REPTAR_OPTIMIZE_WORKER=1` remains an opt-in slow pass for size experiments; `REPTAR_SKIP_WASM_OPT=1` is still honored.
 
 ### 3.6 CI
 
@@ -189,49 +136,25 @@ New `.github/workflows/ci.yml` runs, sequentially in one job:
 9. `create-reptar` typecheck
 10. `bun run docs:check:snippets`
 
-It uses Bun 1.3.10 and .NET 10.0.401, caches Bun/NuGet, and runs commands
-sequentially to avoid the shared-build-state flake.
+It uses Bun 1.3.10 and .NET 10.0.401, caches Bun/NuGet, and runs commands sequentially to avoid the shared-build-state flake.
 
 ### 3.7 Worker JSON and WebSocket envelopes
 
 The realtime smoke exposed a NetWasm-only failure chain:
 
-- `UseRegisteredContexts()` attached a resolver to `ReptarJson.Options` that
-  returned `JsonTypeInfo` instances owned by the app context. System.Text.Json
-  rejects metadata bound to a different options instance ("JsonTypeInfo ...
-  does not match").
-- Adopting the app context's `Options` fixed that, but app contexts must use
-  `[JsonSourceGenerationOptions(PropertyNamingPolicy = CamelCase)]`; otherwise
-  camelCase WebSocket frames silently bind to nulls.
-- Exported JS-interop handlers (`handleWebSocketOpen/Message/Close`) were
-  deserializing with `ReptarJson.Options` directly. `ReptarJson.Deserialize<T>`
-  now resolves the registered metadata explicitly and is used by the rooms
-  worker.
-- `FindTypeInfo` and `SourceGenJsonCodec` now ignore `object` metadata and
-  resolve `value.GetType()` for serialization. This prevents polymorphic
-  `object` metadata from asking an app context for an unregistered concrete
-  type (the Postgres provider tests caught this).
-- `[JsonSerializable(typeof(Dictionary<string, object?>))]` is still not
-  required for D1 dictionary writes (see 3.8).
+- `UseRegisteredContexts()` attached a resolver to `ReptarJson.Options` that returned `JsonTypeInfo` instances owned by the app context. System.Text.Json rejects metadata bound to a different options instance ("JsonTypeInfo ... does not match").
+- Adopting the app context's `Options` fixed that, but app contexts must use `[JsonSourceGenerationOptions(PropertyNamingPolicy = CamelCase)]`; otherwise camelCase WebSocket frames silently bind to nulls.
+- Exported JS-interop handlers (`handleWebSocketOpen/Message/Close`) were deserializing with `ReptarJson.Options` directly. `ReptarJson.Deserialize<T>` now resolves the registered metadata explicitly and is used by the rooms worker.
+- `FindTypeInfo` and `SourceGenJsonCodec` now ignore `object` metadata and resolve `value.GetType()` for serialization. This prevents polymorphic `object` metadata from asking an app context for an unregistered concrete type (the Postgres provider tests caught this).
+- `[JsonSerializable(typeof(Dictionary<string, object?>))]` is still not required for D1 dictionary writes (see 3.8).
 
 ### 3.8 D1 dictionary inserts
 
-`D1DbClient` has generic and non-generic `InsertAsync` overloads. The generic
-one was selected for `Dictionary<string, object?>`, so it serialized the
-dictionary as JSON and threw `NotSupportedException` under NetWasm. Both the
-generic and non-generic paths now detect `IDictionary` and map keys straight to
-columns. `UpdateAsync` received the same treatment. This unblocked the rooms
-write-behind persister (`messagesPersisted` now increments, history round-trips).
+`D1DbClient` has generic and non-generic `InsertAsync` overloads. The generic one was selected for `Dictionary<string, object?>`, so it serialized the dictionary as JSON and threw `NotSupportedException` under NetWasm. Both the generic and non-generic paths now detect `IDictionary` and map keys straight to columns. `UpdateAsync` received the same treatment. This unblocked the rooms write-behind persister (`messagesPersisted` now increments, history round-trips).
 
 ### 3.9 Durable Object assets
 
-With `assets.binding = "ASSETS"`, a DO could fetch small metadata files but
-failed on the ~20 MB `RoomsWorker.wasm` ("browser artifact fetch was
-unsuccessful"). The loader patch from 3.5 removes the wasm fetch entirely, so
-the DO only reads `deployment.json`, `interop.json`, and the other small
-metadata assets. `wrangler.jsonc` declares the `CompiledWasm` rule, the worker
-depends on `wrangler` directly (instead of a stale global 4.99), and
-`public/.assetsignore` excludes the wasm from the asset upload.
+With `assets.binding = "ASSETS"`, a DO could fetch small metadata files but failed on the ~20 MB `RoomsWorker.wasm` ("browser artifact fetch was unsuccessful"). The loader patch from 3.5 removes the wasm fetch entirely, so the DO only reads `deployment.json`, `interop.json`, and the other small metadata assets. `wrangler.jsonc` declares the `CompiledWasm` rule, the worker depends on `wrangler` directly (instead of a stale global 4.99), and `public/.assetsignore` excludes the wasm from the asset upload.
 
 ---
 
@@ -257,21 +180,12 @@ depends on `wrangler` directly (instead of a stale global 4.99), and
 
 ## 5. Still Open
 
-1. Real `minimal-api` / `agent` templates (they now fail explicitly rather than
-   silently scaffolding fullstack).
-2. CI is written but not yet observed on GitHub Actions; the local equivalents
-   are green, including the Postgres/MySQL/D1 provider matrix entry points.
-3. The Wasm post-pass depends on the `netwasm.toolchain` package layout; a
-   NetWasm upgrade should remove the workaround once its bundled optimizer
-   handles reference types.
-4. A full `bun reptar build:worker` clean build is slow (~40s) because the
-   NetWasm compiler re-runs; acceptable for CI/deploy.
-5. `bun reptar doctor --strict` still reports the PATH/pinned-SDK mismatch on
-   developer machines that have an older PATH SDK; CI installs the pinned
-   version, and `self-check` uses non-strict doctor.
-6. The unoptimized Worker module is 38.4 MiB (4.5 MiB gzip). It is under the
-   platform limit but above the 32 MiB optimization target; a minimal edge
-   profile / working `wasm-opt` pass is the main Speed-release item.
+1. Real `minimal-api` / `agent` templates (they now fail explicitly rather than silently scaffolding fullstack).
+2. CI is written but not yet observed on GitHub Actions; the local equivalents are green, including the Postgres/MySQL/D1 provider matrix entry points.
+3. The Wasm post-pass depends on the `netwasm.toolchain` package layout; a NetWasm upgrade should remove the workaround once its bundled optimizer handles reference types.
+4. A full `bun reptar build:worker` clean build is slow (~40s) because the NetWasm compiler re-runs; acceptable for CI/deploy.
+5. `bun reptar doctor --strict` still reports the PATH/pinned-SDK mismatch on developer machines that have an older PATH SDK; CI installs the pinned version, and `self-check` uses non-strict doctor.
+6. The unoptimized Worker module is 38.4 MiB (4.5 MiB gzip). It is under the platform limit but above the 32 MiB optimization target; a minimal edge profile / working `wasm-opt` pass is the main Speed-release item.
 
 ---
 

@@ -267,9 +267,7 @@ Auth = Custom(async c => ...)
 
 The Better Auth adapter is small because Better Auth writes its session table to the same D1 — cookie token → session row → `c.User`.
 
-> **Status:** built-in auth and the Better Auth wire protocol are implemented.
-> `Clerk(...)` and `Custom(...)` are roadmap APIs and are not in the current
-> release; do not copy them into an app yet.
+> **Status:** built-in auth and the Better Auth wire protocol are implemented. `Clerk(...)` and `Custom(...)` are roadmap APIs and are not in the current release; do not copy them into an app yet.
 
 ## 7. Cloudflare bindings — written by us, exposed as C#
 

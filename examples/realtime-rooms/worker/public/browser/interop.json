@@ -23,9 +23,9 @@
       ],
       "result": "i32",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bbb",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bbb",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bbb"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc1",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc1",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc1"
     },
     {
       "module": "app.host",
@@ -36,9 +36,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bf7",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bf7",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bf7"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bfd",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bfd",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bfd"
     },
     {
       "module": "app.host",
@@ -49,9 +49,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bba",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bba",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bba"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc0",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc0",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc0"
     },
     {
       "module": "app.host",
@@ -74,9 +74,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bf6",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bf6",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bf6"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bfc",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bfc",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bfc"
     },
     {
       "module": "app.host",

@@ -22,9 +22,9 @@
       ],
       "result": "i32",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000b8a",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000b8a",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000b8a"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc2",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc2",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc2"
     },
     {
       "module": "app.host",
@@ -47,9 +47,9 @@
       ],
       "result": "i32",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000b89",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000b89",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000b89"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc1",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc1",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc1"
     },
     {
       "module": "app.host",
@@ -59,9 +59,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc2",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc2",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc2"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bfa",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bfa",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bfa"
     },
     {
       "module": "app.host",
@@ -72,9 +72,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc5",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc5",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc5"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bfd",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bfd",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bfd"
     },
     {
       "module": "app.host",
@@ -85,9 +85,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000b88",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000b88",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000b88"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc0",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc0",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc0"
     },
     {
       "module": "app.host",
@@ -110,9 +110,9 @@
       ],
       "result": "string",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc4",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc4",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc4"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bfc",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bfc",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bfc"
     },
     {
       "module": "app.host",
@@ -135,9 +135,9 @@
       ],
       "result": "bool",
       "asyncReturn": "task",
-      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bc3",
-      "rejectExport": "netwasm.async.import.reject.Reptar.06000bc3",
-      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bc3"
+      "resolveExport": "netwasm.async.import.resolve.Reptar.06000bfb",
+      "rejectExport": "netwasm.async.import.reject.Reptar.06000bfb",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.06000bfb"
     }
   ],
   "exports": [

@@ -79,8 +79,7 @@ The runner:
 
 ## Validation microbenchmark
 
-`Rule<T>` (the declarative validator) should stay within the same order of
-magnitude as hand-written checks, without allocating on the success path.
+`Rule<T>` (the declarative validator) should stay within the same order of magnitude as hand-written checks, without allocating on the success path.
 
 ```bash
 bun run bench:validation
@@ -88,9 +87,7 @@ bun run bench:validation
 bun run bench:validation bench/results/validation.json
 ```
 
-The harness compares `Rule<T>` against a manual validator for valid and
-invalid payloads on the current runtime. For Native AOT numbers, publish the
-project with `-p:PublishAot=true` and run the resulting binary.
+The harness compares `Rule<T>` against a manual validator for valid and invalid payloads on the current runtime. For Native AOT numbers, publish the project with `-p:PublishAot=true` and run the resulting binary.
 
 ## Tiers
 

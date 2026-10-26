@@ -35,7 +35,7 @@ const enqueue = async (n: number): Promise<number> => {
 const { mode } = await stats();
 
 // Fresh baseline.
-const baseline = (await stats()).processed;
+const { processed: baseline } = await stats();
 await enqueue(1);
 await Bun.sleep(mode === "sync" ? 100 : 4000);
 

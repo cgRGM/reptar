@@ -136,10 +136,7 @@ Verifies environment prerequisites, .NET compiler toolchain, database connection
 }
 ```
 
-`doctor` fails closed: a missing SQLite file or an unreachable PostgreSQL host is a
-failed check, not a warning. PostgreSQL URLs are detected and probed over TCP
-(credentials are redacted in the output). Use `--strict` in CI to also fail on
-soft warnings such as a PATH `dotnet` that differs from the pinned SDK.
+`doctor` fails closed: a missing SQLite file or an unreachable PostgreSQL host is a failed check, not a warning. PostgreSQL URLs are detected and probed over TCP (credentials are redacted in the output). Use `--strict` in CI to also fail on soft warnings such as a PATH `dotnet` that differs from the pinned SDK.
 
 ---
 

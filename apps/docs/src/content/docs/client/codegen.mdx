@@ -9,7 +9,7 @@ import smokeCode from "../../../../../../examples/blog/rpc/smoke.ts?raw";
 
 ## Native OpenAPI 3.1 & Interactive Scalar UI
 
-Reptar includes a zero-reflection OpenAPI 3.1.0 generator (`OpenApi.cs`) that inspects registered `RouteMeta` and `Validator<T>` rules at runtime without reflection:
+Reptar exports OpenAPI 3.1.0 from registered `RouteMeta` and `Validator<T>` rules. The native documentation helpers inspect DTO properties using reflection; they are excluded from the Worker build. Generate contracts in development/CI and use the static artifact for deployment documentation. Do not assume arbitrary DTOs retain runtime reflection metadata after Native AOT trimming.
 
 - **Automatic Path Parameter Translation:** Converts Reptar route patterns (`/api/tasks/:id`) into typed OpenAPI path parameters (`/api/tasks/{id}`).
 - **Validator-Derived JSON Schemas:** Routes registered with `Rule<T>()` constraints (`.NotEmpty()`, `.Min()`, `.Max()`, `.Email()`, `.Regex()`) automatically populate `required`, `minLength`, `maxLength`, `minimum`, `maximum`, `pattern`, and `format` in the OpenAPI 3.1 request body schema.
@@ -37,6 +37,35 @@ app.Post("/api/tasks", CreateTaskSchema, async (ctx, input) =>
     .Produces<TaskItem>(201)
     .Produces<ValidationError>(400);
 ```
+
+## Explicit query contracts and bodyless responses
+
+Reading `ctx.Req.QueryValue("subject")` alone cannot declare a public contract. Attach `.WithQuery<T>()` to export scalar query fields to both OpenAPI and the typed client:
+
+```csharp
+public sealed record EvaluateQuery(string Subject, int? Limit = null);
+
+app.Get("/flags/:key", ctx => Evaluate(ctx, ctx.Req.QueryValue("subject")))
+    .WithQuery<EvaluateQuery>()
+    .Produces<Evaluation>()  // Defaults to HTTP 200; explicit status still works.
+    .Produces(304);
+```
+
+`Evaluate` is your handler: it must still parse and validate the query values. `WithQuery<T>()` declares metadata, **not automatic binding or validation**. Fields use camelCase names. Nullable/defaulted fields are optional; the client omits `null` and `undefined`. Nested objects and collections fail codegen with a scalar-query diagnostic instead of silently serializing as `[object Object]`.
+
+```typescript
+const response = await api.flags[":key"].$get({
+  param: { key: "checkout" },
+  query: { subject: "customer-42" },
+});
+if (response.status === 304) {
+  // Reuse the cached decision. A 304 has no JSON body.
+} else if (response.ok) {
+  const decision = await response.json();
+}
+```
+
+Use `.Produces(204)` / `.Produces(304)` without a DTO for bodyless responses. Their client `json()` result is `never`; narrow by status before reading a body. Response DTOs for other statuses still require explicit metadata. The client does not infer undocumented error shapes from handler code.
 
 ## TypeScript RPC Codegen Command
 
@@ -86,7 +115,7 @@ The route tree below is sourced directly from `examples/blog/rpc/app-type.d.ts`:
 
 ## Consuming the Typed Client
 
-The `@reptar/client` package provides a minimal (~100 lines), zero-dependency proxy client with full type inference for route segments, URL parameters, query strings, and request/response bodies:
+The `@reptar/client` package provides a small, zero-dependency proxy client with full type inference for route segments, URL parameters, query strings, and request/response bodies:
 
 ```typescript
 import { createClient } from "@reptar/client";

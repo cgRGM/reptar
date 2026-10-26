@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "2d51e05ebf6ea9a1ff037bf3e635b9e5cced7a5f91afb89a367bc604ee8dfeef",
+  "semanticBuildId": "b8bc56513758d55ed6204b23efafb13ffe82d9b0a298373d74c31491593f812a",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "c6e9b8014f8d0f87d97b9a34ca57afc6955c97652007d2067dde0643612c233d",
+  "buildFingerprint": "21acc5ec5a90e4ec25ca6778e559311d6a2ef2a914d9610e53f0a8b2f1d69657",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -23,7 +23,7 @@
       "relativePath": "RealWorld.exceptions.json",
       "role": "exception-type-map",
       "mediaType": "application/vnd.netwasm.exception-types+json;version=2",
-      "sha256": "71ef1a009b92b396d42848e338b6119d50eabce5b681012bf685c5b61607f8c1",
+      "sha256": "43f22fad4d6e72d74c5f2f006753e3ef57eca8d089505ae43e077b6fc6d2f01f",
       "schemaVersion": 2
     },
     {
@@ -44,7 +44,7 @@
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "7e2673fb0d514f472ab40ed0b62fe1dfaeb27fc1fee4e55a2f850816efd3225a",
+      "sha256": "674712be8124eeaa54327968f8a2077f7c0b2d1efcbfd2324cd7e132ecfd06ca",
       "schemaVersion": 1
     },
     {

@@ -48,7 +48,7 @@ app.Ws("/rooms/{roomId}", async (ws, ctx) =>
 The `RoomsHub` implementation blends the best patterns from the real-time ecosystem:
 
 | Architecture | Pattern Implemented |
-| :--- | :--- |
+| :-- | :-- |
 | **PartyKit** | Per-room roster sharding with `broadcastExcept(clientId, payload)` |
 | **y-websocket** | Ephemeral cursor & presence updates that bypass disk persistence |
 | **Liveblocks** | Immediate roster snapshot upon join + delta peer events |
@@ -80,14 +80,14 @@ public async Task BroadcastAsync(string roomId, string senderId, string jsonPayl
 
 Benchmarked on Apple Silicon (8 cores) with a 5,000-socket concurrency test harness:
 
-| Metric | Measured Result |
-| :--- | :--- |
-| **Socket Ramp Rate** | **3,267 sockets/sec** |
-| **Fanout Latency (p50)** | **0.50 ms** |
-| **Fanout Latency (p95)** | **2.41 ms** |
-| **Fanout Latency (p99)** | **29.4 ms** |
-| **Broadcast Storm Volume** | **6.86 Million** presence fanouts |
-| **Frame Delivery Rate** | **100%** (zero socket disconnects) |
+| Metric                     | Measured Result                    |
+| :------------------------- | :--------------------------------- |
+| **Socket Ramp Rate**       | **3,267 sockets/sec**              |
+| **Fanout Latency (p50)**   | **0.50 ms**                        |
+| **Fanout Latency (p95)**   | **2.41 ms**                        |
+| **Fanout Latency (p99)**   | **29.4 ms**                        |
+| **Broadcast Storm Volume** | **6.86 Million** presence fanouts  |
+| **Frame Delivery Rate**    | **100%** (zero socket disconnects) |
 
 ---
 

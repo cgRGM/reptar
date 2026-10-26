@@ -114,8 +114,7 @@
         "operationId": "post_auth_signout",
         "responses": {
           "204": {
-            "description": "No Content",
-            "content": null
+            "description": "No Content"
           }
         }
       }
@@ -191,7 +190,17 @@
           "200": {
             "description": "OK"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/auth/sessions": {
@@ -289,7 +298,17 @@
           "200": {
             "description": "OK"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/posts": {
@@ -301,7 +320,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Post[]"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Post"
+                  }
                 }
               }
             }
@@ -353,7 +375,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Post[]"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Post"
+                  }
                 }
               }
             }
@@ -395,7 +420,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "put": {
         "operationId": "put_posts_id",
@@ -440,14 +475,23 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "delete": {
         "operationId": "delete_posts_id",
         "responses": {
           "204": {
-            "description": "No Content",
-            "content": null
+            "description": "No Content"
           },
           "404": {
             "description": "Not Found",
@@ -459,7 +503,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/upload": {
@@ -581,16 +635,13 @@
         "operationId": "get_images_key",
         "responses": {
           "200": {
-            "description": "OK",
-            "content": null
+            "description": "OK"
           },
           "206": {
-            "description": "Response",
-            "content": null
+            "description": "Response"
           },
           "304": {
-            "description": "Response",
-            "content": null
+            "description": "Response"
           },
           "400": {
             "description": "Bad Request",
@@ -612,7 +663,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/me": {
@@ -657,7 +718,8 @@
           "name": {
             "type": "string"
           }
-        }
+        },
+        "required": ["email", "password", "name"]
       },
       "SessionUser": {
         "type": "object",
@@ -675,15 +737,30 @@
             "type": "string"
           },
           "image": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "emailVerified": {
             "type": "number"
           },
           "createdAt": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["id", "email", "name"]
       },
       "ValidationError": {
         "type": "object",
@@ -695,12 +772,23 @@
             "type": "string"
           },
           "requestId": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "issues": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            }
           }
-        }
+        },
+        "required": ["code", "message", "issues"]
       },
       "ValidationIssue": {
         "type": "object",
@@ -709,9 +797,20 @@
             "type": "string"
           },
           "path": {
-            "type": "array"
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["message"]
       },
       "ErrorBody": {
         "type": "object",
@@ -723,9 +822,17 @@
             "type": "string"
           },
           "requestId": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["code", "message"]
       },
       "SignInInput": {
         "type": "object",
@@ -736,15 +843,24 @@
           "password": {
             "type": "string"
           }
-        }
+        },
+        "required": ["email", "password"]
       },
       "SessionResponse": {
         "type": "object",
         "properties": {
           "user": {
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionUser"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": []
       },
       "BuiltInSocialInput": {
         "type": "object",
@@ -755,7 +871,8 @@
           "callbackUrl": {
             "type": "string"
           }
-        }
+        },
+        "required": ["provider", "callbackUrl"]
       },
       "RevokeSessionInput": {
         "type": "object",
@@ -763,7 +880,8 @@
           "sessionId": {
             "type": "string"
           }
-        }
+        },
+        "required": ["sessionId"]
       },
       "ChangePasswordInput": {
         "type": "object",
@@ -774,7 +892,8 @@
           "newPassword": {
             "type": "string"
           }
-        }
+        },
+        "required": ["currentPassword", "newPassword"]
       },
       "CreateApiKeyInput": {
         "type": "object",
@@ -783,9 +902,17 @@
             "type": "string"
           },
           "expiresInDays": {
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["name"]
       },
       "Post": {
         "type": "object",
@@ -806,7 +933,14 @@
             "type": "string"
           },
           "excerpt": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "published": {
             "type": "number"
@@ -818,9 +952,26 @@
             "type": "string"
           },
           "imageKey": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": [
+          "id",
+          "authorId",
+          "slug",
+          "title",
+          "content",
+          "published",
+          "createdAt",
+          "updatedAt"
+        ]
       },
       "CreatePost": {
         "type": "object",
@@ -832,29 +983,73 @@
             "type": "string"
           },
           "excerpt": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "imageKey": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["title", "content"]
       },
       "UpdatePost": {
         "type": "object",
         "properties": {
           "title": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "content": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "excerpt": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "imageKey": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": []
       },
       "UploadResult": {
         "type": "object",
@@ -865,7 +1060,8 @@
           "url": {
             "type": "string"
           }
-        }
+        },
+        "required": ["key", "url"]
       }
     }
   }

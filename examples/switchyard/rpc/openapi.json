@@ -104,8 +104,7 @@
         "operationId": "post_api_auth_signout",
         "responses": {
           "204": {
-            "description": "No Content",
-            "content": null
+            "description": "No Content"
           }
         }
       }
@@ -181,7 +180,17 @@
           "200": {
             "description": "OK"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "provider",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/auth/sessions": {
@@ -279,7 +288,17 @@
           "200": {
             "description": "OK"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/health": {
@@ -308,7 +327,10 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/List"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ProjectRow"
+                  }
                 }
               }
             }
@@ -350,12 +372,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/List"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FlagRow"
+                  }
                 }
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "post": {
         "operationId": "post_api_projects_projectId_flags",
@@ -390,7 +425,17 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/projects/{projectId}/flags/{environment}/{key}/draft": {
@@ -427,7 +472,33 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/projects/{projectId}/flags/{environment}/{key}/publish": {
@@ -464,7 +535,33 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/projects/{projectId}/flags/{environment}/{key}/versions": {
@@ -476,12 +573,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/List"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VersionRow"
+                  }
                 }
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/projects/{projectId}/audit": {
@@ -493,12 +619,25 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/List"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AuditRow"
+                  }
                 }
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     },
     "/api/evaluate/{projectId}/{environment}/{key}": {
@@ -516,10 +655,43 @@
             }
           },
           "304": {
-            "description": "Response",
-            "content": null
+            "description": "Response"
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "subject",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       },
       "post": {
         "operationId": "post_api_evaluate_projectId_environment_key",
@@ -544,7 +716,33 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
       }
     }
   },
@@ -562,7 +760,8 @@
           "name": {
             "type": "string"
           }
-        }
+        },
+        "required": ["email", "password", "name"]
       },
       "SessionUser": {
         "type": "object",
@@ -580,15 +779,30 @@
             "type": "string"
           },
           "image": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "emailVerified": {
             "type": "number"
           },
           "createdAt": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["id", "email", "name"]
       },
       "ValidationError": {
         "type": "object",
@@ -600,12 +814,23 @@
             "type": "string"
           },
           "requestId": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "issues": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ValidationIssue"
+            }
           }
-        }
+        },
+        "required": ["code", "message", "issues"]
       },
       "ValidationIssue": {
         "type": "object",
@@ -614,9 +839,20 @@
             "type": "string"
           },
           "path": {
-            "type": "array"
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["message"]
       },
       "ErrorBody": {
         "type": "object",
@@ -628,9 +864,17 @@
             "type": "string"
           },
           "requestId": {
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["code", "message"]
       },
       "SignInInput": {
         "type": "object",
@@ -641,15 +885,24 @@
           "password": {
             "type": "string"
           }
-        }
+        },
+        "required": ["email", "password"]
       },
       "SessionResponse": {
         "type": "object",
         "properties": {
           "user": {
-            "type": "object"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SessionUser"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": []
       },
       "BuiltInSocialInput": {
         "type": "object",
@@ -660,7 +913,8 @@
           "callbackUrl": {
             "type": "string"
           }
-        }
+        },
+        "required": ["provider", "callbackUrl"]
       },
       "RevokeSessionInput": {
         "type": "object",
@@ -668,7 +922,8 @@
           "sessionId": {
             "type": "string"
           }
-        }
+        },
+        "required": ["sessionId"]
       },
       "ChangePasswordInput": {
         "type": "object",
@@ -679,7 +934,8 @@
           "newPassword": {
             "type": "string"
           }
-        }
+        },
+        "required": ["currentPassword", "newPassword"]
       },
       "CreateApiKeyInput": {
         "type": "object",
@@ -688,9 +944,17 @@
             "type": "string"
           },
           "expiresInDays": {
-            "type": "number"
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
-        }
+        },
+        "required": ["name"]
       },
       "Health": {
         "type": "object",
@@ -701,7 +965,8 @@
           "target": {
             "type": "string"
           }
-        }
+        },
+        "required": ["status", "target"]
       },
       "ProjectRow": {
         "type": "object",
@@ -715,7 +980,8 @@
           "name": {
             "type": "string"
           }
-        }
+        },
+        "required": ["id", "ownerId", "name"]
       },
       "CreateProject": {
         "type": "object",
@@ -723,7 +989,8 @@
           "name": {
             "type": "string"
           }
-        }
+        },
+        "required": ["name"]
       },
       "FlagRow": {
         "type": "object",
@@ -752,7 +1019,17 @@
           "version": {
             "type": "number"
           }
-        }
+        },
+        "required": [
+          "projectId",
+          "environment",
+          "key",
+          "enabled",
+          "rollout",
+          "targets",
+          "revision",
+          "version"
+        ]
       },
       "CreateFlag": {
         "type": "object",
@@ -763,7 +1040,8 @@
           "environment": {
             "type": "string"
           }
-        }
+        },
+        "required": ["key", "environment"]
       },
       "Problem": {
         "type": "object",
@@ -774,7 +1052,8 @@
           "message": {
             "type": "string"
           }
-        }
+        },
+        "required": ["code", "message"]
       },
       "DraftInput": {
         "type": "object",
@@ -786,12 +1065,16 @@
             "type": "number"
           },
           "targets": {
-            "type": "array"
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "expectedRevision": {
             "type": "number"
           }
-        }
+        },
+        "required": ["enabled", "rollout", "targets", "expectedRevision"]
       },
       "PublishInput": {
         "type": "object",
@@ -802,7 +1085,8 @@
           "expectedVersion": {
             "type": "number"
           }
-        }
+        },
+        "required": ["expectedRevision", "expectedVersion"]
       },
       "VersionRow": {
         "type": "object",
@@ -834,7 +1118,18 @@
           "createdAt": {
             "type": "string"
           }
-        }
+        },
+        "required": [
+          "projectId",
+          "environment",
+          "key",
+          "version",
+          "enabled",
+          "rollout",
+          "targets",
+          "actorId",
+          "createdAt"
+        ]
       },
       "AuditRow": {
         "type": "object",
@@ -860,7 +1155,25 @@
           "createdAt": {
             "type": "string"
           }
-        }
+        },
+        "required": [
+          "id",
+          "projectId",
+          "environment",
+          "key",
+          "version",
+          "actorId",
+          "createdAt"
+        ]
+      },
+      "EvaluateInput": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "string"
+          }
+        },
+        "required": ["subject"]
       },
       "Evaluation": {
         "type": "object",
@@ -877,15 +1190,8 @@
           "reason": {
             "type": "string"
           }
-        }
-      },
-      "EvaluateInput": {
-        "type": "object",
-        "properties": {
-          "subject": {
-            "type": "string"
-          }
-        }
+        },
+        "required": ["enabled", "bucket", "version", "reason"]
       }
     }
   }

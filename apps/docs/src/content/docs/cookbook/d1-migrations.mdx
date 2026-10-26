@@ -4,6 +4,7 @@ description: Develop locally with SQLite WAL and deploy to Cloudflare D1 with ze
 ---
 
 Reptar’s storage layer uses a dual-engine architecture:
+
 - **Local Development**: Ultra-fast SQLite with group commits and WAL mode (`Db.Sqlite("./data/app.db")`).
 - **Production Edge**: Serverless Cloudflare D1 (`Db.D1("DB")`).
 
@@ -48,6 +49,7 @@ bun reptar db plan --json
 ```
 
 Output:
+
 ```json
 {
   "drift": true,

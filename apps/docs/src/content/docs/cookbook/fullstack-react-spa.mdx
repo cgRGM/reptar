@@ -64,14 +64,14 @@ export function AgentChat() {
     isStreaming,
     stop,
     clear,
-    activeSteps
+    activeSteps,
   } = useAgentChat({
     endpoint: "/api/chat",
     onEvent: (event) => {
       if (event.type === "tool_start") {
         console.log(`Executing tool: ${event.name}`);
       }
-    }
+    },
   });
 
   return (
@@ -92,14 +92,24 @@ export function AgentChat() {
             </div>
 
             {/* Tool Executions */}
-            {m.toolCalls && m.toolCalls.map((t) => (
-              <div key={t.id} className="text-xs font-mono bg-zinc-950 p-2 rounded mb-2 border border-zinc-800">
-                <span className={t.state === "ok" ? "text-emerald-400" : "text-amber-400"}>
-                  {t.state === "ok" ? "✓" : "→"} {t.name}
-                </span>
-                {t.ms && <span className="text-zinc-500 ml-2">({t.ms}ms)</span>}
-              </div>
-            ))}
+            {m.toolCalls &&
+              m.toolCalls.map((t) => (
+                <div
+                  key={t.id}
+                  className="text-xs font-mono bg-zinc-950 p-2 rounded mb-2 border border-zinc-800"
+                >
+                  <span
+                    className={
+                      t.state === "ok" ? "text-emerald-400" : "text-amber-400"
+                    }
+                  >
+                    {t.state === "ok" ? "✓" : "→"} {t.name}
+                  </span>
+                  {t.ms && (
+                    <span className="text-zinc-500 ml-2">({t.ms}ms)</span>
+                  )}
+                </div>
+              ))}
 
             <div className="whitespace-pre-wrap">{m.content}</div>
           </div>

@@ -29,6 +29,7 @@
     <Compile Include="../Reptar/Data/Preload.cs" />
     <Compile Include="../Reptar/Data/Services.cs" />
     <Compile Include="../Reptar/Data/SqlParamParser.cs" />
+    <Compile Include="../Reptar/Data/SqlPagination.cs" />
     <Compile Include="Data/TableDef.Wasm.cs" />
     <Compile Include="Data/WorkerHost.cs" />
     <Compile Include="Data/TelemetryLogger.cs" />

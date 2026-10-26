@@ -1,6 +1,8 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import path from "node:path";
+
+const { dirname, join, relative } = path;
 
 const ROOT = join(dirname(new URL(import.meta.url).pathname), "..");
 const DOCS_DIR = join(ROOT, "apps/docs/src/content/docs");
@@ -26,22 +28,22 @@ interface ForbiddenPattern {
 
 const FORBIDDEN_PATTERNS: ForbiddenPattern[] = [
   {
-    pattern: /\.Req\.Query\s*\(/,
+    pattern: /\.Req\.Query\s*\(/u,
     reason:
       "ReptarRequest.Query is a string property; use .Req.QueryValue(name, defaultValue) instead.",
   },
   {
-    pattern: /namespaceBinding\s*:/,
+    pattern: /namespaceBinding\s*:/u,
     reason:
       "IDurableBridge.FetchAsync uses parameter 'namespaceName:', not 'namespaceBinding:'.",
   },
   {
-    pattern: /instanceId\s*:/,
+    pattern: /instanceId\s*:/u,
     reason:
       "IDurableBridge.FetchAsync uses parameter 'id:', not 'instanceId:'.",
   },
   {
-    pattern: /cgRGM\/reptar/i,
+    pattern: /cgRGM\/reptar/iu,
     reason: "Use canonical repository 'RocktownLabs/reptar'.",
   },
 ];
@@ -50,7 +52,7 @@ const files = walkFiles(DOCS_DIR);
 const errors: string[] = [];
 let totalCsharpBlocks = 0;
 
-const csharpFenceRegex = /```csharp([\s\S]*?)```/g;
+const csharpFenceRegex = /```csharp(?<code>[\s\S]*?)```/gu;
 
 for (const file of files) {
   const rel = relative(ROOT, file);
@@ -64,7 +66,7 @@ for (const file of files) {
 
   for (const match of content.matchAll(csharpFenceRegex)) {
     totalCsharpBlocks += 1;
-    const snippet = match[1] ?? "";
+    const snippet = match.groups?.code ?? "";
     if (snippet.trim().length === 0) {
       errors.push(`${rel}: Empty \`\`\`csharp code block.`);
     }
@@ -82,9 +84,9 @@ const agentToolsDocPath = join(DOCS_DIR, "cookbook/ai-agent-tools.mdx");
 const agentToolsDoc = existsSync(agentToolsDocPath)
   ? readFileSync(agentToolsDocPath, "utf-8")
   : "";
-const registeredToolPattern = /\.AsAiTool\("([a-z_]+)"/gu;
+const registeredToolPattern = /\.AsAiTool\("(?<tool>[a-z_]+)"/gu;
 for (const match of workspaceToolsSource.matchAll(registeredToolPattern)) {
-  const tool = match[1] ?? "";
+  const tool = match.groups?.tool ?? "";
   if (!agentToolsDoc.includes(tool)) {
     errors.push(
       `cookbook/ai-agent-tools.mdx: AI tool '${tool}' from WorkspaceTools.cs is not documented`
@@ -106,15 +108,15 @@ const AGENT_SURFACE_PATHS = [
 const cliSource = readFileSync(CLI_SOURCE_PATH, "utf-8");
 const implementedCommands = new Set<string>();
 for (const match of cliSource.matchAll(
-  /(?:case|command ===) "([a-z][a-z0-9:-]*)"/gu
+  /(?:case|command ===) "(?<command>[a-z][a-z0-9:-]*)"/gu
 )) {
-  const cliCommand = match[1] ?? "";
+  const cliCommand = match.groups?.command ?? "";
   if (cliCommand) {
     implementedCommands.add(cliCommand);
   }
 }
 
-const referencedCommandPattern = /bun reptar ([a-z][a-z0-9:-]*)/gu;
+const referencedCommandPattern = /bun reptar (?<command>[a-z][a-z0-9:-]*)/gu;
 for (const surfacePath of AGENT_SURFACE_PATHS) {
   if (!existsSync(surfacePath)) {
     continue;
@@ -122,7 +124,7 @@ for (const surfacePath of AGENT_SURFACE_PATHS) {
   const surface = readFileSync(surfacePath, "utf-8");
   const surfaceRel = relative(ROOT, surfacePath);
   for (const match of surface.matchAll(referencedCommandPattern)) {
-    const referencedCommand = match[1] ?? "";
+    const referencedCommand = match.groups?.command ?? "";
     if (!implementedCommands.has(referencedCommand)) {
       errors.push(
         `${surfaceRel}: references 'bun reptar ${referencedCommand}' but the CLI has no '${referencedCommand}' command`
@@ -144,11 +146,12 @@ console.log(
 );
 
 const pinnedDotnet = join(ROOT, ".reptar", "sdk", "dotnet");
-const dotnet = existsSync(pinnedDotnet)
-  ? pinnedDotnet
-  : process.env.DOTNET_ROOT
-    ? join(process.env.DOTNET_ROOT, "dotnet")
-    : "dotnet";
+let dotnet = "dotnet";
+if (existsSync(pinnedDotnet)) {
+  dotnet = pinnedDotnet;
+} else if (process.env.DOTNET_ROOT) {
+  dotnet = join(process.env.DOTNET_ROOT, "dotnet");
+}
 
 const testResult = spawnSync(
   dotnet,

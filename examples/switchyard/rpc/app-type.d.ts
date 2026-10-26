@@ -26,58 +26,100 @@ import type {
   VersionRow,
 } from "./types";
 
-export interface AppType {
+export type AppType = {
   api: {
     auth: {
       anonymous: {
-        $post: Endpoint<undefined, SessionUser | ErrorBody, 201 | 404>;
+        $post: Endpoint<
+          undefined,
+          SessionUser | ErrorBody,
+          201 | 404,
+          { 201: SessionUser; 404: ErrorBody }
+        >;
       };
       "api-keys": {
-        $get: Endpoint<undefined, unknown, 200>;
-        $post: Endpoint<{ json: CreateApiKeyInput }, unknown, 200>;
+        $get: Endpoint<undefined, unknown, 200, { 200: unknown }>;
+        $post: Endpoint<
+          { json: CreateApiKeyInput },
+          unknown,
+          200,
+          { 200: unknown }
+        >;
         ":id": {
-          $delete: Endpoint<{ param: { id: string } }, unknown, 200>;
+          $delete: Endpoint<
+            { param: { id: string } },
+            unknown,
+            200,
+            { 200: unknown }
+          >;
         };
       };
       callback: {
         ":provider": {
-          $get: Endpoint<{ param: { provider: string } }, unknown, 200>;
+          $get: Endpoint<
+            { param: { provider: string } },
+            unknown,
+            200,
+            { 200: unknown }
+          >;
         };
       };
       "change-password": {
-        $post: Endpoint<{ json: ChangePasswordInput }, unknown, 200>;
+        $post: Endpoint<
+          { json: ChangePasswordInput },
+          unknown,
+          200,
+          { 200: unknown }
+        >;
       };
       session: {
-        $get: Endpoint<undefined, SessionResponse, 200>;
+        $get: Endpoint<
+          undefined,
+          SessionResponse,
+          200,
+          { 200: SessionResponse }
+        >;
       };
       sessions: {
-        $get: Endpoint<undefined, unknown, 200>;
+        $get: Endpoint<undefined, unknown, 200, { 200: unknown }>;
         revoke: {
-          $post: Endpoint<{ json: RevokeSessionInput }, unknown, 200>;
+          $post: Endpoint<
+            { json: RevokeSessionInput },
+            unknown,
+            200,
+            { 200: unknown }
+          >;
         };
         "revoke-others": {
-          $post: Endpoint<undefined, unknown, 200>;
+          $post: Endpoint<undefined, unknown, 200, { 200: unknown }>;
         };
       };
       signin: {
         $post: Endpoint<
           { json: SignInInput },
           SessionUser | ValidationError | ErrorBody,
-          200 | 400 | 401
+          200 | 400 | 401,
+          { 200: SessionUser; 400: ValidationError; 401: ErrorBody }
         >;
       };
       signout: {
-        $post: Endpoint<undefined, void, 204>;
+        $post: Endpoint<undefined, void, 204, { 204: never }>;
       };
       signup: {
         $post: Endpoint<
           { json: SignUpInput },
           SessionUser | ValidationError | ErrorBody,
-          201 | 400 | 409
+          201 | 400 | 409,
+          { 201: SessionUser; 400: ValidationError; 409: ErrorBody }
         >;
       };
       social: {
-        $post: Endpoint<{ json: BuiltInSocialInput }, unknown, 200>;
+        $post: Endpoint<
+          { json: BuiltInSocialInput },
+          unknown,
+          200,
+          { 200: unknown }
+        >;
       };
     };
     evaluate: {
@@ -86,10 +128,12 @@ export interface AppType {
           ":key": {
             $get: Endpoint<
               {
+                query: EvaluateInput;
                 param: { projectId: string; environment: string; key: string };
               },
               Evaluation,
-              200 | 304
+              200 | 304,
+              { 200: Evaluation; 304: never }
             >;
             $post: Endpoint<
               {
@@ -97,25 +141,42 @@ export interface AppType {
                 param: { projectId: string; environment: string; key: string };
               },
               Evaluation,
-              200
+              200,
+              { 200: Evaluation }
             >;
           };
         };
       };
     };
     projects: {
-      $get: Endpoint<undefined, ProjectRow[], 200>;
-      $post: Endpoint<{ json: CreateProject }, ProjectRow, 201>;
+      $get: Endpoint<undefined, ProjectRow[], 200, { 200: ProjectRow[] }>;
+      $post: Endpoint<
+        { json: CreateProject },
+        ProjectRow,
+        201,
+        { 201: ProjectRow }
+      >;
       ":projectId": {
         audit: {
-          $get: Endpoint<{ param: { projectId: string } }, AuditRow[], 200>;
+          $get: Endpoint<
+            { param: { projectId: string } },
+            AuditRow[],
+            200,
+            { 200: AuditRow[] }
+          >;
         };
         flags: {
-          $get: Endpoint<{ param: { projectId: string } }, FlagRow[], 200>;
+          $get: Endpoint<
+            { param: { projectId: string } },
+            FlagRow[],
+            200,
+            { 200: FlagRow[] }
+          >;
           $post: Endpoint<
             { json: CreateFlag; param: { projectId: string } },
             FlagRow | Problem,
-            201 | 409
+            201 | 409,
+            { 201: FlagRow; 409: Problem }
           >;
           ":environment": {
             ":key": {
@@ -130,7 +191,8 @@ export interface AppType {
                     };
                   },
                   FlagRow | Problem,
-                  200 | 409
+                  200 | 409,
+                  { 200: FlagRow; 409: Problem }
                 >;
               };
               publish: {
@@ -144,7 +206,8 @@ export interface AppType {
                     };
                   },
                   VersionRow | Problem,
-                  201 | 409
+                  201 | 409,
+                  { 201: VersionRow; 409: Problem }
                 >;
               };
               versions: {
@@ -157,7 +220,8 @@ export interface AppType {
                     };
                   },
                   VersionRow[],
-                  200
+                  200,
+                  { 200: VersionRow[] }
                 >;
               };
             };
@@ -167,6 +231,6 @@ export interface AppType {
     };
   };
   health: {
-    $get: Endpoint<undefined, Health, 200>;
+    $get: Endpoint<undefined, Health, 200, { 200: Health }>;
   };
-}
+};

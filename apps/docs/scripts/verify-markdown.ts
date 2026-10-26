@@ -18,17 +18,24 @@ interface Expectation {
   mustExclude: string[];
   /** What this page proves about the pipeline, used in failure messages. */
   proves: string;
+  /** Verify an entire generated contract, allowing only whitespace changes. */
+  generatedFile?: URL;
 }
 
 const ANCHOR_NOISE = "Section titled";
+const normalize = (value: string): string =>
+  value.replaceAll(/\s+/gu, " ").trim();
 
 const EXPECTATIONS: Expectation[] = [
   {
     file: "dist/client/codegen/index.html",
+    generatedFile: new URL(
+      "../../../examples/blog/rpc/app-type.d.ts",
+      import.meta.url
+    ),
     mustExclude: [ANCHOR_NOISE],
     mustInclude: [
       "export type AppType = {",
-      "$post: Endpoint<undefined, SessionUser | ErrorBody, 201 | 404>;",
       'app.UseScalar(title: "Reptar API", version: "1.0.0");',
     ],
     proves: "living-contract artifacts survive (?raw imports inside <Code>)",
@@ -45,7 +52,9 @@ const EXPECTATIONS: Expectation[] = [
   {
     file: "dist/getting-started/cli/index.html",
     mustExclude: [ANCHOR_NOISE],
-    mustInclude: ["| `codegen` | `bun reptar codegen` |"],
+    mustInclude: [
+      "| `codegen` | `bun reptar codegen [--app <dir>] [--out <dir>]` |",
+    ],
     proves: "GFM tables survive",
   },
 ];
@@ -71,6 +80,14 @@ const results = await Promise.all(
   EXPECTATIONS.map(async (expectation) => {
     const markdown = await convert(expectation.file);
     const failures: string[] = [];
+    if (expectation.generatedFile) {
+      const generated = readFileSync(expectation.generatedFile, "utf-8");
+      if (!normalize(markdown).includes(normalize(generated))) {
+        failures.push(
+          `${expectation.file}: generated contract was truncated or changed during Markdown conversion`
+        );
+      }
+    }
 
     for (const fragment of expectation.mustInclude) {
       if (!markdown.includes(fragment)) {

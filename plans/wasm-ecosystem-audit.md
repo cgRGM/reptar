@@ -41,7 +41,7 @@ Inspected (among others):
 ### 1.2 Upstream snapshots
 
 | Project | Snapshot | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `cloudflare/workers-rs` | `1d668cf` (2026-10-19), `worker` 0.8.7 | Official Cloudflare Rust SDK; active |
 | `syumai/workers-go` | `a38be30` (2026-09-24) | Experimental; Go/TinyGo on Workers, Deno, Neon, browser |
 | `swiftwasm/WasmKit` | `1d87ccd` (2026-10-14) | WebAssembly runtime written in Swift; not a compiler |
@@ -64,7 +64,7 @@ Inspected (among others):
 Legend: ✅ accurate · 🟡 partly accurate / needs qualification · ❌ inaccurate or unsupported.
 
 | # | Claim | Verdict | Correction / evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 1 | C# on Workers without runtime reflection is a major milestone | ✅ | Fair. Caveat: C# on Wasm is not new (Blazor, .NET WASI); the milestone is C# on Workers with NetWasm's reflection-free profile plus D1/R2/auth. |
 | 2 | Rust has no GC and no runtime reflection by default | ✅ | True. Rust has `Any`/trait objects, but no tracing GC or C#-style runtime metadata. |
 | 3 | `workers-rs` `#[event(fetch)]` translates "raw V8 request pointers" into `http::Request` | ❌ | It receives a `web_sys::Request` JS object and converts it through `wasm-bindgen`/`web-sys`; there are no raw V8 pointers. See `worker-macros/src/event.rs:116-152` and `worker/src/http/request.rs:24-49`. |
@@ -165,10 +165,10 @@ With the `http` + `axum` features, the handler can accept `http::Request<worker:
 
 **Measured size (local, raw `cdylib`, no `worker-build`/`wasm-opt`):**
 
-| Artifact | Raw | gzip -9 |
-|---|---:|---:|
-| `workers-rs` hello-world | 916 KB | 211 KB |
-| `workers-rs` router example | 837 KB | 221 KB |
+| Artifact                    |    Raw | gzip -9 |
+| --------------------------- | -----: | ------: |
+| `workers-rs` hello-world    | 916 KB |  211 KB |
+| `workers-rs` router example | 837 KB |  221 KB |
 
 These are not apples-to-apples with Reptar, but they show the runtime floor of a Rust Worker.
 
@@ -260,7 +260,7 @@ This is the strongest pattern in the Go ecosystem for Reptar: a committed IR, a 
 ### 3.4 Contract-generation peers
 
 | Model | How it works | Strength | Limitation |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **tRPC** | TypeScript type inference; no codegen | Instant IDE feedback; TS-only monorepo | TS-only; no language-neutral contract; no OpenAPI by default; runtime validation is separate |
 | **Hono RPC** | `AppType = typeof route`; `hc<AppType>` | Type inference, typed status, `$url/$path`, custom fetch | TS-only; known IDE/type-instantiation performance issues at scale |
 | **Encore** | Static analysis of annotated Go/TS functions; generates clients/docs/infra | Closest to "compiler knows the system"; language-level schema | Platform/framework lock-in; not C#/Wasm/edge |
@@ -329,7 +329,7 @@ They are false today. Worse, `scripts/check-netwasm.ts:71-78` explicitly warns t
 
 **5.5 Codegen is a runtime reflection pass, not compile-time extraction.**
 
-`RpcGenerator.cs:1` uses `System.Reflection`; `examples/blog/app.cs:39-46` runs the app with `--codegen`; `scripts/reptar.ts:813-843` invokes `dotnet run`. The app's *runtime* is reflection-free, but the *contract generation* is not compile-time. The agent's "Roslyn-generated token schemas / compiler knows the layout at compile time" is only true for `ColumnRef<T>` and entity mappers.
+`RpcGenerator.cs:1` uses `System.Reflection`; `examples/blog/app.cs:39-46` runs the app with `--codegen`; `scripts/reptar.ts:813-843` invokes `dotnet run`. The app's _runtime_ is reflection-free, but the _contract generation_ is not compile-time. The agent's "Roslyn-generated token schemas / compiler knows the layout at compile time" is only true for `ColumnRef<T>` and entity mappers.
 
 This is not necessarily bad — runtime metadata is a pragmatic way to handle fluent lambdas — but the claim and the docs should be precise. If Reptar wants compile-time extraction, it needs a more declarative route API or a Roslyn analyzer that understands a restricted subset.
 
@@ -355,11 +355,11 @@ Every app maintains a `JsonSerializerContext` list of DTOs. A missing entry work
 
 For comparison:
 
-| Artifact | Raw | gzip -9 | brotli 11 |
-|---|---:|---:|---:|
-| `HelloReptar.wasm` (O0) | 25 MB | 2.89 MB | 685 KB |
-| `RealWorld.wasm` | 9.8 MB | 1.17 MB | 534 KB |
-| `RoomsWorker.wasm` | 12 MB | — | — |
+| Artifact                |    Raw | gzip -9 | brotli 11 |
+| ----------------------- | -----: | ------: | --------: |
+| `HelloReptar.wasm` (O0) |  25 MB | 2.89 MB |    685 KB |
+| `RealWorld.wasm`        | 9.8 MB | 1.17 MB |    534 KB |
+| `RoomsWorker.wasm`      |  12 MB |       — |         — |
 
 Cloudflare now allows 64 MiB uncompressed, so the size limit is not the binding constraint. The 1 s startup budget and memory are. The README/design "~10–12 MB" claim is stale for `HelloReptar`; `RealWorld` is the closer data point.
 
@@ -418,7 +418,7 @@ The docs describe structured JSON logs, `db_ms`/`db_queries`, `cf_ray`/`colo`, `
 ## 6. Cross-cutting lessons
 
 | Theme | Rust | Go | Swift | Reptar today | Action |
-|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- |
 | **FFI glue** | `wasm-bindgen` + `worker-build` generated | `syscall/js` + generated runtime/bindings | BridgeJS generated Swift/TS | Hand-written `app.host.mjs` + C# entrypoint | Generate/validate from `interop.json` or a shared contract |
 | **App-facing API** | `http`/axum | `net/http` | `@JS` macros / JavaScriptKit | `Ctx`, `DbClient` | Keep idiomatic; hide the bridge |
 | **Async boundary** | Async export returns Promise | Async handler returns Promise | async/throws mapped | Sync void + manual `respond` | Use async `Task` export (void) + `respond`; await in host |
@@ -445,7 +445,7 @@ A feature that answers fewer than three should wait. This filter deliberately re
 ### 6.2 Recommended core (small, high-leverage)
 
 | Candidate | Borrowed from | Perf | Reliability | Observability | Bloat | Verdict |
-|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- |
 | Async export + boundary catch + timeout | Rust, Go | + | +++ | + | none | **Do now** |
 | Real `ctx.waitUntil` + background-task events | Rust, Go | + | +++ | ++ | none | **Do now** |
 | Host contract validation/generation from `interop.json` | Rust, Go, Swift | + | ++ | + | low | **Do now** |
@@ -544,7 +544,7 @@ These are the "definition of done" for the spine:
 ### Suggested order and success criteria
 
 | Order | Work | Success criterion |
-|---|---|---|
+| --- | --- | --- |
 | 0 | Boundary tests + host contract check + codegen `--check` + request event | No hang on any boundary test; CI fails on host/codegen drift; one traceable event per request |
 | 1 | Async export + timeout + `waitUntil` + boilerplate removal | A thrown handler returns 500; `WaitUntil` survives response; app entrypoint shrinks |
 | 2 | Contract completeness | Zero `unknown` in AppType; query/form/status typed; codegen runs in dev and `--check` in CI |
@@ -679,75 +679,40 @@ The runtime-spine work is now implemented and verified. No new product surface w
 
 ### Boundary safety
 
-- `WorkerEntrypoint.HandleAsync` is the single NetWasm request bridge. It
-  deserializes one envelope, guarantees exactly one response, maps malformed
-  envelopes to 400 and unhandled exceptions to 500, and logs background
-  failures instead of leaving the host promise pending.
-- The host accepts both legacy synchronous `handle()` exports and async
-  `handle(): Promise<void>` exports. A rejected export becomes a 500; an export
-  that completes without responding becomes a 502; a non-streaming request that
-  never responds times out (default 30 s, 504).
-- Queue and scheduled consumers retry the whole batch on export failure or
-  timeout instead of silently acknowledging it.
+- `WorkerEntrypoint.HandleAsync` is the single NetWasm request bridge. It deserializes one envelope, guarantees exactly one response, maps malformed envelopes to 400 and unhandled exceptions to 500, and logs background failures instead of leaving the host promise pending.
+- The host accepts both legacy synchronous `handle()` exports and async `handle(): Promise<void>` exports. A rejected export becomes a 500; an export that completes without responding becomes a 502; a non-streaming request that never responds times out (default 30 s, 504).
+- Queue and scheduled consumers retry the whole batch on export failure or timeout instead of silently acknowledging it.
 - A rejected app instance is not cached; the next request gets a fresh open.
-- `ReptarTestClient` now awaits `ctx.WaitUntil` work before returning, so tests
-  are deterministic and background failures surface.
+- `ReptarTestClient` now awaits `ctx.WaitUntil` work before returning, so tests are deterministic and background failures surface.
 
 ### Real `waitUntil`
 
-- `ReptarApp.HandleWithBackgroundAsync` returns the response and the collected
-  background task. The Worker entrypoint sends the response first, then awaits
-  the task; the host hands the async export to `executionCtx.waitUntil`.
+- `ReptarApp.HandleWithBackgroundAsync` returns the response and the collected background task. The Worker entrypoint sends the response first, then awaits the task; the host hands the async export to `executionCtx.waitUntil`.
 - Durable Object hosts pass the object's `waitUntil` through the same path.
 - Native `HandleAsync` keeps the thread-pool dispatch for Kestrel/Lambda.
 
 ### One structured request event
 
-- One JSON record per sampled request: request id, W3C trace/span/parent span,
-  method, route template, path, status, duration, DB time/query count, cache,
-  user, `cf_ray`, colo, error code, slow flag.
-- The host injects `traceparent` on ingress, enriches the event with `wasm_ms`,
-  `cf_ray`, `colo`, and `trigger`, and hands delivery to `ctx.waitUntil`.
-- `onTelemetry` is the host-owned exporter seam. `createOtlpExporter()` maps the
-  event to an OTLP/HTTP span without an OTel SDK; native hosts keep `UseOtlp`
-  for OTLP logs.
+- One JSON record per sampled request: request id, W3C trace/span/parent span, method, route template, path, status, duration, DB time/query count, cache, user, `cf_ray`, colo, error code, slow flag.
+- The host injects `traceparent` on ingress, enriches the event with `wasm_ms`, `cf_ray`, `colo`, and `trigger`, and hands delivery to `ctx.waitUntil`.
+- `onTelemetry` is the host-owned exporter seam. `createOtlpExporter()` maps the event to an OTLP/HTTP span without an OTel SDK; native hosts keep `UseOtlp` for OTLP logs.
 - Outbound `WasmHttpClient` calls propagate `traceparent`.
-- The host and C# now share the same request id, so enrichment and response
-  headers cannot silently miss.
+- The host and C# now share the same request id, so enrichment and response headers cannot silently miss.
 
 ### Drift checks
 
-- `bun reptar check:host` verifies every `app.host` import against
-  `app.host.mjs` **and** verifies every fetched `deployment.json` artifact
-  hash. The application wasm is compiled from the imported module and is
-  recorded with the empty hash.
-- `bun reptar codegen --check` regenerates contracts to a temp directory,
-  formats them, and compares both `examples/blog/rpc` and the published
-  `packages/rpc` copies (`app-type.ts`, `types.ts`, `schemas.ts`,
-  `openapi.json`, `schema.json`, `llms.txt`).
-- CI and `reptar self-check` run host boundary tests, the host/artifact check,
-  generated-contract freshness, NetWasm lint, and the two-host smoke.
+- `bun reptar check:host` verifies every `app.host` import against `app.host.mjs` **and** verifies every fetched `deployment.json` artifact hash. The application wasm is compiled from the imported module and is recorded with the empty hash.
+- `bun reptar codegen --check` regenerates contracts to a temp directory, formats them, and compares both `examples/blog/rpc` and the published `packages/rpc` copies (`app-type.ts`, `types.ts`, `schemas.ts`, `openapi.json`, `schema.json`, `llms.txt`).
+- CI and `reptar self-check` run host boundary tests, the host/artifact check, generated-contract freshness, NetWasm lint, and the two-host smoke.
 
 ### Size and startup
 
-- `bun reptar check:worker` enforces a 48 MiB hard ceiling (under Cloudflare's
-  64 MiB Worker script limit) and warns above the 32 MiB optimization target.
-- The NetWasm loader is patched to use the statically imported
-  `WebAssembly.Module` instead of re-fetching the wasm as a static asset. The
-  wasm is excluded from `public/` via `.assetsignore`, avoiding the 25 MiB
-  per-asset limit and duplicate upload.
-- Measured on the current-source reference Worker: 38.9 MiB upload / 4.5 MiB
-  gzip unoptimized. The unoptimized module still starts and serves warm
-  requests in the e2e run. The older 15.9 MiB pinned artifact is smaller but
-  predates the D1 generic-insert fix; do not ship it.
-- `wasm-opt` on the current 38 MiB module is slow and fragile (core `-Oz` fails,
-  final `-O3` exceeds 15 minutes). This is the main Speed-release item: a
-  minimal edge profile, `Oz`, and a measured startup budget.
+- `bun reptar check:worker` enforces a 48 MiB hard ceiling (under Cloudflare's 64 MiB Worker script limit) and warns above the 32 MiB optimization target.
+- The NetWasm loader is patched to use the statically imported `WebAssembly.Module` instead of re-fetching the wasm as a static asset. The wasm is excluded from `public/` via `.assetsignore`, avoiding the 25 MiB per-asset limit and duplicate upload.
+- Measured on the current-source reference Worker: 38.9 MiB upload / 4.5 MiB gzip unoptimized. The unoptimized module still starts and serves warm requests in the e2e run. The older 15.9 MiB pinned artifact is smaller but predates the D1 generic-insert fix; do not ship it.
+- `wasm-opt` on the current 38 MiB module is slow and fragile (core `-Oz` fails, final `-O3` exceeds 15 minutes). This is the main Speed-release item: a minimal edge profile, `Oz`, and a measured startup budget.
 
 ### Verification
 
-- 388 C# tests, 16 host boundary tests, `check:host`, `check:worker`,
-  `codegen --check`, and `packages/host` typecheck pass.
-- The full Worker e2e suite (CRUD, auth, uploads including 9 MiB multipart, KV,
-  queue, Durable Object, SSE, WebSocket, CORS) passes against the current
-  38.4 MiB artifact with p50 ≈ 4.2 ms / p95 ≈ 7.1 ms for warm `/posts`.
+- 388 C# tests, 16 host boundary tests, `check:host`, `check:worker`, `codegen --check`, and `packages/host` typecheck pass.
+- The full Worker e2e suite (CRUD, auth, uploads including 9 MiB multipart, KV, queue, Durable Object, SSE, WebSocket, CORS) passes against the current 38.4 MiB artifact with p50 ≈ 4.2 ms / p95 ≈ 7.1 ms for warm `/posts`.

@@ -46,7 +46,7 @@ var scorers = new List<IEvalScorer>
 };
 ```
 
-The judge is the composition worth noticing: `LlmJudgeScorer` uses the [structured output](/cookbook/structured-llm-outputs/) API for its verdict, so the judge's `{"score": 0.9, "passed": true, "reasoning": ...}` is *validated by `Rule<T>`* before it can decide anything.
+The judge is the composition worth noticing: `LlmJudgeScorer` uses the [structured output](/cookbook/structured-llm-outputs/) API for its verdict, so the judge's `{"score": 0.9, "passed": true, "reasoning": ...}` is _validated by `Rule<T>`_ before it can decide anything.
 
 ## 3. Persist runs for CI reporting
 
@@ -66,4 +66,4 @@ Query `ListRunAsync(runId)` for the report page; alert on `PassRate` dropping be
 
 ## 4. Free CI with mock providers
 
-Point the runner at the [AI Gateway](/ai/ai-gateway/) `mock-*` models (or `LlmConfig.Echo`) and the whole suite is deterministic and zero-cost — a genuine CI gate for *your prompts and agent behavior*, not just your code. Swap in a real `ILlmClient` for nightly regression runs; scorers don't care which client they're grading.
+Point the runner at the [AI Gateway](/ai/ai-gateway/) `mock-*` models (or `LlmConfig.Echo`) and the whole suite is deterministic and zero-cost — a genuine CI gate for _your prompts and agent behavior_, not just your code. Swap in a real `ILlmClient` for nightly regression runs; scorers don't care which client they're grading.

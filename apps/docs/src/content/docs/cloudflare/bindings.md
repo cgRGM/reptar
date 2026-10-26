@@ -106,14 +106,7 @@ await c.Queues.SendAsync("order-fulfillment", new { orderId = "o2" },
 await c.Queues.SendBatchAsync("order-fulfillment", [body1, body2]);
 ```
 
-Handlers registered with `app.OnQueue` run inside the Worker's `queue()`
-event: return normally to ack, throw to retry, or `throw new RetryIn(seconds)`
-to retry after a Cloudflare-native delay (`message.retry({ delaySeconds })`).
-Consumer batching, `max_retries`, `dead_letter_queue`, and `max_concurrency`
-are configured in `wrangler.jsonc`. See [Queues & Background Jobs](/features/queues)
-for the full adapter matrix — the same `SendAsync`/`OnQueue` code also runs
-against SQS, Azure Storage Queues, Pub/Sub, or your own SQL database on
-native targets.
+Handlers registered with `app.OnQueue` run inside the Worker's `queue()` event: return normally to ack, throw to retry, or `throw new RetryIn(seconds)` to retry after a Cloudflare-native delay (`message.retry({ delaySeconds })`). Consumer batching, `max_retries`, `dead_letter_queue`, and `max_concurrency` are configured in `wrangler.jsonc`. See [Queues & Background Jobs](/features/queues) for the full adapter matrix — the same `SendAsync`/`OnQueue` code also runs against SQS, Azure Storage Queues, Pub/Sub, or your own SQL database on native targets.
 
 ---
 

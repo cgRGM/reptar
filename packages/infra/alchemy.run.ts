@@ -1,7 +1,9 @@
 import * as Alchemy from "alchemy";
 import * as Cloudflare from "alchemy/Cloudflare";
 import * as Output from "alchemy/Output";
+import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
+import * as Redacted from "effect/Redacted";
 import "varlock/auto-load";
 
 export default Alchemy.Stack(
@@ -11,6 +13,19 @@ export default Alchemy.Stack(
     state: Cloudflare.state(),
   },
   Effect.gen(function* reptarStack() {
+    const jwtSecret = yield* Config.Redacted("REALWORLD_JWT_SECRET");
+    const signingKey = Redacted.value(jwtSecret);
+    if (
+      !signingKey ||
+      signingKey.length < 32 ||
+      signingKey === "reptar-realworld-production-secret"
+    ) {
+      return yield* Effect.die(
+        new Error(
+          "Set REALWORLD_JWT_SECRET to a private, random value of at least 32 characters before planning or deploying. No production fallback is allowed."
+        )
+      );
+    }
     const db = yield* Cloudflare.D1.Database("db", {
       migrations: "../../spikes/netwasm-worker/migrations",
     });
@@ -36,9 +51,7 @@ export default Alchemy.Stack(
         DB: db,
         KV: cache,
         QUEUE: events,
-        REALWORLD_JWT_SECRET:
-          process.env.REALWORLD_JWT_SECRET ??
-          "reptar-realworld-production-secret",
+        REALWORLD_JWT_SECRET: jwtSecret,
       },
       main: "../../spikes/netwasm-worker/src/index.ts",
       name: "reptar-api",
@@ -53,9 +66,7 @@ export default Alchemy.Stack(
         CORS_ORIGINS:
           "https://reptar-web.rocktown-labs.workers.dev,http://localhost:4321",
         DB: db,
-        REALWORLD_JWT_SECRET:
-          process.env.REALWORLD_JWT_SECRET ??
-          "reptar-realworld-production-secret",
+        REALWORLD_JWT_SECRET: jwtSecret,
       },
       main: "../../spikes/realworld-worker/src/index.ts",
       name: "reptar-realworld",

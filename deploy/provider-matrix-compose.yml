@@ -29,7 +29,8 @@ services:
       MYSQL_PASSWORD: reptar
       MYSQL_ROOT_PASSWORD: reptar
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ureptar", "-preptar"]
+      test:
+        ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ureptar", "-preptar"]
       interval: 5s
       timeout: 5s
       retries: 20

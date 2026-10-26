@@ -112,9 +112,9 @@ app.Get("/api/projects/:projectId/audit", async ctx =>
     return ctx.Json(await ctx.Db.QueryAsync<AuditRow>("SELECT * FROM sy_audit WHERE project_id=@project ORDER BY created_at DESC, id DESC LIMIT 100", ("project", ctx.Req.Param("projectId"))));
 }).Produces<List<AuditRow>>(200);
 app.Get("/api/evaluate/:projectId/:environment/:key", ctx => Access.Evaluate(ctx, ctx.Req.QueryValue("subject")))
-    .Produces<Evaluation>(200).Produces(304);
-// A body-based evaluation route is fully represented by the generated client.
-// QueryValue reads are not currently exported as typed query parameters.
+    .WithQuery<EvaluateInput>().Produces<Evaluation>().Produces(304);
+// Keep the body-based route for callers that prefer POST. Both routes now
+// declare complete inputs; handlers still validate subject values explicitly.
 app.Post<EvaluateInput>("/api/evaluate/:projectId/:environment/:key", (ctx, input) => Access.Evaluate(ctx, input.Subject))
     .Produces<Evaluation>(200);
 

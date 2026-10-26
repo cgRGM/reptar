@@ -1,4 +1,5 @@
 import { d1Batch, d1Execute, d1Query } from "./bindings";
+/* eslint-disable promise/prefer-await-to-then, promise/prefer-await-to-callbacks -- Concurrent Wasm callback races require immediate rejection observers and tagged promises, not serial awaits. */
 import type { QueueLike, ReptarBindings, SendEmailLike } from "./bindings";
 import {
   hashPassword,
@@ -968,6 +969,44 @@ const registerHttpFetch = (
  * - call the `respond(string)` JS import when the response is ready
  * - call async JS imports (db, AI, storage, etc.) and await them before responding
  */
+const awaitWsResult = async (
+  result: void | Promise<void>,
+  hold: { cancel: () => void; promise: Promise<void> }
+): Promise<void> => {
+  if (isThenable(result)) {
+    hold.cancel();
+    await result;
+    return;
+  }
+  await hold.promise;
+};
+
+const applyBatchResult = (
+  batch: MessageBatch<unknown>,
+  result: {
+    failedMessageIds?: string[];
+    retries?: { delaySeconds?: number; messageId: string }[];
+  }
+): void => {
+  const failed = new Set(result.failedMessageIds);
+  const retryDelays = new Map<string, number>();
+  for (const retry of result.retries ?? []) {
+    if (typeof retry.delaySeconds === "number" && retry.delaySeconds > 0) {
+      retryDelays.set(retry.messageId, retry.delaySeconds);
+    }
+  }
+  for (const message of batch.messages) {
+    if (failed.has(message.id)) {
+      const delaySeconds = retryDelays.get(message.id);
+      message.retry?.(
+        delaySeconds === undefined ? undefined : { delaySeconds }
+      );
+    } else {
+      message.ack?.();
+    }
+  }
+};
+
 export const createReptarHost = <TEnv>(
   options: ReptarHostOptions<TEnv>
 ): ReptarHost<TEnv> => {
@@ -1243,9 +1282,11 @@ export const createReptarHost = <TEnv>(
       cancel: () => void;
       promise: Promise<void>;
     } => {
+      // eslint-disable-next-line prefer-const -- The deadline is assigned after settle captures it.
       let timer: ReturnType<typeof setTimeout> | undefined;
       let settled = false;
       let resolveHold: (() => void) | undefined;
+      // eslint-disable-next-line promise/avoid-new -- Completion comes from either a Wasm callback or a deadline.
       const promise = new Promise<void>((resolve) => {
         resolveHold = resolve;
       });
@@ -1280,19 +1321,6 @@ export const createReptarHost = <TEnv>(
       timer = setTimeout(settle, 30_000);
 
       return { cancel: settle, promise };
-    };
-
-    const awaitWsResult = async (
-      result: void | Promise<void>,
-      hold: { cancel: () => void; promise: Promise<void> }
-    ): Promise<void> => {
-      if (isThenable(result)) {
-        hold.cancel();
-        await result;
-        return;
-      }
-
-      await hold.promise;
     };
 
     const close = async () => {
@@ -1344,6 +1372,7 @@ export const createReptarHost = <TEnv>(
     } as ResponseInit & { webSocket: WebSocket });
   };
 
+  // eslint-disable-next-line complexity -- Keep normal, streaming, timeout and Wasm-export races in one cleanup scope.
   const handleRequest = async (
     request: Request,
     env: TEnv,
@@ -1531,33 +1560,6 @@ export const createReptarHost = <TEnv>(
    * successful messages ack, failures retry, and RetryIn delays flow
    * through message.retry({ delaySeconds }).
    */
-  const applyBatchResult = (
-    batch: MessageBatch<unknown>,
-    result: {
-      failedMessageIds?: string[];
-      retries?: { delaySeconds?: number; messageId: string }[];
-    }
-  ): void => {
-    const failed = new Set(result.failedMessageIds);
-    const retryDelays = new Map<string, number>();
-    for (const retry of result.retries ?? []) {
-      if (typeof retry.delaySeconds === "number" && retry.delaySeconds > 0) {
-        retryDelays.set(retry.messageId, retry.delaySeconds);
-      }
-    }
-
-    for (const message of batch.messages) {
-      if (failed.has(message.id)) {
-        const delaySeconds = retryDelays.get(message.id);
-        message.retry?.(
-          delaySeconds === undefined ? undefined : { delaySeconds }
-        );
-      } else {
-        message.ack?.();
-      }
-    }
-  };
-
   const handleQueue = async (
     batch: MessageBatch<unknown>,
     env: TEnv,

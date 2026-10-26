@@ -44,7 +44,7 @@ interface BenchmarkMetric {
   successRate: number;
 }
 
-function cleanup() {
+const cleanup = (): void => {
   console.log("\n🧹 Cleaning up benchmark database and storage...");
   rmSync(STORAGE_DIR, { force: true, recursive: true });
   for (const ext of ["", "-wal", "-shm"]) {
@@ -53,22 +53,26 @@ function cleanup() {
       unlinkSync(f);
     }
   }
-}
+};
 
-async function waitForServer(retries = 30): Promise<boolean> {
-  for (let i = 0; i < retries; i++) {
+const waitForServer = async (retries = 30): Promise<boolean> => {
+  for (let i = 0; i < retries; i += 1) {
     try {
+      // eslint-disable-next-line no-await-in-loop -- Readiness polling is intentionally sequential.
       const res = await fetch(`${BASE_URL}/health`);
       if (res.ok) {
         return true;
       }
-    } catch {}
-    await new Promise((r) => setTimeout(r, 200));
+    } catch {
+      // Server is not ready yet.
+    }
+    // eslint-disable-next-line no-await-in-loop -- Back off before the next readiness attempt.
+    await Bun.sleep(200);
   }
   return false;
-}
+};
 
-function runOha(
+const runOha = (
   endpoint: string,
   options: {
     method?: string;
@@ -77,7 +81,7 @@ function runOha(
     concurrency?: number;
     seconds?: number;
   } = {}
-): OhaOutput {
+): OhaOutput => {
   const args = [
     "-c",
     String(options.concurrency ?? CONCURRENCY),
@@ -118,9 +122,10 @@ function runOha(
       `Failed to parse oha output: ${proc.stdout || proc.stderr}`
     );
   }
-}
+};
 
-async function main() {
+// eslint-disable-next-line complexity -- This linear scenario keeps seed, workloads and report order auditable.
+const main = async (): Promise<void> => {
   cleanup();
 
   console.log("==========================================================");
@@ -134,7 +139,7 @@ async function main() {
       ...process.env,
       BAAS_DB: DB_FILE,
       PORT: String(PORT),
-      STORAGE_DIR: STORAGE_DIR,
+      STORAGE_DIR,
     },
     stdio: "ignore",
   });
@@ -151,8 +156,8 @@ async function main() {
   const signupRes = await fetch(`${BASE_URL}/api/auth/signup`, {
     body: JSON.stringify({
       email: "bench@reptarbase.local",
-      password: "Password123!",
       name: "Bench Operator",
+      password: "Password123!",
     }),
     headers: { "Content-Type": "application/json" },
     method: "POST",
@@ -171,11 +176,12 @@ async function main() {
     method: "POST",
   });
   const cookie = signinRes.headers.get("set-cookie") ?? "";
-  const sessionToken = cookie.match(/reptarbase_session=([^;]+)/)?.[1] ?? "";
+  const sessionToken =
+    cookie.match(/reptarbase_session=(?<token>[^;]+)/u)?.groups?.token ?? "";
 
   // 3. Generate Personal API Key
   const keyRes = await fetch(`${BASE_URL}/api/auth/api-keys`, {
-    body: JSON.stringify({ name: "Benchmark-Key", expiresInDays: 30 }),
+    body: JSON.stringify({ expiresInDays: 30, name: "Benchmark-Key" }),
     headers: {
       Authorization: `Bearer ${sessionToken}`,
       "Content-Type": "application/json",
@@ -189,12 +195,13 @@ async function main() {
   // 4. Seed documents
   console.log("Seeding 50 documents into SQLite...");
   let sampleDocId = "";
-  for (let i = 1; i <= 50; i++) {
+  for (let i = 1; i <= 50; i += 1) {
+    // eslint-disable-next-line no-await-in-loop -- Seed deterministically without measuring concurrent writes.
     const res = await fetch(`${BASE_URL}/api/documents`, {
       body: JSON.stringify({
-        title: `Benchmark Record ${i}`,
         content: `Synthetic load-testing payload representing document record index ${i}. Zero reflection AOT throughput.`,
         status: i % 2 === 0 ? "published" : "draft",
+        title: `Benchmark Record ${i}`,
       }),
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -202,6 +209,7 @@ async function main() {
       },
       method: "POST",
     });
+    // eslint-disable-next-line no-await-in-loop -- Capture each seeded ID before advancing.
     const d = await res.json();
     if (i === 1) {
       sampleDocId = d.id;
@@ -297,10 +305,10 @@ async function main() {
   );
   const t4 = runOha("/api/documents", {
     body: JSON.stringify({
-      title: "Live Stress Record",
       content:
         "Benchmarking write throughput with group commit batching and real-time SSE fanout.",
       status: "published",
+      title: "Live Stress Record",
     }),
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -379,9 +387,11 @@ ${tableRows.join("\n")}
   const outPath = path.join(import.meta.dir, "BENCHMARK_RESULTS.md");
   writeFileSync(outPath, markdownReport, "utf-8");
   console.log(`\n💾 Saved detailed benchmark report to ${outPath}`);
-}
+};
 
-main().catch((error) => {
+try {
+  await main();
+} catch (error) {
   console.error("Benchmark failed:", error);
   process.exit(1);
-});
+}

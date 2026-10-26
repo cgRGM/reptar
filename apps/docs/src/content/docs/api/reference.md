@@ -53,18 +53,22 @@ Contract: `Reptar API` (OpenAPI 3.1.0, 25 operations).
 
 Request body: `CreateApiKeyInput`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `name` | string | — | — |
-| `expiresInDays` | number | — | — |
+| Property        | Type           | Required | Constraints |
+| --------------- | -------------- | -------- | ----------- |
+| `name`          | string         | yes      | —           |
+| `expiresInDays` | number \| null | —        | —           |
 
 **Responses:** 200
 
 ### DELETE /auth/api-keys/{id}
 
+Path parameters: `id` (string)
+
 **Responses:** 200
 
 ### GET /auth/callback/{provider}
+
+Path parameters: `provider` (string)
 
 **Responses:** 200
 
@@ -72,10 +76,10 @@ Request body: `CreateApiKeyInput`
 
 Request body: `ChangePasswordInput`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `currentPassword` | string | — | — |
-| `newPassword` | string | — | — |
+| Property          | Type   | Required | Constraints |
+| ----------------- | ------ | -------- | ----------- |
+| `currentPassword` | string | yes      | —           |
+| `newPassword`     | string | yes      | —           |
 
 **Responses:** 200
 
@@ -91,9 +95,9 @@ Request body: `ChangePasswordInput`
 
 Request body: `RevokeSessionInput`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `sessionId` | string | — | — |
+| Property    | Type   | Required | Constraints |
+| ----------- | ------ | -------- | ----------- |
+| `sessionId` | string | yes      | —           |
 
 **Responses:** 200
 
@@ -105,10 +109,10 @@ Request body: `RevokeSessionInput`
 
 Request body: `SignInInput`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `email` | string | — | — |
-| `password` | string | — | — |
+| Property   | Type   | Required | Constraints |
+| ---------- | ------ | -------- | ----------- |
+| `email`    | string | yes      | —           |
+| `password` | string | yes      | —           |
 
 **Responses:** 200 → `SessionUser` · 400 → `ValidationError` · 401 → `ErrorBody`
 
@@ -120,11 +124,11 @@ Request body: `SignInInput`
 
 Request body: `SignUpInput`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `email` | string | — | — |
-| `password` | string | — | — |
-| `name` | string | — | — |
+| Property   | Type   | Required | Constraints |
+| ---------- | ------ | -------- | ----------- |
+| `email`    | string | yes      | —           |
+| `password` | string | yes      | —           |
+| `name`     | string | yes      | —           |
 
 **Responses:** 201 → `SessionUser` · 400 → `ValidationError` · 409 → `ErrorBody`
 
@@ -132,10 +136,10 @@ Request body: `SignUpInput`
 
 Request body: `BuiltInSocialInput`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `provider` | string | — | — |
-| `callbackUrl` | string | — | — |
+| Property      | Type   | Required | Constraints |
+| ------------- | ------ | -------- | ----------- |
+| `provider`    | string | yes      | —           |
+| `callbackUrl` | string | yes      | —           |
 
 **Responses:** 200
 
@@ -149,6 +153,8 @@ Request body: `BuiltInSocialInput`
 
 ### GET /images/{key}
 
+Path parameters: `key` (string)
+
 **Responses:** 200 · 206 · 304 · 400 → `ErrorBody` · 404 → `ErrorBody`
 
 ## `me`
@@ -161,45 +167,51 @@ Request body: `BuiltInSocialInput`
 
 ### GET /posts
 
-**Responses:** 200 → `Post[]`
+**Responses:** 200
 
 ### POST /posts
 
 Request body: `CreatePost`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `title` | string | — | — |
-| `content` | string | — | — |
-| `excerpt` | string | — | — |
-| `imageKey` | string | — | — |
+| Property   | Type           | Required | Constraints |
+| ---------- | -------------- | -------- | ----------- |
+| `title`    | string         | yes      | —           |
+| `content`  | string         | yes      | —           |
+| `excerpt`  | string \| null | —        | —           |
+| `imageKey` | string \| null | —        | —           |
 
 **Responses:** 201 → `Post` · 400 → `ValidationError`
 
 ### GET /posts/{id}
 
+Path parameters: `id` (string)
+
 **Responses:** 200 → `Post` · 404 → `ErrorBody`
 
 ### PUT /posts/{id}
 
+Path parameters: `id` (string)
+
 Request body: `UpdatePost`
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `title` | string | — | — |
-| `content` | string | — | — |
-| `excerpt` | string | — | — |
-| `imageKey` | string | — | — |
+| Property   | Type           | Required | Constraints |
+| ---------- | -------------- | -------- | ----------- |
+| `title`    | string \| null | —        | —           |
+| `content`  | string \| null | —        | —           |
+| `excerpt`  | string \| null | —        | —           |
+| `imageKey` | string \| null | —        | —           |
 
 **Responses:** 200 → `Post` · 400 → `ValidationError` · 404 → `ErrorBody`
 
 ### DELETE /posts/{id}
 
+Path parameters: `id` (string)
+
 **Responses:** 204 · 404 → `ErrorBody`
 
 ### GET /posts/mine
 
-**Responses:** 200 → `Post[]` · 401 → `ErrorBody`
+**Responses:** 200 · 401 → `ErrorBody`
 
 ## `upload`
 
@@ -215,121 +227,124 @@ Request body: `UpdatePost`
 
 ### BuiltInSocialInput
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `provider` | string | — | — |
-| `callbackUrl` | string | — | — |
+| Property      | Type   | Required | Constraints |
+| ------------- | ------ | -------- | ----------- |
+| `provider`    | string | yes      | —           |
+| `callbackUrl` | string | yes      | —           |
 
 ### ChangePasswordInput
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `currentPassword` | string | — | — |
-| `newPassword` | string | — | — |
+| Property          | Type   | Required | Constraints |
+| ----------------- | ------ | -------- | ----------- |
+| `currentPassword` | string | yes      | —           |
+| `newPassword`     | string | yes      | —           |
 
 ### CreateApiKeyInput
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `name` | string | — | — |
-| `expiresInDays` | number | — | — |
+| Property        | Type           | Required | Constraints |
+| --------------- | -------------- | -------- | ----------- |
+| `name`          | string         | yes      | —           |
+| `expiresInDays` | number \| null | —        | —           |
 
 ### CreatePost
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `title` | string | — | — |
-| `content` | string | — | — |
-| `excerpt` | string | — | — |
-| `imageKey` | string | — | — |
+| Property   | Type           | Required | Constraints |
+| ---------- | -------------- | -------- | ----------- |
+| `title`    | string         | yes      | —           |
+| `content`  | string         | yes      | —           |
+| `excerpt`  | string \| null | —        | —           |
+| `imageKey` | string \| null | —        | —           |
 
 ### ErrorBody
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `code` | string | — | — |
-| `message` | string | — | — |
-| `requestId` | string | — | — |
+| Property    | Type           | Required | Constraints |
+| ----------- | -------------- | -------- | ----------- |
+| `code`      | string         | yes      | —           |
+| `message`   | string         | yes      | —           |
+| `requestId` | string \| null | —        | —           |
 
 ### Post
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `id` | string | — | — |
-| `authorId` | string | — | — |
-| `slug` | string | — | — |
-| `title` | string | — | — |
-| `content` | string | — | — |
-| `excerpt` | string | — | — |
-| `published` | number | — | — |
-| `createdAt` | string | — | — |
-| `updatedAt` | string | — | — |
-| `imageKey` | string | — | — |
-
-### Post[]
-
-_No properties._
+| Property    | Type           | Required | Constraints |
+| ----------- | -------------- | -------- | ----------- |
+| `id`        | string         | yes      | —           |
+| `authorId`  | string         | yes      | —           |
+| `slug`      | string         | yes      | —           |
+| `title`     | string         | yes      | —           |
+| `content`   | string         | yes      | —           |
+| `excerpt`   | string \| null | —        | —           |
+| `published` | number         | yes      | —           |
+| `createdAt` | string         | yes      | —           |
+| `updatedAt` | string         | yes      | —           |
+| `imageKey`  | string \| null | —        | —           |
 
 ### RevokeSessionInput
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `sessionId` | string | — | — |
+| Property    | Type   | Required | Constraints |
+| ----------- | ------ | -------- | ----------- |
+| `sessionId` | string | yes      | —           |
 
 ### SessionResponse
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `user` | object | — | — |
+| Property | Type                | Required | Constraints |
+| -------- | ------------------- | -------- | ----------- |
+| `user`   | SessionUser \| null | —        | —           |
 
 ### SessionUser
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `id` | string | — | — |
-| `email` | string | — | — |
-| `name` | string | — | — |
-| `role` | string | — | — |
-| `image` | string | — | — |
-| `emailVerified` | number | — | — |
-| `createdAt` | string | — | — |
+| Property        | Type           | Required | Constraints |
+| --------------- | -------------- | -------- | ----------- |
+| `id`            | string         | yes      | —           |
+| `email`         | string         | yes      | —           |
+| `name`          | string         | yes      | —           |
+| `role`          | string         | —        | —           |
+| `image`         | string \| null | —        | —           |
+| `emailVerified` | number         | —        | —           |
+| `createdAt`     | string \| null | —        | —           |
 
 ### SignInInput
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `email` | string | — | — |
-| `password` | string | — | — |
+| Property   | Type   | Required | Constraints |
+| ---------- | ------ | -------- | ----------- |
+| `email`    | string | yes      | —           |
+| `password` | string | yes      | —           |
 
 ### SignUpInput
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `email` | string | — | — |
-| `password` | string | — | — |
-| `name` | string | — | — |
+| Property   | Type   | Required | Constraints |
+| ---------- | ------ | -------- | ----------- |
+| `email`    | string | yes      | —           |
+| `password` | string | yes      | —           |
+| `name`     | string | yes      | —           |
 
 ### UpdatePost
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `title` | string | — | — |
-| `content` | string | — | — |
-| `excerpt` | string | — | — |
-| `imageKey` | string | — | — |
+| Property   | Type           | Required | Constraints |
+| ---------- | -------------- | -------- | ----------- |
+| `title`    | string \| null | —        | —           |
+| `content`  | string \| null | —        | —           |
+| `excerpt`  | string \| null | —        | —           |
+| `imageKey` | string \| null | —        | —           |
 
 ### UploadResult
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `key` | string | — | — |
-| `url` | string | — | — |
+| Property | Type   | Required | Constraints |
+| -------- | ------ | -------- | ----------- |
+| `key`    | string | yes      | —           |
+| `url`    | string | yes      | —           |
 
 ### ValidationError
 
-| Property | Type | Required | Constraints |
-| --- | --- | --- | --- |
-| `code` | string | — | — |
-| `message` | string | — | — |
-| `requestId` | string | — | — |
-| `issues` | unknown[] | — | — |
+| Property    | Type              | Required | Constraints |
+| ----------- | ----------------- | -------- | ----------- |
+| `code`      | string            | yes      | —           |
+| `message`   | string            | yes      | —           |
+| `requestId` | string \| null    | —        | —           |
+| `issues`    | ValidationIssue[] | yes      | —           |
+
+### ValidationIssue
+
+| Property  | Type             | Required | Constraints |
+| --------- | ---------------- | -------- | ----------- |
+| `message` | string           | yes      | —           |
+| `path`    | string[] \| null | —        | —           |

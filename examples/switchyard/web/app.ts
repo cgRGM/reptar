@@ -32,7 +32,9 @@ const message = (text: string) => {
   element("message").textContent = text;
 };
 const read = async <T>(
-  response: Response & { json: () => Promise<T> }
+  response:
+    | (Response & { ok: true; json: () => Promise<T> })
+    | (Response & { ok: false; json: () => Promise<unknown> })
 ): Promise<T> => {
   if (!response.ok) {
     const body: unknown = await response.json();
@@ -200,9 +202,6 @@ element("flag-form").addEventListener(
         param: { projectId: select("project").value },
       })
     );
-    if (!("key" in response)) {
-      throw new Error(response.message);
-    }
     await loadFlags(`${response.environment}/${response.key}`);
   })
 );
@@ -257,9 +256,9 @@ element("evaluate-form").addEventListener(
   "submit",
   act(async () => {
     const result = await read(
-      await api.api.evaluate[":projectId"][":environment"][":key"].$post({
-        json: { subject: input("subject").value },
+      await api.api.evaluate[":projectId"][":environment"][":key"].$get({
         param: params(),
+        query: { subject: input("subject").value },
       })
     );
     element("decision").textContent = result.enabled

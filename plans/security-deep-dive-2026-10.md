@@ -1,20 +1,10 @@
 # Reptar Security Deep Dive — October 2026
 
-**Scope:** dual-host threat model (NetWasm/Cloudflare Workers + Native AOT Kestrel/Lambda, weighted equally),
-open-source-product trust model (app authors are the framework's users), six surfaces: SQLi, XSS/encoding,
-binding/deserialization, session/JWT, CSRF/CORS/headers, plus uploads/storage, BetterAuth+OAuth, realtime, AI dispatch.
+**Scope:** dual-host threat model (NetWasm/Cloudflare Workers + Native AOT Kestrel/Lambda, weighted equally), open-source-product trust model (app authors are the framework's users), six surfaces: SQLi, XSS/encoding, binding/deserialization, session/JWT, CSRF/CORS/headers, plus uploads/storage, BetterAuth+OAuth, realtime, AI dispatch.
 
-**Method:** five evidence sources — direct code verification (auth/crypto/pipeline core), four parallel survey
-agents (data layer, request pipeline, uploads/BetterAuth/OAuth, realtime/AI), plus external research
-(OWASP Top 10:2026 & API Top 10:2023, ASVS 4.0, Microsoft guidance, GitHub advisories: CVE-2018-8171,
-CVE-2025-55315, Fastify CVE-2022-41919, FastEndpoints #508, JWT alg-confusion family CVE-2024-54150 /
-CVE-2023-48223 / CVE-2023-48238, Semgrep C# docs, Roslyn analyzer landscape 2026).
+**Method:** five evidence sources — direct code verification (auth/crypto/pipeline core), four parallel survey agents (data layer, request pipeline, uploads/BetterAuth/OAuth, realtime/AI), plus external research (OWASP Top 10:2026 & API Top 10:2023, ASVS 4.0, Microsoft guidance, GitHub advisories: CVE-2018-8171, CVE-2025-55315, Fastify CVE-2022-41919, FastEndpoints #508, JWT alg-confusion family CVE-2024-54150 / CVE-2023-48223 / CVE-2023-48238, Semgrep C# docs, Roslyn analyzer landscape 2026).
 
-**Reference frameworks:** OWASP Top 10:2026 (A01 Broken Access Control, A02 Crypto Failures, A05 Misconfig,
-A08 Software Supply Chain, new improper-error-handling class), OWASP API Security Top 10:2023
-(API1 BOLA, API2 Broken Auth, API4 Unrestricted Resource Consumption, API8 Security Misconfig, API10 Unsafe
-Consumption of APIs), OWASP ASVS 4.0 (V2 Auth, V3 Session, V4 Access Control, V5 Validation & Encoding,
-V12 Data Protection).
+**Reference frameworks:** OWASP Top 10:2026 (A01 Broken Access Control, A02 Crypto Failures, A05 Misconfig, A08 Software Supply Chain, new improper-error-handling class), OWASP API Security Top 10:2023 (API1 BOLA, API2 Broken Auth, API4 Unrestricted Resource Consumption, API8 Security Misconfig, API10 Unsafe Consumption of APIs), OWASP ASVS 4.0 (V2 Auth, V3 Session, V4 Access Control, V5 Validation & Encoding, V12 Data Protection).
 
 ---
 
@@ -30,21 +20,18 @@ Browser ──HTTP/WS──▶ Host (Kestrel plaintext-only | API Gateway+Lambda
                         └──▶ Outbound HTTP (DefaultHttpClient native: UNGUARDED | Workers: https-only + private-IP block)
 ```
 
-Trust boundary violations observed: request headers treated as identity (`Host`, `Origin`, `X-Forwarded-For`,
-`CF-Connecting-IP` off-platform, `X-Forwarded-Proto/Host`); JS shim trusted for all crypto and storage ops;
-LLM providers treated as trusted destinations for server-held credentials.
+Trust boundary violations observed: request headers treated as identity (`Host`, `Origin`, `X-Forwarded-For`, `CF-Connecting-IP` off-platform, `X-Forwarded-Proto/Host`); JS shim trusted for all crypto and storage ops; LLM providers treated as trusted destinations for server-held credentials.
 
 ---
 
 ## Findings register
 
-Severity: C = Critical (when mounted), H = High, M = Medium, L = Low, P = Positive control confirmed.
-Latent = requires an app author to make the mistake; the framework's job is to prevent that class.
+Severity: C = Critical (when mounted), H = High, M = Medium, L = Low, P = Positive control confirmed. Latent = requires an app author to make the mistake; the framework's job is to prevent that class.
 
 ### A. Auth, session, OAuth
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | F-01 | H | Built-in OAuth `state` generated but never validated on callback (BetterAuthRoutes is the only site in repo that checks state) | `Auth/Auth.cs:285,299` vs `:303-381`; `BetterAuthRoutes.cs:284-301` |
 | F-02 | H | `redirect_uri` derived from attacker-influenceable `Origin`/`Host`/`X-Forwarded-Proto`/`X-Forwarded-Host`; no trusted-origin pinning | `Auth/Auth.cs:287-289,324-326`; `BetterAuthRoutes.cs:408-413` |
 | F-03 | H | Open redirect post-OAuth: user-supplied `callbackUrl`/`destination` round-trips cookie→redirect; `Ctx.Redirect` does zero validation | `Auth/Auth.cs:294,322,380`; `BetterAuthRoutes.cs:268,304,376`; `Core/Ctx.cs:178-183` |
@@ -67,7 +54,7 @@ Latent = requires an app author to make the mistake; the framework's job is to p
 ### B. Cookies & headers
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | F-19 | M | `CookieJar.Set` raw `$"{name}={value}"` interpolation — no RFC 6265 token/octet validation; user input reaches values via PKCE cookie | `Core/Cookies.cs:26,55` |
 | F-20 | L | `SetSigned` name:value concatenation ambiguity (`a`+`b:c` ≡ `a:b`+`c`) | `Core/Cookies.cs:84,112` |
 | F-21 | L | SSE `data: {message}` framing without newline sanitization (event/data injection) | `Core/Ctx.cs:225` |
@@ -77,7 +64,7 @@ Latent = requires an app author to make the mistake; the framework's job is to p
 ### C. Data layer
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | F-24 | P | Values are parameterized end-to-end (fluent API, raw APIs, SqlParamParser never interpolates values; LIMIT/OFFSET are ints) | `ColumnRef.cs:113-135`; `SqlParamParser.cs:7-225`; all DbClients |
 | F-25 | M (latent) | Dictionary/JSON **keys** interpolated as identifiers in InsertAsync/UpdateAsync when they match no column | `SqliteDbClient.cs:1083-1089,1187-1196`; `MySqlDbClient.cs:267-269,371-375`; `PostgresDbClient.cs:180-190,250-277`; `D1DbClient.cs:111,151-152` |
 | F-26 | M (latent) | Bypass surface of the typed-token system: raw-clause overloads (`ListAsync/CountAsync/DeleteWhereAsync/ExistsAsync`), `SqlOrderBy(string)` implicit, `SqlFilter.Raw` | `Data/Services.cs:41-54,99-115`; `ColumnRef.cs:44,61-62,165-175` |
@@ -90,7 +77,7 @@ Latent = requires an app author to make the mistake; the framework's job is to p
 ### D. Binding, validation, pipeline
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | F-32 | P | System.Text.Json only; zero polymorphic deserialization; source-gen on Wasm/AOT; malformed JSON → 400 | repo grep; `ReptarApp.cs:1050-1072` |
 | F-33 | M | Validation opt-in; `Regex` rule silently no-ops on NETWasm (`#if !NETWASM`) → host-dependent validation drift | `Validation/Validator.cs:174-176,254-262` |
 | F-34 | L | `IsEmail` heuristic accepts `<`, `>`, `"` etc. | `Validation/Validator.cs:327-339` |
@@ -107,7 +94,7 @@ Latent = requires an app author to make the mistake; the framework's job is to p
 ### E. Uploads & storage
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | F-44 | P | Multipart parser: O(n) monotonic scan, terminator required, sane defaults (10MB/10 files/100 fields, boundary ≤70) | `Core/Multipart.cs:16-22,54-161` |
 | F-45 | P | `StorageKey.TryNormalize`: centralized traversal/control-char/segment-length validation; LocalStorage `GetFullPath` containment; S3 normalizes everywhere | `StorageModels.cs:263-336`; `LocalStorage.cs:242-264`; `S3Storage.cs:60-370` |
 | F-46 | P | `ctx.File` always sets `X-Content-Type-Options: nosniff`; Content-Disposition builder strips CRLF/quotes/controls | `StorageFile.cs:263`; `StorageModels.cs:410-450` |
@@ -118,7 +105,7 @@ Latent = requires an app author to make the mistake; the framework's job is to p
 ### F. Realtime
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | F-50 | H | WS upgrade: zero auth, zero Origin check, on both hosts; **framework middleware never runs on WS opens** (CSWSH; entire auth/ratelimit/CORS surface bypassed) | `KestrelHost.cs:84-97`; `host.ts:1116-1118,996-999`; `ReptarApp.cs:640-676` |
 | F-51 | H | ActionCable: `AuthorizeSubscription` null ⇒ auto-approve; `signed_stream_name` accepted unsigned; guessable `user_{id}` streams | `ActionCableServer.cs:25,94-112`; `ActionCableProtocol.cs:146-156`; `CampfireRealtime.cs:34-36` |
 | F-52 | M | DO bridge: name-addressed (`idFromName(id)`) with no ACL; production pattern uses user-derived room names → IDOR by name | `host.ts:551-578`; `durable-object.ts:19-26` |
@@ -129,7 +116,7 @@ Latent = requires an app author to make the mistake; the framework's job is to p
 ### G. AI dispatch
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | F-56 | C* | Workspace tools mounted as HTTP routes with no auth: `read_file`, `write_file`, `edit_file`, `run_command` (`/bin/bash -c`) — RCE by design when exposed; only path-escape guard + optional prefix allowlist | `Reptar.AI/WorkspaceTools.cs:185,292,327,371,556-631`; `examples/agent-cli/app.cs:47-60` |
 | F-57 | C* | Unauthenticated gateway: `model: "a2a/<url>"` → full SSRF with response reflection on native (no URL guard); Workers restricted to public https; remote-controlled `url`/`sendUrl` honored from agent cards | `AiGateway.cs:102,685,1241-1407`; `Data/Services.cs:585-622`; cf. `host.ts:580-669` |
 | F-58 | H* | Cost amplification: unauthenticated completions; client picks model + `max_tokens` against server-held keys; ModelCatalog never enforced on completions path | `AiGateway.cs:102,574-577,678-704,913` |
@@ -139,13 +126,12 @@ Latent = requires an app author to make the mistake; the framework's job is to p
 | F-62 | L | Public tool-schema listing route; unauth `/gateway/reset` + `/gateway/stats` | `AiTools.cs:278-291`; `AiGateway.cs:104-134` |
 | F-63 | P | Secrets never serialized in framework responses; on-disk store chmod 600; redaction filter exists (opt-in) | `LlmAuth.cs:150-164,256-304`; `AgentSafety.cs:24-74` |
 
-`*` = severity when the surface is mounted/exposed; several are dev-tools by intent — the finding is that the
-framework ships them default-open with no auth gate or prominent deployment warning.
+`*` = severity when the surface is mounted/exposed; several are dev-tools by intent — the finding is that the framework ships them default-open with no auth gate or prominent deployment warning.
 
 ### H. Structural (cross-cutting)
 
 | ID | Sev | Finding | Evidence |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | S-1 | H | **Dual-implementation drift**: 3 auth slices (native builtin, Wasm, BetterAuth) with divergent protections; 2 crypto providers; 2 JWT verify paths (`#if NETWASM`); R2 normalization drift; Regex validation drift; SSE/BodyStream host drift | see register |
 | S-2 | H | **Opt-in security posture**: no default auth step; opt-in headers/validation/rate-limiting; null ⇒ allow subscription hook. Precedent: FastEndpoints antiforgery #508 | `ReptarApp.cs:923-959`; `ActionCableServer.cs:25` |
 | S-3 | H | **Header-trust boundary violations** (F-01/02/04, BuildRedirectUri) | see register |
@@ -175,10 +161,7 @@ var authUrl = provider.BuildAuthorizationUrl(state, challenge, redirectUri);
 // an attacker-controlled code against the victim's verifier and signs the victim in.
 ```
 
-Attack: attacker initiates `/social` on their own browser, extracts `code` before it's consumed
-(GitHub: code valid ~10 min), then gets a logged-in victim's browser to top-navigate to
-`https://victim.app/auth/callback/github?code=ATTACKER_CODE`. The Lax pkce cookie rides along,
-the victim is now signed into the attacker's OAuth identity → account-linking hijack.
+Attack: attacker initiates `/social` on their own browser, extracts `code` before it's consumed (GitHub: code valid ~10 min), then gets a logged-in victim's browser to top-navigate to `https://victim.app/auth/callback/github?code=ATTACKER_CODE`. The Lax pkce cookie rides along, the victim is now signed into the attacker's OAuth identity → account-linking hijack.
 
 ```csharp
 // SECURE — bind state, verify with Ordinal compare, single-use (mirror BetterAuthRoutes.cs:284-301)
@@ -353,26 +336,25 @@ if (!HttpUrlPolicy.IsAllowed(url, options))   // scheme, DNS-resolved IP, redire
 ### 3.1 Static analysis in CI (additions to `.github/workflows/ci.yml`)
 
 ```yaml
-  security:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with: { dotnet-version: '10.0.401' }
-      # SAST — GitHub CodeQL (C# fully supported; free for OSS)
-      - uses: github/codeql-action/init@v3
-        with: { languages: csharp, 'javascript-typescript' }
-      - uses: github/codeql-action/analyze@v3
-      # SAST — Semgrep with Reptar-specific rules (CE-compatible, no taint engine needed)
-      - uses: returntocorp/semgrep-action@v1        # or: pip install semgrep && semgrep --config .semgrep
-        with: { config: '.semgrep' }
-      # SCA — NuGet vulnerability audit (lockfile-friendly, no token needed)
-      - run: dotnet list framework/Reptar/Reptar.csproj package --vulnerable --include-transitive
-      - uses: actions/dependency-review-action@v4    # + Dependabot config (already Bun+NuGet)
+security:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-dotnet@v4
+      with: { dotnet-version: "10.0.401" }
+    # SAST — GitHub CodeQL (C# fully supported; free for OSS)
+    - uses: github/codeql-action/init@v3
+      with: { languages: csharp, "javascript-typescript" }
+    - uses: github/codeql-action/analyze@v3
+    # SAST — Semgrep with Reptar-specific rules (CE-compatible, no taint engine needed)
+    - uses: returntocorp/semgrep-action@v1 # or: pip install semgrep && semgrep --config .semgrep
+      with: { config: ".semgrep" }
+    # SCA — NuGet vulnerability audit (lockfile-friendly, no token needed)
+    - run: dotnet list framework/Reptar/Reptar.csproj package --vulnerable --include-transitive
+    - uses: actions/dependency-review-action@v4 # + Dependabot config (already Bun+NuGet)
 ```
 
-Roslyn analyzers via `Directory.Build.props` (Security Code Scan for classic vuln patterns,
-Meziantou for crypto/design hygiene, **BannedApiAnalyzers** to ban Reptar's own escape hatches in *app* code):
+Roslyn analyzers via `Directory.Build.props` (Security Code Scan for classic vuln patterns, Meziantou for crypto/design hygiene, **BannedApiAnalyzers** to ban Reptar's own escape hatches in _app_ code):
 
 ```xml
 <ItemGroup>
@@ -405,7 +387,16 @@ rules:
           - pattern: ctx.Db.DeleteWhereAsync(..., $X + ...)
           - pattern: ctx.Db.ExistsAsync(..., $X + ...)
           - pattern: ctx.Db.QueryAsync<T>(... + ...)
-      - metavariable-pattern: { metavariable: $X, pattern-either: [ctx.Req.Param(...), ctx.Req.QueryValue(...), ctx.Req.Header(...)] }
+      - metavariable-pattern:
+          {
+            metavariable: $X,
+            pattern-either:
+              [
+                ctx.Req.Param(...),
+                ctx.Req.QueryValue(...),
+                ctx.Req.Header(...),
+              ],
+          }
   - id: reptar-open-redirect-tainted
     languages: [csharp]
     severity: ERROR
@@ -465,7 +456,7 @@ Mirror the established `SecurityAndCacheTests` style (`app.HandleAsync` + raw `R
 ## Patch plan (top findings — pre-approved scope)
 
 | # | Patch | Files | Findings |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | P1 | OAuth `state` round-trip validation on `/social` + `/callback/:provider` (mirror BetterAuth cookie pattern) | `framework/Reptar/Auth/Auth.cs` | F-01 |
 | P2 | Site-relative `callbackUrl`/`destination` enforcement at ingestion + CRLF guard in `Ctx.Redirect` | `Auth/Auth.cs`, `Auth/BetterAuthRoutes.cs`, `Core/Ctx.cs` | F-03 |
 | P3 | Host-aware throttle keying (RemoteIp native / CF-Connecting-IP Wasm; drop raw XFF) + bounded failure maps | `Auth/Auth.cs`, `Reptar.Wasm/Auth/Auth.cs` | F-04, F-05 |
@@ -474,20 +465,17 @@ Mirror the established `SecurityAndCacheTests` style (`app.HandleAsync` + raw `R
 | P6 | Shared login throttle wired into BetterAuth `sign-in/email` + password cap | `Auth/BetterAuthRoutes.cs` (+ shared helper) | F-09, F-11 |
 | P7 | Google `email_verified` honored on linking; verified-only link | `Auth/OAuth.cs`, `Auth/Auth.cs`, `Auth/BetterAuthRoutes.cs` | F-07 |
 
-Deferred (report-only, larger design work): WS auth/origin model (F-50/51), native SSRF guard (F-38/57),
-workspace-tools auth gate + gateway auth/model allowlist (F-56/58), Wasm R2 normalization (F-47),
-security-headers-default-on debate (S-2), CSRF token middleware (F-06) — each scoped in this doc for follow-up.
+Deferred (report-only, larger design work): WS auth/origin model (F-50/51), native SSRF guard (F-38/57), workspace-tools auth gate + gateway auth/model allowlist (F-56/58), Wasm R2 normalization (F-47), security-headers-default-on debate (S-2), CSRF token middleware (F-06) — each scoped in this doc for follow-up.
 
 ---
 
 ## Remediation log — 2026-10-26
 
-Status: **P1–P7 implemented and verified** (299/299 framework tests, netwasm lint clean, architecture check clean).
-Committed alongside this log as `fix(auth)` + regression suite `framework/Reptar.Tests/SecurityRegressions.cs`.
+Status: **P1–P7 implemented and verified** (299/299 framework tests, netwasm lint clean, architecture check clean). Committed alongside this log as `fix(auth)` + regression suite `framework/Reptar.Tests/SecurityRegressions.cs`.
 
 | # | Status | Notes |
-|---|---|---|
-| P1 | ✅ | `/social` persists `state|verifier|callbackUrl` cookie; `/callback/:provider` enforces Ordinal state equality, fails 400 on missing/wrong state |
+| --- | --- | --- |
+| P1 | ✅ | `/social` persists `state | verifier | callbackUrl`cookie;`/callback/:provider` enforces Ordinal state equality, fails 400 on missing/wrong state |
 | P2 | ✅ | `Auth.IsSiteRelativePath` gate at ingestion (native + BetterAuth); `Ctx.Redirect` rejects CR/LF/NUL in Location |
 | P3 | ✅ | New shared `LoginThrottle` (native) keyed on `RemoteIp` (`TrustProxyHeaders` opt-in); Wasm slice keys on `CF-Connecting-IP` only, drops XFF; both maps bounded (10k, expired-window sweep) |
 | P4 | ✅ | `Jwt.VerifyAsync` rejects tokens >8 KB pre-stackalloc, guards secret ≤1 KB; `DevCrypto` pre-hashes passwords >512 B (SHA-256 hex) and caps stored iterations/hash length; **mirrored in `packages/host/src/crypto.ts`** for cross-host hash parity |
@@ -495,53 +483,34 @@ Committed alongside this log as `fix(auth)` + regression suite `framework/Reptar
 | P6 | ✅ | BetterAuth `/sign-in/email` gains `Rule<SignInInput>` validation + the same throttling; legacy rate-limit test rewritten to assert spoofed-header resistance; the BetterAuth wrong-password test isolated on its own RemoteIp |
 | P7 | ✅ | Linking gate: existing-account link requires `userInfo.EmailVerified`; new users get `EmailVerified = verified ? 1 : 0`; provider-link-first ordering preserved. **Follow-up:** GitHub provider should fetch `/user/emails` (primary+verified) to restore linking for GitHub users — currently all GitHub emails are treated as unverified (fail-safe) |
 
-**Concurrent-edit note:** a parallel agent's broad commit (`23323b6`) swept my in-flight edits of
-`BetterAuthRoutes.cs`/`ReptarApi.cs` plus their `OAuth.cs` `EmailVerified` change into that commit while
-`LoginThrottle.cs` and the `Auth.cs` helpers it references remained uncommitted — meaning commit `23323b6`
-alone does not compile. This was resolved by landing the remaining pieces immediately after; history was
-left intact because other agents were actively committing. Bisect through `23323b6` with that in mind.
+**Concurrent-edit note:** a parallel agent's broad commit (`23323b6`) swept my in-flight edits of `BetterAuthRoutes.cs`/`ReptarApi.cs` plus their `OAuth.cs` `EmailVerified` change into that commit while `LoginThrottle.cs` and the `Auth.cs` helpers it references remained uncommitted — meaning commit `23323b6` alone does not compile. This was resolved by landing the remaining pieces immediately after; history was left intact because other agents were actively committing. Bisect through `23323b6` with that in mind.
 
 ### Learnings
 
-1. **Multi-agent repos need cohesive-commit discipline (or worktrees).** A broad `git add` by one agent can
-   bisect-break history by capturing half-finished edits of another. Land security fixes as small, complete
-   units; prefer per-agent worktrees for invasive changes.
-2. **The framework's best security control was already internal — and bypassed by itself.** The generic
-   `RateLimit` middleware keyed on `RemoteIp` with `TrustProxyHeaders` opt-in (and had tests), yet the auth
-   module hand-rolled header-trusting keying. Parity between an internal secure primitive and every consumer
-   is itself a security property; the regression suite now pins it.
-3. **Dual slices double the attack surface of every fix.** Three auth implementations (native, Wasm, BetterAuth)
-   and two crypto providers meant each patch landed in 2–3 places with drift risk (the `#if NETWASM` Regex
-   no-op is the standing example). The systemic fix is the dual-host parity gate proposed in Phase 3.
-4. **Attack-sized `stackalloc` is an uncatchable-crash DoS class unique to C#.** One request with a large
-   JWT or password could kill a Kestrel process (`StackOverflowException` is not catchable). Rule of thumb
-   for the codebase: never `stackalloc` a size derived from request input without a constant bound first;
-   a future Roslyn/analyzer rule should enforce this.
-5. **Shared static state in tests is a flake factory.** The new shared throttle made the legacy rate-limit test
-   dependent on execution order via the `"loopback"` key. Deterministic per-test keys (unique `RemoteIp`) or
-   collection serialization are now required for any test touching `LoginThrottle`/`Auth` statics.
-6. **Cross-language crypto must change in lockstep.** The password pre-hash had to land in `DevCrypto` and
-   `crypto.ts` simultaneously or hashes hashed on one host would fail to verify on the other. Any future
-   crypto parameter change needs a checklist item per provider.
-**Round 2 (same day) — deferred items landed:**
+1. **Multi-agent repos need cohesive-commit discipline (or worktrees).** A broad `git add` by one agent can bisect-break history by capturing half-finished edits of another. Land security fixes as small, complete units; prefer per-agent worktrees for invasive changes.
+2. **The framework's best security control was already internal — and bypassed by itself.** The generic `RateLimit` middleware keyed on `RemoteIp` with `TrustProxyHeaders` opt-in (and had tests), yet the auth module hand-rolled header-trusting keying. Parity between an internal secure primitive and every consumer is itself a security property; the regression suite now pins it.
+3. **Dual slices double the attack surface of every fix.** Three auth implementations (native, Wasm, BetterAuth) and two crypto providers meant each patch landed in 2–3 places with drift risk (the `#if NETWASM` Regex no-op is the standing example). The systemic fix is the dual-host parity gate proposed in Phase 3.
+4. **Attack-sized `stackalloc` is an uncatchable-crash DoS class unique to C#.** One request with a large JWT or password could kill a Kestrel process (`StackOverflowException` is not catchable). Rule of thumb for the codebase: never `stackalloc` a size derived from request input without a constant bound first; a future Roslyn/analyzer rule should enforce this.
+5. **Shared static state in tests is a flake factory.** The new shared throttle made the legacy rate-limit test dependent on execution order via the `"loopback"` key. Deterministic per-test keys (unique `RemoteIp`) or collection serialization are now required for any test touching `LoginThrottle`/`Auth` statics.
+6. **Cross-language crypto must change in lockstep.** The password pre-hash had to land in `DevCrypto` and `crypto.ts` simultaneously or hashes hashed on one host would fail to verify on the other. Any future crypto parameter change needs a checklist item per provider. **Round 2 (same day) — deferred items landed:**
 
 | Finding | Status | Notes |
-|---|---|---|
+| --- | --- | --- |
 | F-38/F-57 native SSRF guard | ✅ | New `Data/HttpUrlPolicy.cs` mirrors the Workers shim blocklist (loopback, link-local, RFC1918, CGNAT 100.64/10, multicast/reserved, IPv6 fc/fd/fe80/::1/::ffff:127., metadata hosts) and is enforced by `DefaultHttpClient.FetchAsync`/`FetchBytesAsync` with an opt-in `allowedHosts` constructor. Closes the unauthenticated gateway `a2a/<url>` internal-network vector (`AiGateway` routes through `ctx.Http`). Divergence from the Workers guard (https-only there): native accepts http so self-hosted object storage keeps working — the private-network block is the boundary. Residual, shared with Workers: policy runs pre-DNS (decimal-IP hex octets, DNS rebinding not blocked) |
 | F-36 Kestrel WS receive loop | ✅ | Inbound frame accumulation capped at 1 MiB, closing with `MessageTooBig` — parity with the Workers runtime's own ~1 MiB cap; no more unbounded per-connection memory |
 | F-47 Wasm R2Client keys | ✅* | `StorageKey.Normalize` guards added to every R2 operation in the working tree — landing alongside (and interleaved with) the storage agent's in-flight R2 copy/bulk-delete feature commit, whose new methods also normalize. Not included in this commit to avoid capturing their half-finished JS-interop work |
 | GitHub verified email | ✅ | `/user/emails` (scope already requested) consulted for primary+verified attestation; verified email of any kind beats the unverified profile address; any failure falls back to unverified (linking stays blocked) |
-**Round 3 (same day) — auth gate, CSRF, cost control:**
+| **Round 3 (same day) — auth gate, CSRF, cost control:** |
 
 | Finding | Status | Notes |
-|---|---|---|
+| --- | --- | --- |
 | F-56 workspace tools | ✅ | `UseWorkspaceTools` now gates every `/workspace/*` route: default accepts loopback peers and in-process AI dispatch only (the local-agent use case); any other exposure requires an explicit `WorkspaceToolOptions.Authorize` gate. The unauthenticated remote `run_command` RCE surface is closed |
 | F-06 CSRF | ✅ | New `Middlewares.Csrf` — double-submit token (JS-readable cookie + `x-csrf-token` header, constant-time compare), safe-method pass-through, exempt-path prefixes, first-visit POST rejection. Opt-in; documented as complement to SameSite=Lax, available on both hosts |
 | F-58 gateway cost control | ✅ (partial) | New `GATEWAY_ALLOWED_MODELS` env allowlist on the completions path — when set, off-catalog models are 400-rejected instead of routed (and billed) with server-held credentials. Still open: an authentication requirement for the gateway itself (app-level wiring; the gateway is intentionally a drop-in proxy) |
-**Round 4 (same day) — all three remaining tiers landed:**
+| **Round 4 (same day) — all three remaining tiers landed:** |
 
 | Finding | Status | Notes |
-|---|---|---|
+| --- | --- | --- |
 | F-50 WS middleware bypass | ✅ | `HandleWebSocketOpenAsync` now runs the full app middleware chain on upgrades; a short-circuit response closes the socket with 1008 before the open handler runs. Auth/rate-limit/CSRF/origin middlewares now apply to WebSockets on both hosts uniformly (the transport was already app-closeable) |
 | F-51 CSWSH | ✅ | New `Middlewares.WsOrigin(allowedOrigins)` gate: browser upgrades must present an allowed Origin, non-browser clients (no Origin header) pass — one registration covers HTTP + WS since middleware now runs on both |
 | F-21 SSE injection | ✅ | `SseBody` frames multi-line payloads as `data:` continuations — raw newlines can no longer inject new SSE fields |
@@ -554,10 +523,5 @@ left intact because other agents were actively committing. Bisect through `23323
 
 **Verification discipline this round:** every staged snapshot was compiled and tested from a `git checkout-index` export rather than the working tree, after discovering that (a) HEAD did not compile due to another agent's half-commit and (b) an earlier index snapshot silently missed one hunk due to a content-marker typo ("stays" vs "stay" — the SSE framing test caught it). Hunk-level surgical staging (content-marked filter + `git apply --cached`) let security fixes land without sweeping concurrent in-flight work.
 
-7. **Verify-before-fix, test-after-fix.** Every patch was verified against the actual file immediately before
-   editing (anchors drifted twice mid-session due to concurrent edits — both caught because re-reads were
-   mandatory), and every fix was pinned by a named regression test so it cannot silently regress.
-8. **Cross-language policy ports must be tested against runtime primitives, not specs.** `.NET`'s `Uri.Host`
-   returns IPv6 literals *with brackets* (`[::1]`) while JS `URL.hostname` strips them — the SSRF policy port
-   passed all hostname cases except IPv6 until an empirical scratch test revealed the divergence. Any ported
-   security policy needs a test matrix per parser, not just per rule.
+7. **Verify-before-fix, test-after-fix.** Every patch was verified against the actual file immediately before editing (anchors drifted twice mid-session due to concurrent edits — both caught because re-reads were mandatory), and every fix was pinned by a named regression test so it cannot silently regress.
+8. **Cross-language policy ports must be tested against runtime primitives, not specs.** `.NET`'s `Uri.Host` returns IPv6 literals _with brackets_ (`[::1]`) while JS `URL.hostname` strips them — the SSRF policy port passed all hostname cases except IPv6 until an empirical scratch test revealed the divergence. Any ported security policy needs a test matrix per parser, not just per rule.
