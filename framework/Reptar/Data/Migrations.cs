@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Reptar;
 
@@ -9,6 +11,12 @@ public interface IMigration
     string Name { get; }
     Task UpAsync(IDbClient db);
     Task DownAsync(IDbClient db);
+
+    /// <summary>
+    /// Optional checksum of the migration body. SQL migrations provide one;
+    /// custom migrations may leave it null.
+    /// </summary>
+    string? Checksum => null;
 }
 
 public abstract class Migration : IMigration
@@ -23,6 +31,7 @@ public sealed class SqlMigration : IMigration
 {
     public string Id { get; }
     public string Name { get; }
+    public string? Checksum { get; }
     private readonly string _upSql;
     private readonly string? _downSql;
 
@@ -32,7 +41,12 @@ public sealed class SqlMigration : IMigration
         Name = name ?? id;
         _upSql = upSql;
         _downSql = downSql;
+        Checksum = ComputeChecksum(upSql);
     }
+
+    private static string ComputeChecksum(string sql) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sql)))
+            .ToLowerInvariant();
 
     public Task UpAsync(IDbClient db) => db.ExecuteAsync(_upSql);
     public Task DownAsync(IDbClient db) => _downSql != null ? db.ExecuteAsync(_downSql) : Task.CompletedTask;
@@ -60,9 +74,21 @@ public static class MigrationRunner
                 CREATE TABLE IF NOT EXISTS `__reptar_migrations` (
                     `id` VARCHAR(255) PRIMARY KEY,
                     `name` VARCHAR(255) NOT NULL,
-                    `applied_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    `applied_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    `checksum` VARCHAR(128) NULL
                 );
             ");
+
+            try
+            {
+                await db.ExecuteAsync(
+                    "ALTER TABLE `__reptar_migrations` ADD COLUMN `checksum` VARCHAR(128) NULL");
+            }
+            catch
+            {
+                // Column already exists on a database created by a newer build.
+            }
+
             return;
         }
 
@@ -72,9 +98,12 @@ public static class MigrationRunner
                 CREATE TABLE IF NOT EXISTS ""__reptar_migrations"" (
                     ""id"" TEXT PRIMARY KEY,
                     ""name"" TEXT NOT NULL,
-                    ""applied_at"" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+                    ""applied_at"" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""checksum"" TEXT
                 );
             ");
+            await db.ExecuteAsync(
+                @"ALTER TABLE ""__reptar_migrations"" ADD COLUMN IF NOT EXISTS ""checksum"" TEXT");
             return;
         }
 
@@ -83,22 +112,43 @@ public static class MigrationRunner
             CREATE TABLE IF NOT EXISTS ""__reptar_migrations"" (
                 ""id"" TEXT PRIMARY KEY,
                 ""name"" TEXT NOT NULL,
-                ""applied_at"" TEXT NOT NULL
+                ""applied_at"" TEXT NOT NULL,
+                ""checksum"" TEXT
             );
         ");
+
+        try
+        {
+            await db.ExecuteAsync(
+                @"ALTER TABLE ""__reptar_migrations"" ADD COLUMN ""checksum"" TEXT");
+        }
+        catch
+        {
+            // Column already exists on a database created by a newer build.
+        }
     }
 
-    public static async Task<HashSet<string>> GetAppliedMigrationIdsAsync(IDbClient db)
+    public static async Task<Dictionary<string, string?>> GetAppliedMigrationChecksumsAsync(
+        IDbClient db)
     {
         db = Unwrap(db);
         await EnsureMigrationTableAsync(db);
 
         var sql = db is MySqlDbClient
-            ? "SELECT `id` FROM `__reptar_migrations`"
-            : @"SELECT ""id"" FROM ""__reptar_migrations""";
+            ? "SELECT `id`, `checksum` FROM `__reptar_migrations`"
+            : @"SELECT ""id"", ""checksum"" FROM ""__reptar_migrations""";
 
-        var rows = await db.QueryAsync<MigrationRow>(sql);
-        return new HashSet<string>(rows.Select(r => r.Id), StringComparer.Ordinal);
+        var rows = await db.QueryAsync<MigrationChecksumRow>(sql);
+        return rows.ToDictionary(
+            row => row.Id,
+            row => row.Checksum,
+            StringComparer.Ordinal);
+    }
+
+    public static async Task<HashSet<string>> GetAppliedMigrationIdsAsync(IDbClient db)
+    {
+        var applied = await GetAppliedMigrationChecksumsAsync(db);
+        return new HashSet<string>(applied.Keys, StringComparer.Ordinal);
     }
 
     public static async Task<IReadOnlyList<MigrationResult>> MigrateAsync(
@@ -107,14 +157,26 @@ public static class MigrationRunner
     {
         db = Unwrap(db);
         await EnsureMigrationTableAsync(db);
-        var applied = await GetAppliedMigrationIdsAsync(db);
+        var applied = await GetAppliedMigrationChecksumsAsync(db);
         var ordered = migrations.OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
         var results = new List<MigrationResult>();
 
         foreach (var migration in ordered)
         {
-            if (applied.Contains(migration.Id))
+            if (applied.TryGetValue(migration.Id, out var appliedChecksum))
             {
+                if (migration.Checksum is not null &&
+                    appliedChecksum is not null &&
+                    !string.Equals(
+                        migration.Checksum,
+                        appliedChecksum,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"Migration '{migration.Id}' was modified after it was applied. " +
+                        "Create a new migration instead of editing an applied one.");
+                }
+
                 continue;
             }
 
@@ -126,14 +188,15 @@ public static class MigrationRunner
 
                 var now = DateTimeOffset.UtcNow.ToString("o", CultureInfo.InvariantCulture);
                 var insertSql = db is MySqlDbClient
-                    ? "INSERT INTO `__reptar_migrations` (`id`, `name`, `applied_at`) VALUES (@id, @name, @applied_at)"
-                    : @"INSERT INTO ""__reptar_migrations"" (""id"", ""name"", ""applied_at"") VALUES (@id, @name, @applied_at)";
+                    ? "INSERT INTO `__reptar_migrations` (`id`, `name`, `applied_at`, `checksum`) VALUES (@id, @name, @applied_at, @checksum)"
+                    : @"INSERT INTO ""__reptar_migrations"" (""id"", ""name"", ""applied_at"", ""checksum"") VALUES (@id, @name, @applied_at, @checksum)";
 
                 await db.ExecuteAsync(insertSql, new Dictionary<string, object?>
                 {
                     ["id"] = migration.Id,
                     ["name"] = migration.Name,
-                    ["applied_at"] = now
+                    ["applied_at"] = now,
+                    ["checksum"] = migration.Checksum
                 });
 
                 results.Add(new MigrationResult(migration.Id, migration.Name, true, sw.Elapsed));
@@ -198,6 +261,8 @@ public static class MigrationRunner
     }
 
     public sealed record MigrationRow(string Id);
+
+    public sealed record MigrationChecksumRow(string Id, string? Checksum);
 
     public sealed record MigrationHistoryRow(string Id, string Name, string AppliedAt);
 

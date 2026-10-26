@@ -10,7 +10,8 @@ public sealed record OAuthUserInfo(
     string ProviderUserId,
     string Email,
     string Name,
-    string? Image = null);
+    string? Image = null,
+    bool EmailVerified = false);
 
 public interface IOAuthProvider
 {
@@ -110,8 +111,10 @@ public sealed class GoogleOAuthProvider : IOAuthProvider
         var email = root.GetProperty("email").GetString()!;
         var name = root.TryGetProperty("name", out var np) ? np.GetString() ?? "" : "";
         var picture = root.TryGetProperty("picture", out var pp) ? pp.GetString() : null;
+        var emailVerified = root.TryGetProperty("email_verified", out var ev) &&
+            ev.ValueKind == JsonValueKind.True;
 
-        return new OAuthUserInfo("google", sub, email, name, picture);
+        return new OAuthUserInfo("google", sub, email, name, picture, emailVerified);
     }
 }
 
