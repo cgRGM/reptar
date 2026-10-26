@@ -80,5 +80,9 @@ examples/blog/uploads/
 examples/baas/uploads/
 uploads/
 
+# Local agent artifacts / session dumps
+examples/agent-cli/artifacts/
+pi-session-*.html
+
 # Harness-managed skills
 .agents/

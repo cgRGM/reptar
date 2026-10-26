@@ -38,21 +38,24 @@ Cloudflare Workers   Vercel Edge  AWS Lambda       Docker / VPS
 
 Because NetWasm `0.10.0` (`wasm-opt` / Binaryen) enforces a single `[JSExport]` entry point (`Program.Handle`) per WebAssembly module, some streaming and event-driven primitives execute directly in C# on `net10.0` (`Kestrel` and `Lambda`) while being terminated or bridged by the TypeScript `@reptar/host` Worker shim on `Cloudflare Workers`:
 
-| Feature / Primitive | Cloudflare Workers (`netwasm0.1` + `@reptar/host`) | Kestrel (`net10.0` Native AOT) | AWS Lambda (`net10.0` Native AOT) |
-| :-- | :-- | :-- | :-- |
-| **Routing, Groups & Middleware** | ✅ Native C# (`Wasm`) | ✅ Native C# | ✅ Native C# |
-| **`Rule<T>` Validation & Contracts** | ✅ Native C# (`Wasm`) | ✅ Native C# | ✅ Native C# |
-| **Database (`c.Db`)** | ✅ D1 (`[JSImport]`) & Postgres | ✅ SQLite, Postgres, MySQL | ✅ SQLite, Postgres, MySQL |
-| **Object Storage (`c.Storage`)** | ✅ R2 (`[JSImport]`) | ✅ `LocalStorage` & `S3Storage` | ✅ `S3Storage` & `LocalStorage` |
-| **Multipart & `Files.Check`** | ✅ Native C# (`ReadOnlySpan<byte>`) | ✅ Native C# (`ReadOnlySpan<byte>`) | ✅ Native C# (`ReadOnlySpan<byte>`) |
-| **Built-in Auth, JWT & Signed Cookies** | ✅ Native C# + WebCrypto (`[JSImport]`) | ✅ Native C# (`HMACSHA256` / PBKDF2) | ✅ Native C# (`HMACSHA256` / PBKDF2) |
-| **CORS, Rate Limiting & SWR Cache** | ✅ Native C# + `@reptar/host` edge headers | ✅ Native C# | ✅ Native C# |
-| **SSE (`c.Sse` / `StreamLlmAsync`)** | ⚡ TS Worker `ReadableStream` shim (`#if !NETWASM` in C#) | ✅ Native C# `PipeWriter` streaming | ⚠️ Buffered response (API Gateway v2) |
-| **WebSockets (`app.OnWebSocket`)** | ⚡ TS Worker `WebSocketPair` / Durable Object shim | ✅ Native C# `System.Net.WebSockets` | ❌ Use API Gateway WebSocket API |
-| **Queue Consumers (`app.OnQueue`)** | ⚡ TS Worker `queue(batch, env)` host bridge | ✅ Native C# (`HandleQueueBatchAsync`) | ⚡ SQS event adapter |
-| **Cron Triggers (`app.OnScheduled`)** | ⚡ TS Worker `scheduled(event, env)` host bridge | ✅ Native C# (`HandleScheduledAsync`) | ⚡ EventBridge scheduled rule |
-| **OpenAPI 3.1 (`/openapi.json`, `/reference`)** | ⚡ Generated at build time (`bun run rpc:gen`) | ✅ Native C# (`app.UseScalar()`) | ✅ Native C# (`app.UseScalar()`) |
-| **Static Files (`app.UseStaticFiles`)** | ⚡ Cloudflare Workers Assets (`env.ASSETS`) | ✅ Native C# (`ETag` + SPA fallback) | ⚡ CloudFront / S3 static hosting |
+| Feature / Primitive | Cloudflare Workers (`netwasm0.1` + `@reptar/host`) | Cloudflare Durable Objects (NetWasm + DO) | Kestrel (`net10.0` Native AOT) | AWS Lambda (`net10.0` Native AOT) |
+| :-- | :-- | :-- | :-- | :-- |
+| **Routing, Groups & Middleware** | ✅ Native C# (`Wasm`) | ✅ Native C# (`Wasm`) | ✅ Native C# | ✅ Native C# |
+| **`Rule<T>` Validation & Contracts** | ✅ Native C# (`Wasm`) | ✅ Native C# (`Wasm`) | ✅ Native C# | ✅ Native C# |
+| **Database (`c.Db`)** | ✅ D1 (`[JSImport]`) & Postgres | ✅ D1 (`[JSImport]`) & DO Storage | ✅ SQLite, Postgres, MySQL | ✅ SQLite, Postgres, MySQL |
+| **Object Storage (`c.Storage`)** | ✅ R2 (`[JSImport]`) | ✅ R2 (`[JSImport]`) | ✅ `LocalStorage` & `S3Storage` | ✅ `S3Storage` & `LocalStorage` |
+| **Multipart & `Files.Check`** | ✅ Native C# (`ReadOnlySpan<byte>`) | ✅ Native C# (`ReadOnlySpan<byte>`) | ✅ Native C# (`ReadOnlySpan<byte>`) | ✅ Native C# (`ReadOnlySpan<byte>`) |
+| **Built-in Auth, JWT & Signed Cookies** | ✅ Native C# + WebCrypto (`[JSImport]`) | ✅ Native C# + WebCrypto | ✅ Native C# (`HMACSHA256` / PBKDF2) | ✅ Native C# (`HMACSHA256` / PBKDF2) |
+| **Background Tasks (`ctx.WaitUntil`)** | ✅ Edge `ctx.waitUntil()` bridge | ✅ Edge `ctx.waitUntil()` + DO Alarms | ✅ Unblocked ThreadPool + Error Trap | ⚠️ Buffered execution |
+| **CORS, Rate Limiting & SWR Cache** | ✅ Native C# + `@reptar/host` edge headers | ✅ Native C# + `@reptar/host` | ✅ Native C# | ✅ Native C# |
+| **SSE (`c.Sse` / `StreamLlmAsync`)** | ⚡ TS Worker `ReadableStream` shim (`#if !NETWASM` in C#) | ⚡ TS Worker `ReadableStream` shim | ✅ Native C# `PipeWriter` streaming | ⚠️ Buffered response (API Gateway v2) |
+| **WebSockets (`app.OnWebSocket`)** | ⚡ Single-socket Worker (`WebSocketPair`) | ✅ Full cross-client Fanout & Presence | ✅ Native C# `System.Net.WebSockets` | ❌ Use API Gateway WebSocket API |
+| **Multi-room Hubs (`Reptar.Realtime`)** | ❌ Cannot fanout across requests | ✅ Supported (`examples/realtime-rooms`) | ✅ Supported (ConcurrentDictionary) | ❌ External Pub/Sub required |
+| **AI Workspace Tools (`app.UseWorkspaceTools`)** | ❌ Confined / In-memory tools only | ❌ In-memory tools only | ✅ Full Local Process & Filesystem | ⚡ Lambda /tmp filesystem |
+| **Queue Consumers (`app.OnQueue`)** | ⚡ TS Worker `queue(batch, env)` host bridge | ⚡ DO Alarm queue drain | ✅ Native C# (`HandleQueueBatchAsync`) | ⚡ SQS event adapter |
+| **Cron Triggers (`app.OnScheduled`)** | ⚡ TS Worker `scheduled(event, env)` host bridge | ⚡ DO scheduled alarms | ✅ Native C# (`HandleScheduledAsync`) | ⚡ EventBridge scheduled rule |
+| **OpenAPI 3.1 (`/openapi.json`, `/reference`)** | ⚡ Generated at build time (`bun run rpc:gen`) | ⚡ Generated at build time | ✅ Native C# (`app.UseScalar()`) | ✅ Native C# (`app.UseScalar()`) |
+| **Static Files (`app.UseStaticFiles`)** | ⚡ Cloudflare Workers Assets (`env.ASSETS`) | ⚡ Cloudflare Workers Assets | ✅ Native C# (`ETag` + SPA fallback) | ⚡ CloudFront / S3 static hosting |
 
 ## 1. Cloudflare Workers (Primary Edge Target)
 

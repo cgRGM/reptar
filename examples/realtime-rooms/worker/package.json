@@ -1,0 +1,13 @@
+{
+  "name": "@reptar/workers-rooms-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun ../../../scripts/reptar.ts build:worker:rooms",
+    "deploy": "bun ../../../scripts/reptar.ts build:worker:rooms && bun ../../../scripts/reptar.ts deploy:rooms"
+  },
+  "dependencies": {
+    "@reptar/host": "workspace:*"
+  }
+}

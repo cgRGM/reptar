@@ -3,17 +3,6 @@ using System.Globalization;
 
 namespace Reptar;
 
-public sealed class SecurityHeadersOptions
-{
-    public string ContentTypeOptions { get; set; } = "nosniff";
-    public string FrameOptions { get; set; } = "DENY";
-    public string ReferrerPolicy { get; set; } = "strict-origin-when-cross-origin";
-    public string? StrictTransportSecurity { get; set; } = "max-age=31536000; includeSubDomains";
-    public string? XssProtection { get; set; } = "0";
-    public string? PermissionsPolicy { get; set; } = "camera=(), microphone=(), geolocation=()";
-    public string? ContentSecurityPolicy { get; set; }
-}
-
 public sealed class StaticFileOptions
 {
     public string IndexFile { get; set; } = "index.html";
@@ -86,38 +75,8 @@ public static class ProductionExtensions
         return app.Use(SecurityHeadersMiddleware(options));
     }
 
-    public static ReptarMiddleware SecurityHeadersMiddleware(SecurityHeadersOptions? options = null)
-    {
-        var opts = options ?? new SecurityHeadersOptions();
-
-        return async (ctx, next) =>
-        {
-            var response = await next();
-
-            if (!string.IsNullOrEmpty(opts.ContentTypeOptions))
-                response.Headers.TryAdd("X-Content-Type-Options", opts.ContentTypeOptions);
-
-            if (!string.IsNullOrEmpty(opts.FrameOptions))
-                response.Headers.TryAdd("X-Frame-Options", opts.FrameOptions);
-
-            if (!string.IsNullOrEmpty(opts.ReferrerPolicy))
-                response.Headers.TryAdd("Referrer-Policy", opts.ReferrerPolicy);
-
-            if (!string.IsNullOrEmpty(opts.StrictTransportSecurity))
-                response.Headers.TryAdd("Strict-Transport-Security", opts.StrictTransportSecurity);
-
-            if (!string.IsNullOrEmpty(opts.XssProtection))
-                response.Headers.TryAdd("X-XSS-Protection", opts.XssProtection);
-
-            if (!string.IsNullOrEmpty(opts.PermissionsPolicy))
-                response.Headers.TryAdd("Permissions-Policy", opts.PermissionsPolicy);
-
-            if (!string.IsNullOrEmpty(opts.ContentSecurityPolicy))
-                response.Headers.TryAdd("Content-Security-Policy", opts.ContentSecurityPolicy);
-
-            return response;
-        };
-    }
+    public static ReptarMiddleware SecurityHeadersMiddleware(SecurityHeadersOptions? options = null) =>
+        Middlewares.SecurityHeaders(options);
 
     public static ReptarApp UseStaticFiles(
         this ReptarApp app,
@@ -263,34 +222,7 @@ public static class ProductionExtensions
         return opts.CacheControl;
     }
 
-    public static string ResolveMimeType(string filePath)
-    {
-        var ext = Path.GetExtension(filePath).ToLowerInvariant();
-        return ext switch
-        {
-            ".html" or ".htm" => "text/html; charset=utf-8",
-            ".css" => "text/css; charset=utf-8",
-            ".js" or ".mjs" => "text/javascript; charset=utf-8",
-            ".json" => "application/json; charset=utf-8",
-            ".map" => "application/json; charset=utf-8",
-            ".webmanifest" => "application/manifest+json; charset=utf-8",
-            ".svg" => "image/svg+xml",
-            ".png" => "image/png",
-            ".jpg" or ".jpeg" => "image/jpeg",
-            ".gif" => "image/gif",
-            ".webp" => "image/webp",
-            ".avif" => "image/avif",
-            ".ico" => "image/x-icon",
-            ".woff2" => "font/woff2",
-            ".woff" => "font/woff",
-            ".ttf" => "font/ttf",
-            ".otf" => "font/otf",
-            ".wasm" => "application/wasm",
-            ".txt" => "text/plain; charset=utf-8",
-            ".xml" => "application/xml; charset=utf-8",
-            ".pdf" => "application/pdf",
-            _ => "application/octet-stream",
-        };
-    }
+    public static string ResolveMimeType(string filePath) =>
+        Files.ContentTypeFor(filePath);
 }
 #endif

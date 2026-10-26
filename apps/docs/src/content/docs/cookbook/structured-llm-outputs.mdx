@@ -1,0 +1,72 @@
+---
+title: Structured LLM Outputs
+description: Make any model call return a validated C# record — Rule<T> renders the prompt schema, validates the reply, and retries with feedback until it passes.
+---
+
+Every LLM app eventually needs the model to return *data*, not prose — and hand-rolled JSON parsing of model output is where hallucinated fields and missing properties become runtime exceptions. Reptar closes the loop with the same validator you already use on inbound routes.
+
+`client.GenerateAsync<T>(...)` renders the JSON Schema **from your `Rule<T>`** (the identical schema your OpenAPI export shows), parses the reply, validates it, and when validation fails, feeds the issues back to the model and retries automatically.
+
+---
+
+## 1. One call, a validated record out
+
+```csharp
+using Reptar.AI;
+
+public sealed record ExtractedOrder(string OrderId, string CustomerEmail, decimal Total);
+
+public sealed class OrderAiService(ILlmClient llm)
+{
+    private static readonly Validator<ExtractedOrder> OrderValidator = ReptarApi.Rule<ExtractedOrder>()
+        .Prop(x => x.OrderId, r => r.NotNull().Pattern(@"^ORD-\d{6}$"))
+        .Prop(x => x.CustomerEmail, r => r.NotNull().Email())
+        .Prop(x => x.Total, r => r.Min(0));
+
+    public async Task<ExtractedOrder?> ExtractAsync(string emailBody, CancellationToken ct)
+    {
+        var result = await llm.GenerateAsync(
+            $"Extract the order from this email:\n\n{emailBody}",
+            OrderValidator,
+            maxRetries: 2,
+            onRetry: (raw, issues, attempt) =>
+                _logger.LogInformation("Retry {Attempt}: {Issues}", attempt,
+                    string.Join("; ", issues.Select(i => i.Message))),
+            cancellationToken: ct);
+
+        // result.Value is a validated ExtractedOrder — or null with result.Issues populated.
+        return result.Succeeded ? result.Value : null;
+    }
+}
+```
+
+The conversation is appended to a `List<ChatMessage>` you can persist into an agent session (`result.History`), so corrections survive compaction.
+
+## 2. What the model actually sees
+
+The system prompt embeds the validator's schema — `minLength`, `maximum`, `format: email`, `pattern`, required fields — the same generator the OpenAPI export uses, so the model's contract and your validation contract are literally the same object:
+
+```text
+The JSON object must conform to this JSON Schema:
+{
+  "type": "object",
+  "properties": {
+    "orderId": { "type": "string", "pattern": "^ORD-\\d{6}$" },
+    "customerEmail": { "type": "string", "format": "email" },
+    "total": { "type": "number", "minimum": 0 }
+  },
+  "required": ["orderId", "customerEmail", "total"]
+}
+```
+
+Markdown fences and stray prose around the JSON are stripped automatically; a reply that fails validation comes back as feedback ("customerEmail: must be a valid email address") appended to the conversation for the next attempt.
+
+## 3. AOT notes
+
+Parsing uses `JsonSerializerOptions` you control. In the dev host the defaults work; under Native AOT, pass options backed by a source-generated `JsonSerializerContext` — the schema prompt itself is reflection-free (it is rendered from the validator's materialized metadata).
+
+## 4. Wiring it to the rest of the engine
+
+- Feed the output to the [agent harness](/ai/agent-harness/) as one step of a workflow.
+- Judge quality with the [agent evals](/cookbook/agent-evals/) runner — the LLM-judge scorer uses this exact API for its verdicts.
+- Resolve the client with `LlmClientFactory.FromEnvironment()` (OpenAI, Anthropic, Gemini, Ollama) or route through the [AI Gateway](/ai/ai-gateway/) for caching and failover.

@@ -1,0 +1,55 @@
+# Reptar documentation — https://reptar-docs.rocktown-labs.workers.dev
+#
+# Machine-readable AI context is served at:
+#   /llms.txt        — index with sections and links
+#   /llms-full.txt   — every page concatenated, in sidebar order
+#   /llms-small.txt  — abridged set for small context windows
+#
+# Stance: all AI agents — search, retrieval, training, and grounding — are
+# welcome to read this documentation. The docs are public; use them.
+
+User-agent: *
+Allow: /
+
+# AI search & answer discovery
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: Perplexity-User
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+User-agent: meta-webindexer
+Allow: /
+
+User-agent: meta-externalfetcher
+Allow: /
+
+# Model training & grounding
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+Sitemap: https://reptar-docs.rocktown-labs.workers.dev/sitemap-index.xml

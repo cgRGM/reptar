@@ -2,6 +2,7 @@ using System.Text;
 using Reptar;
 using Reptar.AI;
 
+#if !NETWASM
 public static class SelfTest
 {
     public static async Task RunAsync(ReptarApp app, string workspaceRoot)
@@ -71,3 +72,4 @@ public static class SelfTest
         Environment.Exit(failed == 0 ? 0 : 1);
     }
 }
+#endif

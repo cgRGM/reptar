@@ -1,0 +1,66 @@
+---
+title: Background Tasks & WaitUntil
+description: Serverless-safe post-response background execution (FastAPI BackgroundTasks & Hono waitUntil pattern).
+---
+
+When handling API requests, slow side effects (sending transactional emails, reporting metrics, triggering downstream webhooks) should never delay the HTTP response.
+
+In traditional servers, developers often call `Task.Run(...)`. However, on serverless runtimes like **Cloudflare Workers**, the JavaScript isolate freezes the moment the response stream completes—causing unawaited background tasks to stall or abort.
+
+Reptar solves this with `ctx.WaitUntil()`, combining **FastAPI's BackgroundTasks** and **Hono's executionCtx.waitUntil()** into a universal C# primitive.
+
+---
+
+## 1. Fire-and-Forget Post-Response Execution
+
+Use `ctx.WaitUntil()` to return an HTTP response immediately while ensuring background work completes reliably:
+
+```csharp
+app.Post("/api/signup", async ctx =>
+{
+    var signup = await ctx.BindJsonAsync<SignupRequest>();
+
+    // Persist new user to D1 or SQLite
+    var user = await CreateUserAsync(ctx.Db, signup);
+
+    // Schedule background tasks without delaying client TTFT
+    ctx.WaitUntil(async () =>
+    {
+        // On Workers, executionCtx.waitUntil keeps the isolate alive
+        // On Kestrel, runs on the thread pool with top-level error capture
+        await SendWelcomeEmailAsync(user.Email);
+        await TrackAnalyticsEventAsync("user_signup", user.Id);
+    });
+
+    return ctx.Json(new { id = user.Id, email = user.Email }, status: 201);
+});
+```
+
+---
+
+## 2. Universal Portability
+
+| Environment | Behavior |
+| :-- | :-- |
+| **Cloudflare Workers (`netwasm0.1`)** | Passes the asynchronous task to `ctx.executionCtx.waitUntil(promise)`. The Worker isolate remains warm and executing until all tasks resolve. |
+| **Kestrel & Linux Native AOT (`net10.0`)** | Dispatches to the .NET thread pool via `Task.Run()` immediately following response header flush, automatically logging any unhandled task exceptions to `ctx.Log`. |
+
+---
+
+## 3. Emitting Server-Timing Metrics
+
+Pair background tasks with `ctx.ServerTiming()` to give developers visibility into internal timings without exposing internal database structures:
+
+```csharp
+app.Get("/api/dashboard", async ctx =>
+{
+    var sw = Stopwatch.StartNew();
+    var stats = await LoadDashboardStatsAsync(ctx.Db);
+    sw.Stop();
+
+    // Emits: Server-Timing: db;dur=12.4;desc="stats query"
+    ctx.ServerTiming("db", sw.Elapsed.TotalMilliseconds, "stats query");
+
+    return ctx.Json(stats);
+});
+```

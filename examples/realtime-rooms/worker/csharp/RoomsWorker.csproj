@@ -1,0 +1,19 @@
+<Project Sdk="NetWasm.Sdk">
+  <PropertyGroup>
+    <OutputType>JsModule</OutputType>
+    <NetWasmJavaScriptHosts>page</NetWasmJavaScriptHosts>
+    <TargetFramework>netwasm0.1</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>RoomsWorker</AssemblyName>
+    <NetWasmOptimization>O0</NetWasmOptimization>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../../framework/Reptar.Wasm/Reptar.Wasm.csproj" />
+    <Compile Include="../../schema.cs" />
+    <Compile Include="../../hub.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <NetWasmJavaScriptModule Include="app.host.mjs" Module="app.host" />
+  </ItemGroup>
+</Project>

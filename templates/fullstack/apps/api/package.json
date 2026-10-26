@@ -1,0 +1,10 @@
+{
+  "name": "@{{PROJECT_NAME}}/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun ../../scripts/reptar.ts dev",
+    "build": "bun ../../scripts/reptar.ts build",
+    "codegen": "bun ../../scripts/reptar.ts codegen"
+  }
+}

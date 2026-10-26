@@ -1,0 +1,182 @@
+---
+title: In-Memory Testing & TestClient
+description: Sub-millisecond endpoint unit testing with zero TCP port binding, socket churn, or OS firewall prompts.
+---
+
+import { Code } from "@astrojs/starlight/components";
+
+Testing web APIs typically requires spinning up a local HTTP listener on a random TCP port, waiting for sockets to bind, and sending real network requests. This introduces socket exhaustion, port collisions in CI, and OS firewall authorization prompts.
+
+Reptar provides **`app.CreateTestClient()`** (`ReptarTestClient`), an in-memory testing engine that executes the entire HTTP pipeline—routing, validation, middleware, handlers, and background tasks—in process without binding to a network port.
+
+---
+
+## Quick Example
+
+```csharp
+using Xunit;
+using Reptar;
+
+public class TaskApiTests
+{
+    [Fact]
+    public async Task GetTasks_ReturnsOkWithList()
+    {
+        var app = ReptarApp.Create();
+        app.Get("/tasks", ctx => ctx.Json(new[] { "task1", "task2" }));
+
+        var client = app.CreateTestClient();
+        var response = await client.GetAsync("/tasks");
+
+        Assert.Equal(200, response.StatusCode);
+        var tasks = response.Json<string[]>();
+        Assert.NotNull(tasks);
+        Assert.Equal(2, tasks.Length);
+    }
+}
+```
+
+Tests run in **sub-millisecond time** (typically under 100 microseconds per call) because no OS network stack, socket buffers, or TLS handshakes are involved.
+
+---
+
+## `ReptarTestClient` API Reference
+
+Calling `app.CreateTestClient()` returns an instance of `ReptarTestClient` with the following methods:
+
+| Method | Signature | Description |
+| :-- | :-- | :-- |
+| `GetAsync` | `GetAsync(string path, IDictionary<string, string>? headers = null)` | Issues an in-memory `GET` request. |
+| `PostAsync` | `PostAsync(string path, byte[]? body = null, IDictionary<string, string>? headers = null)` | Issues an in-memory `POST` request with raw bytes. |
+| `PostJsonAsync` | `PostJsonAsync<T>(string path, T data, IDictionary<string, string>? headers = null)` | Serializes `data` to UTF-8 JSON and issues a `POST` request. |
+| `PutAsync` | `PutAsync(string path, byte[]? body = null, IDictionary<string, string>? headers = null)` | Issues an in-memory `PUT` request with raw bytes. |
+| `PutJsonAsync` | `PutJsonAsync<T>(string path, T data, IDictionary<string, string>? headers = null)` | Serializes `data` to UTF-8 JSON and issues a `PUT` request. |
+| `DeleteAsync` | `DeleteAsync(string path, IDictionary<string, string>? headers = null)` | Issues an in-memory `DELETE` request. |
+
+---
+
+## Inspecting Responses
+
+The returned `ReptarResponse` exposes convenient helper properties for test assertions:
+
+```csharp
+var client = app.CreateTestClient();
+var res = await client.PostJsonAsync("/api/posts", new { title = "Hello World" });
+
+// HTTP Status code
+Assert.Equal(201, res.StatusCode);
+
+// Strongly typed deserialization
+var created = res.Json<PostRecord>();
+Assert.Equal("Hello World", created?.Title);
+
+// Inspect raw body string
+Assert.Contains("Hello World", res.BodyText);
+
+// Inspect headers
+Assert.Equal("application/json; charset=utf-8", res.Header("content-type"));
+```
+
+---
+
+## Testing Validation Failures
+
+When input fails validation via `Rule<T>()`, you can verify that the API returns `400 Bad Request` with structured validation issues:
+
+```csharp
+[Fact]
+public async Task CreatePost_WithEmptyTitle_ReturnsBadRequest()
+{
+    var app = ReptarApp.Create();
+    var schema = Rule<CreatePost>()
+        .Prop(x => x.Title, r => r.Min(3));
+
+    app.Post("/posts", schema, (ctx, input) => ctx.Json(input, 201));
+
+    var client = app.CreateTestClient();
+    var response = await client.PostJsonAsync("/posts", new { title = "a" });
+
+    Assert.Equal(400, response.StatusCode);
+    Assert.Contains("Validation failed", response.BodyText);
+}
+```
+
+---
+
+## Testing Declarative Policies & Authorization
+
+Verify that resource authorization policies (`app.DefinePolicy<T>` and `ctx.Authorize<T>`) properly permit owners and deny unauthorized users:
+
+```csharp
+[Fact]
+public async Task UpdatePost_UnauthorizedUser_ReturnsForbidden()
+{
+    var app = ReptarApp.Create();
+
+    app.DefinePolicy<PostRecord>("post:edit", (user, post) =>
+        user is not null && (user.Role == "admin" || post.AuthorId == user.Id));
+
+    app.Put("/posts/:id", async ctx =>
+    {
+        var post = new PostRecord("post_123", "Other Author", "Content");
+
+        if (!ctx.Authorize("post:edit", post, out var forbidden))
+            return forbidden;
+
+        return ctx.Json(post);
+    });
+
+    var client = app.CreateTestClient();
+
+    // Anonymous request has no ctx.User, policy fails -> 403 Forbidden
+    var response = await client.PutJsonAsync("/posts/post_123", new { content = "Hacked" });
+    Assert.Equal(403, response.StatusCode);
+}
+```
+
+---
+
+## Testing Background Tasks (`ctx.WaitUntil`)
+
+When handlers enqueue background tasks with `ctx.WaitUntil(Func<Task>)`, the `ReptarTestClient` executes the handler, flushes the HTTP response, and automatically awaits all background tasks before completing `HandleAsync`.
+
+This ensures background work runs deterministically in your test assertions without flaky `Thread.Sleep` or arbitrary polling delays:
+
+```csharp
+[Fact]
+public async Task OrderCreated_ExecutesBackgroundEmail()
+{
+    var emailSent = false;
+    var app = ReptarApp.Create();
+
+    app.Post("/orders", ctx =>
+    {
+        ctx.WaitUntil(async () =>
+        {
+            await Task.Yield();
+            emailSent = true;
+        });
+
+        return Task.FromResult(ctx.Created(new { orderId = "ord_1" }));
+    });
+
+    var client = app.CreateTestClient();
+    var res = await client.PostJsonAsync("/orders", new { item = "book" });
+
+    Assert.Equal(201, res.StatusCode);
+    // Background task completed deterministically before client returned
+    Assert.True(emailSent);
+}
+```
+
+---
+
+## Running Test Suites via CLI
+
+Run all tests in your workspace using the Reptar CLI:
+
+```bash
+bun reptar test
+```
+
+This compiles your tests with .NET 10.0 and runs them in parallel with xUnit reporting.

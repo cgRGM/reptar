@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Reptar;
 
-public sealed class Ctx
+public sealed partial class Ctx
 {
     private readonly ServiceSet _services;
     private string? _requestId;
@@ -42,6 +42,24 @@ public sealed class Ctx
     public SessionUser? User { get; set; }
     public JwtPayload? Claims { get; set; }
 
+    /// <summary>Per-request database timing, populated by InstrumentedDbClient.</summary>
+    public DbMetrics DbMetrics { get; } = new();
+
+    /// <summary>Cancellation token for the current request (host timeout/abort).</summary>
+    public CancellationToken RequestAborted { get; internal set; } = CancellationToken.None;
+
+    /// <summary>Matched route template (e.g. /posts/:id), or the raw path on 404.</summary>
+    public string? RoutePattern { get; internal set; }
+
+    /// <summary>W3C trace id parsed from traceparent, or a generated id.</summary>
+    public string? TraceId { get; internal set; }
+
+    /// <summary>W3C span id for this request.</summary>
+    public string? SpanId { get; internal set; }
+
+    /// <summary>W3C parent span id parsed from the incoming traceparent.</summary>
+    public string? ParentSpanId { get; internal set; }
+
     public async Task<SessionUser?> UserAsync()
     {
         if (User is not null) return User;
@@ -58,6 +76,83 @@ public sealed class Ctx
     }
 
     public void SetHeader(string name, string value) => PendingHeaders[name] = value;
+
+    private readonly List<Task> _backgroundTasks = new();
+    public IReadOnlyList<Task> BackgroundTasks => _backgroundTasks;
+
+    /// <summary>
+    /// Enqueues background work that executes after or alongside the response.
+    /// On Cloudflare Workers (NetWasm), keeps the execution isolate alive.
+    /// On Kestrel, runs on the thread pool with top-level error capture.
+    /// </summary>
+    public void WaitUntil(Task task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        _backgroundTasks.Add(task);
+    }
+
+    /// <summary>
+    /// Enqueues background work via a delegate.
+    /// </summary>
+    public void WaitUntil(Func<Task> action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+#if NETWASM
+        _backgroundTasks.Add(action());
+#else
+        _backgroundTasks.Add(Task.Run(action));
+#endif
+    }
+
+    /// <summary>
+    /// FastAPI / Hono alias for <see cref="WaitUntil(Func{Task})"/>.
+    /// </summary>
+    public void BackgroundTask(Func<Task> action) => WaitUntil(action);
+
+    /// <summary>
+    /// Emits a standard Server-Timing header (e.g. Server-Timing: db;dur=14.2;desc="query")
+    /// visible in browser DevTools network waterfall.
+    /// </summary>
+    public void ServerTiming(string metric, double durationMs, string? description = null)
+    {
+        var durStr = durationMs.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture);
+        var entry = description is { Length: > 0 }
+            ? $"{metric};dur={durStr};desc=\"{description}\""
+            : $"{metric};dur={durStr}";
+
+        if (PendingHeaders.TryGetValue("Server-Timing", out var existing) && existing.Length > 0)
+        {
+            PendingHeaders["Server-Timing"] = $"{existing}, {entry}";
+        }
+        else
+        {
+            PendingHeaders["Server-Timing"] = entry;
+        }
+    }
+
+    /// <summary>
+    /// Evaluates whether the current user is authorized to perform <paramref name="action"/> on <paramref name="resource"/>
+    /// using policies registered via app.DefinePolicy&lt;T&gt;().
+    /// </summary>
+    public bool Can<TResource>(string action, TResource resource) =>
+        _services.Policies.Can(User, action, resource);
+
+    /// <summary>
+    /// Authorizes the action or returns 403 Forbidden with a descriptive message.
+    /// </summary>
+    public bool Authorize<TResource>(
+        string action,
+        TResource resource,
+        [NotNullWhen(false)] out ReptarResponse? forbiddenResponse)
+    {
+        if (Can(action, resource))
+        {
+            forbiddenResponse = null;
+            return true;
+        }
+        forbiddenResponse = Forbidden($"You do not have permission to perform '{action}'.");
+        return false;
+    }
 
     public ReptarResponse Json<
         [DynamicallyAccessedMembers(
@@ -168,4 +263,5 @@ internal sealed record ServiceSet(
     IJsonCodec Json,
     IErrorMapper Errors,
     IAppLogger Log,
-    IWebSocketTransport WebSocket);
+    IWebSocketTransport WebSocket,
+    IPolicyManager Policies);

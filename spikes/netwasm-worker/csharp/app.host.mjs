@@ -9,7 +9,32 @@ export const batch = (batchJson) => globalThis.__REPTAR_DB_BATCH(batchJson);
 export const r2put = (key, bytes, contentType) =>
   globalThis.__REPTAR_R2_PUT(key, bytes, contentType);
 
+export const r2putoptions = (
+  key,
+  bytes,
+  contentType,
+  cacheControl,
+  metadataJson,
+  onlyIfAbsent
+) =>
+  globalThis.__REPTAR_R2_PUT_OPTIONS(
+    key,
+    bytes,
+    contentType,
+    cacheControl,
+    metadataJson,
+    onlyIfAbsent
+  );
+
 export const r2get = (key) => globalThis.__REPTAR_R2_GET(key);
+
+export const r2getrange = (key, offset, length) =>
+  globalThis.__REPTAR_R2_GET_RANGE(key, offset, length);
+
+export const r2head = (key) => globalThis.__REPTAR_R2_HEAD(key);
+
+export const r2list = (prefix, cursor, limit) =>
+  globalThis.__REPTAR_R2_LIST(prefix, cursor, limit);
 
 export const r2exists = (key) => globalThis.__REPTAR_R2_EXISTS(key);
 
@@ -25,6 +50,20 @@ export const kvDelete = (key) => globalThis.__REPTAR_KV_DELETE(key);
 export const queueSend = (queueName, messageJson) =>
   globalThis.__REPTAR_QUEUE_SEND(queueName, messageJson);
 
+export const queueSendWithOptions = (
+  queueName,
+  messageJson,
+  delaySeconds
+) =>
+  globalThis.__REPTAR_QUEUE_SEND_OPTIONS(
+    queueName,
+    messageJson,
+    delaySeconds
+  );
+
+export const queueSendBatch = (queueName, messagesJson) =>
+  globalThis.__REPTAR_QUEUE_SEND_BATCH(queueName, messagesJson);
+
 export const aiRun = (model, prompt) =>
   globalThis.__REPTAR_AI_RUN(model, prompt);
 
@@ -33,6 +72,21 @@ export const durableFetch = (namespace, id, path, method, body) =>
 
 export const httpFetch = (url, method, headersJson, body) =>
   globalThis.__REPTAR_HTTP_FETCH(url, method, headersJson, body);
+
+export const httpFetchBytes = (
+  url,
+  method,
+  headersJson,
+  body,
+  contentType
+) =>
+  globalThis.__REPTAR_HTTP_FETCH_BYTES(
+    url,
+    method,
+    headersJson,
+    body,
+    contentType
+  );
 
 export const hashPassword = (password) =>
   globalThis.__REPTAR_CRYPTO_HASH_PASSWORD(password);
@@ -62,6 +116,9 @@ export const wsCommand = (sessionId, json) => {
 
 export const respond = (requestId, json) =>
   globalThis.__REPTAR_RESPOND(requestId, json);
+
+export const telemetry = (json) =>
+  globalThis.__REPTAR_TELEMETRY(json);
 
 export const streamStart = (requestId, status, headersJson, cookiesJson) =>
   globalThis.__REPTAR_STREAM_START(requestId, status, headersJson, cookiesJson);

@@ -47,8 +47,13 @@ public sealed record MigrationResult(
 
 public static class MigrationRunner
 {
+    private static IDbClient Unwrap(IDbClient db) =>
+        db is InstrumentedDbClient instrumented ? instrumented.Inner : db;
+
     public static async Task EnsureMigrationTableAsync(IDbClient db)
     {
+        db = Unwrap(db);
+
         if (db is MySqlDbClient)
         {
             await db.ExecuteAsync(@"
@@ -85,6 +90,7 @@ public static class MigrationRunner
 
     public static async Task<HashSet<string>> GetAppliedMigrationIdsAsync(IDbClient db)
     {
+        db = Unwrap(db);
         await EnsureMigrationTableAsync(db);
 
         var sql = db is MySqlDbClient
@@ -99,6 +105,7 @@ public static class MigrationRunner
         IDbClient db,
         IEnumerable<IMigration> migrations)
     {
+        db = Unwrap(db);
         await EnsureMigrationTableAsync(db);
         var applied = await GetAppliedMigrationIdsAsync(db);
         var ordered = migrations.OrderBy(m => m.Id, StringComparer.Ordinal).ToList();
@@ -149,6 +156,7 @@ public static class MigrationRunner
     {
         if (steps <= 0) return Array.Empty<MigrationResult>();
 
+        db = Unwrap(db);
         await EnsureMigrationTableAsync(db);
         var applied = await GetAppliedMigrationIdsAsync(db);
         var migrationMap = migrations.ToDictionary(m => m.Id, StringComparer.Ordinal);

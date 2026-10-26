@@ -20,7 +20,8 @@ COPY ${APP_DIR}/ /src/${APP_DIR}/
 
 WORKDIR /src/${APP_DIR}
 
-# Publish Native AOT self-contained binary for Linux x64
+# Publish Native AOT self-contained binary for Linux x64. The final checks
+# fail the build if publish silently fell back to a JIT apphost.
 RUN dotnet publish app.cs \
     -r linux-x64 \
     -c Release \
@@ -29,7 +30,9 @@ RUN dotnet publish app.cs \
     -p:DebugType=None \
     -p:DebugSymbols=false \
     -o /app/publish && \
-    (mv /app/publish/app /app/publish/reptar || true) && \
+    if [ -f /app/publish/app ]; then mv /app/publish/app /app/publish/reptar; fi && \
+    test -x /app/publish/reptar && \
+    test ! -f /app/publish/app.dll && \
     rm -f /app/publish/*.dbg
 
 # Runtime stage: Ubuntu 24.04 Chiseled distroless (matches SDK glibc, minimal attack surface, no shell, no package manager)

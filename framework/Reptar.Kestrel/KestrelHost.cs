@@ -3,6 +3,8 @@ using System.IO.Pipelines;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.ResponseCompression;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace Reptar.Hosting;
@@ -46,6 +48,24 @@ public static class KestrelHost
             builder.Logging.ClearProviders();
         }
 
+        // Kestrel-only response compression. Cloudflare compresses at the edge;
+        // this covers containers/VPS. SSE is intentionally excluded.
+        builder.Services.AddResponseCompression(options =>
+        {
+            options.EnableForHttps = true;
+            options.MimeTypes =
+            [
+                "application/json",
+                "application/problem+json",
+                "text/plain",
+                "text/html",
+                "text/css",
+                "application/javascript",
+                "text/javascript",
+                "image/svg+xml",
+            ];
+        });
+
         var port = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var configuredPort)
             ? configuredPort
             : 8787;
@@ -71,9 +91,17 @@ public static class KestrelHost
 
         var web = builder.Build();
 
+        // One-line identity banner: in multi-agent/multi-process repos,
+        // knowing exactly which build is on which port (and its pid) is the
+        // difference between debugging and ghost-hunting.
+        Console.WriteLine(
+            $"Reptar listening on http://{(host is null ? "[any]" : host)}:{port} " +
+            $"(pid {Environment.ProcessId}, .NET {Environment.Version})");
+
         var kestrelTransport = new KestrelWebSocketTransport();
         app.SetWebSocketTransport(kestrelTransport);
 
+        web.UseResponseCompression();
         web.UseWebSockets();
 
         web.Use(async (HttpContext http, RequestDelegate _) =>
@@ -136,7 +164,189 @@ public static class KestrelHost
             await WriteResponse(http, response);
         });
 
-        await web.RunAsync();
+        await app.StartModulesAsync();
+
+        // Background workers: the queue poller drains the configured
+        // consumer adapter and the cron scheduler evaluates OnScheduled
+        // expressions. Workers never needs these — the platform invokes you.
+        var backgroundCts = new CancellationTokenSource();
+        web.Lifetime.ApplicationStopping.Register(() => backgroundCts.Cancel());
+
+        if (app.Queues is IQueueConsumer && app.QueueNames.Count > 0)
+        {
+            Console.WriteLine(
+                $"Reptar queue poller: {app.QueueNames.Count} queue(s), " +
+                $"interval {EnvInt("REPTAR_QUEUE_POLL_SECS", 2)}s, " +
+                $"batch {EnvInt("REPTAR_QUEUE_BATCH", 25)}");
+            _ = Task.Run(() => PollQueuesAsync(app, backgroundCts.Token), CancellationToken.None);
+        }
+
+        if (app.CronExpressions.Count > 0)
+        {
+            Console.WriteLine(
+                $"Reptar cron scheduler: {app.CronExpressions.Count} schedule(s), " +
+                $"tick {EnvInt("REPTAR_CRON_TICK_SECS", 15)}s");
+            _ = Task.Run(() => RunCronAsync(app, backgroundCts.Token), CancellationToken.None);
+        }
+
+        try
+        {
+            await web.RunAsync();
+        }
+        finally
+        {
+            backgroundCts.Cancel();
+            await app.DisposeAsync();
+        }
+    }
+
+    private static async Task PollQueuesAsync(ReptarApp app, CancellationToken ct)
+    {
+        if (app.Queues is not IQueueConsumer consumer)
+            return;
+
+        var queues = app.QueueNames;
+        if (queues.Count == 0)
+            return;
+
+        if (consumer is DbQueueClient dbQueue)
+            await dbQueue.EnsureCreatedAsync();
+
+        var pollSeconds = Math.Max(1, EnvInt("REPTAR_QUEUE_POLL_SECS", 2));
+        var batchSize = Math.Max(1, EnvInt("REPTAR_QUEUE_BATCH", 25));
+
+        while (!ct.IsCancellationRequested)
+        {
+            var idle = true;
+            try
+            {
+                foreach (var queue in queues)
+                {
+                    var batch = await consumer.ReceiveAsync(queue, batchSize, ct);
+                    if (batch is null || batch.Messages.Count == 0)
+                        continue;
+
+                    idle = false;
+                    await HandleBatchAsync(app, consumer, queue, batch);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[QueuePoller] {ex.Message}");
+            }
+
+            // Drain continuously while work exists; back off when idle so an
+            // empty queue costs one near-nothing wake per interval.
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(idle ? pollSeconds : 0.1), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    private static async Task HandleBatchAsync(
+        ReptarApp app,
+        IQueueConsumer consumer,
+        string queue,
+        QueueBatch batch)
+    {
+        var result = await app.HandleQueueBatchAsync(batch);
+
+        if (result.Success)
+        {
+            await consumer.AckAsync(queue, batch);
+            return;
+        }
+
+        var failedIds = new HashSet<string>(result.FailedMessageIds, StringComparer.Ordinal);
+        var delays = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var retry in result.Retries ?? [])
+            delays[retry.MessageId] = retry.DelaySeconds;
+
+        var succeeded = new List<QueueMessage>();
+        var failed = new List<QueueMessage>();
+        foreach (var message in batch.Messages)
+        {
+            if (failedIds.Contains(message.Id))
+                failed.Add(message);
+            else
+                succeeded.Add(message);
+        }
+
+        if (succeeded.Count > 0)
+            await consumer.AckAsync(queue, new QueueBatch(Ids.New("qbatch"), queue, succeeded));
+
+        if (failed.Count > 0)
+            await consumer.RetryAsync(
+                queue,
+                new QueueBatch(Ids.New("qbatch"), queue, failed),
+                delays);
+    }
+
+    private static async Task RunCronAsync(ReptarApp app, CancellationToken ct)
+    {
+        var crons = app.CronExpressions;
+        if (crons.Count == 0)
+            return;
+
+        var tickSeconds = Math.Max(1, EnvInt("REPTAR_CRON_TICK_SECS", 15));
+        var lastFired = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                var now = DateTimeOffset.UtcNow;
+                foreach (var cron in crons)
+                {
+                    if (!CronExpr.Matches(cron, now))
+                        continue;
+
+                    // Fire at most once per matched tick: 5-field expressions
+                    // dedupe per minute; 6-field expressions include seconds.
+                    var key = CronExpr.HasSeconds(cron)
+                        ? $"{now.ToUnixTimeSeconds() / 60}:{now.Second}"
+                        : $"{now.ToUnixTimeSeconds() / 60}";
+
+                    if (lastFired.TryGetValue(cron, out var last) && last == key)
+                        continue;
+
+                    lastFired[cron] = key;
+                    await app.HandleScheduledAsync(new ScheduledEvent(cron, now.ToString("O")));
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[Cron] {ex.Message}");
+            }
+
+            try
+            {
+                await Task.Delay(TimeSpan.FromSeconds(tickSeconds), ct);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
+    }
+
+    private static int EnvInt(string name, int fallback)
+    {
+        var raw = Environment.GetEnvironmentVariable(name);
+        return int.TryParse(raw, out var value) && value > 0 ? value : fallback;
     }
 
     internal sealed class KestrelWebSocketTransport : IWebSocketTransport
@@ -383,6 +593,7 @@ public static class KestrelHost
             Cookies = cookies,
             Body = body,
             BodyTooLarge = bodyTooLarge,
+            Aborted = http.RequestAborted,
         };
     }
 
@@ -427,6 +638,7 @@ public static class KestrelHost
             Cookies = cookies,
             Body = [],
             BodyTooLarge = false,
+            Aborted = http.RequestAborted,
         };
     }
 
@@ -465,8 +677,11 @@ public static class KestrelHost
             http.Response.ContentLength = body.Length;
             await http.Response.BodyWriter.WriteAsync(body, http.RequestAborted);
         }
-        else
+        else if (response.Status is not 204 and not 304 &&
+                 !http.Response.Headers.ContainsKey("Content-Length"))
         {
+            // HEAD responses carry the representation's Content-Length from
+            // ctx.File; do not overwrite it with zero.
             http.Response.ContentLength = 0;
         }
     }

@@ -1,0 +1,118 @@
+---
+title: D1 Persistence & Migrations (Local SQLite to Production D1)
+description: Develop locally with SQLite WAL and deploy to Cloudflare D1 with zero code changes and drift-free migrations.
+---
+
+Reptar’s storage layer uses a dual-engine architecture:
+- **Local Development**: Ultra-fast SQLite with group commits and WAL mode (`Db.Sqlite("./data/app.db")`).
+- **Production Edge**: Serverless Cloudflare D1 (`Db.D1("DB")`).
+
+Because both engines implement `IDbClient` and compile through reflection-free `TableDef` and `ColumnRef<T>` tokens, **your query and migration code remains 100% identical between dev and production**.
+
+---
+
+## 1. Defining Tables Without Reflection
+
+Never use heavy ORM attribute annotations (`[PrimaryKey]`, `[Index]`, etc.) on DTO records. Define schema shapes using `TableDef` in a central `schema.cs`:
+
+```csharp
+public static class Schema
+{
+    public static readonly TableDef Posts = Db.Table("posts")
+        .Column("id", DbType.Text, primaryKey: true)
+        .Column("title", DbType.Text, notNull: true)
+        .Column("slug", DbType.Text, notNull: true, unique: true)
+        .Column("content", DbType.Text, notNull: true)
+        .Column("published", DbType.Integer, defaultValue: 0)
+        .Column("created_at", DbType.Text, defaultValue: "CURRENT_TIMESTAMP");
+}
+
+public sealed record PostRecord(
+    string Id,
+    string Title,
+    string Slug,
+    string Content,
+    long Published,
+    string CreatedAt
+) : IReptarEntity;
+```
+
+---
+
+## 2. Inspecting Schema Drift (`bun reptar db plan`)
+
+Reptar automatically compares your C# `TableDef` declarations against the live SQLite database schema:
+
+```bash
+bun reptar db plan --json
+```
+
+Output:
+```json
+{
+  "drift": true,
+  "tablesToAdd": ["posts"],
+  "columnsToAdd": [],
+  "indexesToAdd": ["idx_posts_slug"]
+}
+```
+
+---
+
+## 3. Generating & Applying Migrations
+
+### Generate a Migration File
+
+```bash
+bun reptar db generate add_posts_table
+```
+
+This creates a numbered SQL migration in `migrations/0001_add_posts_table.sql`:
+
+```sql
+-- Migration: 0001_add_posts_table
+CREATE TABLE "posts" (
+  "id" TEXT PRIMARY KEY,
+  "title" TEXT NOT NULL,
+  "slug" TEXT NOT NULL UNIQUE,
+  "content" TEXT NOT NULL,
+  "published" INTEGER DEFAULT 0,
+  "created_at" TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX "idx_posts_slug" ON "posts"("slug");
+```
+
+### Apply Migrations Locally
+
+```bash
+bun reptar db migrate
+```
+
+Reptar applies pending migrations inside a transaction, recording the migration timestamp in `_reptar_migrations`.
+
+---
+
+## 4. Deploying to Cloudflare D1 in Production
+
+When deploying to Cloudflare Workers, apply migrations directly to your remote D1 database:
+
+```bash
+# Using Cloudflare CLI (cf):
+cf d1 migrations apply DB --remote
+
+# Or using wrangler:
+wrangler d1 migrations apply DB --remote
+```
+
+In your C# code, the database client initializes seamlessly from the worker environment:
+
+```csharp
+var app = ReptarApp.Create(new ReptarConfig
+{
+#if NETWASM
+    Database = Db.D1("DB"),
+#else
+    Database = Db.Sqlite(Path.Combine(workspaceRoot, "app.db")),
+#endif
+});
+```

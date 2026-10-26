@@ -52,6 +52,14 @@ public sealed class SourceGenJsonCodec : IJsonCodec
             if (info is not null)
                 return info;
         }
+
+        foreach (var context in ReptarJson.Contexts)
+        {
+            var info = context.GetTypeInfo(type);
+            if (info is not null)
+                return info;
+        }
+
         return ReptarInternalJsonContext.Default.GetTypeInfo(type);
     }
 
@@ -84,6 +92,40 @@ public sealed class SourceGenJsonCodec : IJsonCodec
 [JsonSerializable(typeof(ErrorBody))]
 [JsonSerializable(typeof(ValidationIssue))]
 [JsonSerializable(typeof(ValidationError))]
+// Built-in auth response shapes. Registering them here means any app that
+// opts into SourceGenJsonCodec gets AOT-safe auth routes for free.
+[JsonSerializable(typeof(SessionUser))]
+[JsonSerializable(typeof(SessionResponse))]
+#if !NETWASM
+// The Wasm target links its own auth slice (Reptar.Wasm/Auth), so these
+// native-only response types are not part of that compilation.
+[JsonSerializable(typeof(Auth.SignInInput))]
+[JsonSerializable(typeof(Auth.SignUpInput))]
+[JsonSerializable(typeof(Auth.BuiltInSocialInput))]
+[JsonSerializable(typeof(Auth.RevokeSessionInput))]
+[JsonSerializable(typeof(Auth.ChangePasswordInput))]
+[JsonSerializable(typeof(Auth.CreateApiKeyInput))]
+[JsonSerializable(typeof(Auth.SessionInfo))]
+[JsonSerializable(typeof(List<Auth.SessionInfo>))]
+[JsonSerializable(typeof(Auth.ApiKeyInfo))]
+[JsonSerializable(typeof(List<Auth.ApiKeyInfo>))]
+[JsonSerializable(typeof(Auth.ApiKeyResponse))]
+[JsonSerializable(typeof(Auth.AuthErrorResponse))]
+[JsonSerializable(typeof(Auth.AuthUrlResponse))]
+[JsonSerializable(typeof(Auth.AuthSuccessResponse))]
+[JsonSerializable(typeof(BetterAuthSignInInput))]
+[JsonSerializable(typeof(BetterAuthSignUpInput))]
+[JsonSerializable(typeof(BetterAuthSocialInput))]
+[JsonSerializable(typeof(BetterAuthUser))]
+[JsonSerializable(typeof(BetterAuthSession))]
+[JsonSerializable(typeof(BetterAuthSessionResponse))]
+[JsonSerializable(typeof(BetterAuthSignInResponse))]
+[JsonSerializable(typeof(BetterAuthSocialResponse))]
+[JsonSerializable(typeof(BetterAuthSessionQueryResult))]
+#endif
+[JsonSerializable(typeof(Dictionary<string, bool>))]
+[JsonSerializable(typeof(Dictionary<string, string>))]
+[JsonSerializable(typeof(object))]
 public sealed partial class ReptarInternalJsonContext : JsonSerializerContext;
 
 public sealed class DefaultJsonCodec : IJsonCodec

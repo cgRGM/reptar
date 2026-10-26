@@ -61,6 +61,30 @@ export default Alchemy.Stack(
       name: "reptar-realworld",
     });
 
+    // Reptar Rooms — the NetWasm WebSocket presence/broadcast hub
+    // (examples/realtime-rooms). Build first:
+    //   bun scripts/reptar.ts build:worker:rooms
+    const roomsDb = yield* Cloudflare.D1.Database("rooms_db", {
+      migrations: "../../examples/realtime-rooms/worker/migrations",
+    });
+
+    const roomsWorker = yield* Cloudflare.Worker("rooms", {
+      assets: "../../examples/realtime-rooms/worker/public",
+      compatibility: {
+        date: "2026-10-22",
+      },
+      env: {
+        DB: roomsDb,
+        // Workers cannot send across another request's socket, so all room
+        // fanout runs inside this Durable Object (PartyKit room pattern).
+        ROOMS: Cloudflare.DurableObject("RoomsHub", {
+          className: "RoomsHub",
+        }),
+      },
+      main: "../../examples/realtime-rooms/worker/src/index.ts",
+      name: "reptar-rooms",
+    });
+
     const docsWorker = yield* Cloudflare.Website.StaticSite("docs", {
       command: "bun run build",
       cwd: "../../apps/docs",
@@ -92,6 +116,7 @@ export default Alchemy.Stack(
       db: db.databaseName,
       docs: docsWorker.url,
       realworld: realworldWorker.url,
+      rooms: roomsWorker.url,
       web: webWorker.url,
     };
   })

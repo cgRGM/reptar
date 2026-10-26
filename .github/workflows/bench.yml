@@ -1,0 +1,77 @@
+name: Benchmark Gate
+
+# Run this on the same class of machine as the baseline (the 2-vCPU VPS).
+# GitHub-hosted runners are too noisy for a 15% gate; use a self-hosted
+# benchmark runner with the `bench` label.
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: Comma-separated tiers/scenarios (default T0,T1,T4,T5,T10)
+        required: false
+        default: T0,T1,T4,T5,T10
+      duration:
+        description: Seconds per scenario
+        required: false
+        default: "5"
+      reps:
+        description: Repetitions per scenario
+        required: false
+        default: "1"
+      rps_drop:
+        description: Allowed RPS regression (0.15 = 15%)
+        required: false
+        default: "0.15"
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: [self-hosted, linux, x64, bench]
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Install oha
+        run: |
+          if ! command -v oha >/dev/null 2>&1; then
+            curl -sSL https://github.com/hatoo/oha/releases/latest/download/oha-linux-amd64 -o /usr/local/bin/oha
+            chmod +x /usr/local/bin/oha
+          fi
+          oha --version
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build benchmark binaries
+        run: bash bench/build.sh
+
+      - name: Size budgets
+        run: bun scripts/check-size.ts --aot bench/out/reptar/reptar-bench
+
+      - name: Run Reptar benchmark subset
+        env:
+          IMPLS: reptar
+          ONLY: ${{ inputs.only }}
+          DURATION: ${{ inputs.duration }}
+          REPS: ${{ inputs.reps }}
+          OHA_BIN: /usr/local/bin/oha
+        run: bash bench/run-vps.sh
+
+      - name: Gate against baseline
+        run: |
+          RESULTS="$(ls -dt bench/results/vps-* | head -1)"
+          bun scripts/bench-gate.ts \
+            --results "$RESULTS/reptar.json" \
+            --baseline bench/perf-baseline.json \
+            --rps-drop "${{ inputs.rps_drop }}"

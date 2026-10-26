@@ -9,7 +9,11 @@ import {
 } from "node:fs";
 import path from "node:path";
 
-import { inspectProject, resolveDbPath, resolveMigrationsDir } from "./inspect";
+import {
+  inspectProject,
+  resolveDatabaseTarget,
+  resolveMigrationsDir,
+} from "./inspect";
 
 export interface ParsedColumn {
   name: string;
@@ -107,8 +111,13 @@ export const loadCompilerTables = (
   const schemaCandidates = [
     path.join(cwd, "rpc/schema.json"),
     path.join(cwd, "schema.json"),
-    path.join(repoRoot, "packages/rpc/schema.json"),
-    path.join(repoRoot, "examples/blog/rpc/schema.json"),
+    path.join(cwd, "packages/client/src/schema.json"),
+    ...(cwd === repoRoot
+      ? [
+          path.join(repoRoot, "packages/rpc/schema.json"),
+          path.join(repoRoot, "examples/blog/rpc/schema.json"),
+        ]
+      : []),
   ];
 
   for (const candidate of schemaCandidates) {
@@ -120,15 +129,23 @@ export const loadCompilerTables = (
     }
   }
 
-  // Try invoking the app with --schema if app.cs exists
+  // Try invoking the app with --schema if app.cs exists. Use the pinned SDK
+  // when available: file-based app directives need it.
   const appCandidates = [
     path.join(cwd, "app.cs"),
-    path.join(repoRoot, "examples/blog/app.cs"),
+    ...(cwd === repoRoot ? [path.join(repoRoot, "examples/blog/app.cs")] : []),
   ];
+  const pinnedDotnet = path.join(repoRoot, ".reptar", "sdk", "dotnet");
+  const dotnetCommand = existsSync(pinnedDotnet)
+    ? pinnedDotnet
+    : process.env.DOTNET_ROOT
+      ? path.join(process.env.DOTNET_ROOT, "dotnet")
+      : "dotnet";
+
   for (const appCs of appCandidates) {
     if (existsSync(appCs)) {
       try {
-        const res = spawnSync("dotnet", ["run", appCs, "--", "--schema"], {
+        const res = spawnSync(dotnetCommand, ["run", appCs, "--", "--schema"], {
           cwd: path.dirname(appCs),
           encoding: "utf-8",
           timeout: 15_000,
@@ -269,8 +286,14 @@ export const discoverProjectTablesWithSource = (
     path.join(cwd, "schema"),
     path.join(cwd, "features"),
     cwd,
-    path.join(repoRoot, "examples/blog/schema"),
-    path.join(repoRoot, "examples/realworld/schema"),
+    // Repo-root fallbacks must not leak the blog/realworld schemas into an
+    // explicitly targeted app.
+    ...(cwd === repoRoot
+      ? [
+          path.join(repoRoot, "examples/blog/schema"),
+          path.join(repoRoot, "examples/realworld/schema"),
+        ]
+      : []),
   ].filter((d) => existsSync(d));
 
   const seenTables = new Map<string, ParsedTable>();
@@ -303,7 +326,17 @@ export const planMigrations = (
   cwd: string = process.cwd(),
   options?: { dbPath?: string; migrationsDir?: string }
 ): MigrationPlan => {
-  const dbPath = resolveDbPath(repoRoot, cwd, options?.dbPath);
+  const databaseTarget = resolveDatabaseTarget(
+    repoRoot,
+    cwd,
+    options?.dbPath
+  );
+  if (databaseTarget.dialect !== "sqlite") {
+    throw new Error(
+      `Schema planning currently supports SQLite only (detected ${databaseTarget.dialect} at ${databaseTarget.path}).`
+    );
+  }
+  const dbPath = databaseTarget.path;
   const inspection = inspectProject(repoRoot, cwd, options);
   const { tables: codeTables, source } = discoverProjectTablesWithSource(
     repoRoot,

@@ -15,7 +15,6 @@ import type {
   UpdatePost,
   UploadResult,
   ValidationError,
-  ValidationIssue,
 } from "./types";
 
 export type AppType = {
@@ -76,7 +75,11 @@ export type AppType = {
   };
   images: {
     ":key": {
-      $get: Endpoint<{ param: { key: string } }, ErrorBody, 200 | 400 | 404>;
+      $get: Endpoint<
+        { param: { key: string } },
+        ErrorBody,
+        200 | 206 | 304 | 400 | 404
+      >;
     };
   };
   me: {

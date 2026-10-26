@@ -12,19 +12,52 @@ export interface D1DatabaseLike {
 }
 
 export interface R2PutOptions {
+  customMetadata?: Record<string, string>;
   httpMetadata?: {
+    cacheControl?: string;
     contentType?: string;
+  };
+  onlyIf?: {
+    etagDoesNotMatch?: string;
+  };
+}
+
+export interface R2GetOptions {
+  range?: {
+    length?: number;
+    offset?: number;
   };
 }
 
 export interface R2ObjectLike {
   arrayBuffer: () => Promise<ArrayBuffer>;
+  customMetadata?: Record<string, string>;
+  etag?: string;
+  httpMetadata?: {
+    cacheControl?: string;
+    contentType?: string;
+  };
+  key?: string;
+  size?: number;
+  uploaded?: Date;
+}
+
+export interface R2ObjectsLike {
+  cursor?: string;
+  objects: R2ObjectLike[];
+  truncated: boolean;
 }
 
 export interface R2BucketLike {
   delete: (key: string) => Promise<unknown>;
-  get: (key: string) => Promise<R2ObjectLike | null>;
-  head: (key: string) => Promise<unknown | null>;
+  get: (key: string, options?: R2GetOptions) => Promise<R2ObjectLike | null>;
+  head: (key: string) => Promise<R2ObjectLike | null>;
+  list?: (options?: {
+    cursor?: string;
+    include?: ("httpMetadata" | "customMetadata")[];
+    limit?: number;
+    prefix?: string;
+  }) => Promise<R2ObjectsLike>;
   put: (
     key: string,
     value: Uint8Array,
@@ -33,6 +66,11 @@ export interface R2BucketLike {
 }
 
 export interface ReptarStorageBinding {
+  /**
+   * The raw R2 bucket. Providing it unlocks HEAD, range reads, listing, and
+   * conditional puts without implementing each method by hand.
+   */
+  bucket?: R2BucketLike;
   delete?: (key: string) => Promise<void>;
   exists?: (key: string) => Promise<boolean>;
   get?: (key: string) => Promise<Uint8Array | null>;
@@ -49,8 +87,16 @@ export interface KvNamespaceLike {
   ) => Promise<unknown>;
 }
 
+export interface QueueSendOptionsLike {
+  delaySeconds?: number;
+}
+
 export interface QueueLike {
-  send: (message: unknown) => Promise<void>;
+  send: (message: unknown, options?: QueueSendOptionsLike) => Promise<void>;
+  sendBatch?: (
+    messages: unknown[],
+    options?: QueueSendOptionsLike
+  ) => Promise<void>;
 }
 
 export interface WorkersAiLike {

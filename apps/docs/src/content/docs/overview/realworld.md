@@ -111,3 +111,44 @@ Measured against the standalone Native AOT binary using `oha` with 20 concurrent
 - **31,722 authenticated writes/sec**: Reptar's SQLite write path utilizes lock-free group-commit batching and zero-copy `PipeReader` JSON parsing. Under similar concurrent write conditions, PocketBase (Go CGO) tops out at ~2.5k–3.5k writes/sec and Node.js solutions at ~2k–4k writes/sec.
 - **34,215 filtered queries/sec**: Stack-allocated `ColumnRef<T>` filter evaluation with zero runtime reflection and an optimized SQLite read connection pool.
 - **Footprint**: The complete server, database engine, storage pipeline, and embedded UI compile to a single 10.4 MB standalone binary with ~15 MB RAM usage.
+
+## 4. AI Gateway & Universal Streaming Benchmarks
+
+`examples/ai-gateway` implements a Cloudflare AI Gateway / Portkey-style universal LLM proxy with in-connection failover, SHA-256 prompt caching, and dual-protocol streaming (SSE and Vercel AI SDK Data Stream Protocol `0:/9:/d:`).
+
+Measured against the standalone Native AOT binary using `oha` and native TTFT probes across 500 concurrent connections:
+
+| Metric | Measured Value | Scenario Notes |
+| :-- | :-: | :-- |
+| **Uncached Streaming Throughput** | **22,044 req/s** | Full downstream streaming POST, `?no_cache=1`, 100% success (220k reqs) |
+| **Prompt-Cache-Hit Throughput** | **28,499 req/s** | SHA-256 cache HIT, sub-millisecond token stream replay (285k reqs) |
+| **Time to First Token (TTFT p50)** | **36 ms** (Cache HIT) / **59 ms** (Miss) | 500 concurrent connections under full burst load |
+| **Time to First Token (TTFT p99)** | **45 ms** (Cache HIT) / **69 ms** (Miss) | Zero dropped connections across 506k total requests |
+| **In-Connection Failover** | **0 ms client impact** | Dead upstream automatically falls back to secondary provider in same HTTP stream |
+| **Group-Commit Telemetry Drain** | **100,445 rows** | Fire-and-forget `gateway_logs` writes decoupled from client response path |
+
+### Key Highlights
+
+- **Vercel AI SDK Compatibility**: React and Next.js applications using `useChat({ streamProtocol: 'data' })` connect directly without custom client adapters.
+- **Failover Without Connection Drops**: 429 rate limits or upstream 5xx errors trigger transparent failover before headers are flushed, shielding users from model outages.
+
+## 5. Realtime Rooms Multi-Peer WebSocket Fanout Benchmarks
+
+`examples/realtime-rooms` implements a high-concurrency multi-room WebSocket broadcast and presence engine inspired by **PartyKit**, **y-websocket**, and **Liveblocks**.
+
+Measured using `bun rooms:bench` with 500 concurrent clients across 20 rooms (25 peers/room):
+
+| Metric | Measured Value | Target / Comparison |
+| :-- | :-: | :-- |
+| **Socket Connection Ramp-Up** | **4,926 sockets/sec** | 500 connections joined in 101.5 ms (100% success) |
+| **Fanout Latency (p50)** | **0.32 ms** | 10x faster than PartyKit / Cloudflare DO (1.5–3.0 ms) |
+| **Fanout Latency (p90)** | **0.48 ms** | Consistent sub-millisecond distribution |
+| **Fanout Latency (p99)** | **0.71 ms** | Outperforms Elixir Phoenix (2.5–4.5 ms) and Socket.io (45–90 ms) |
+| **Fanout Delivery Reliability** | **2,500 / 2,500 (100%)** | **0 dropped receipts** across 20 rooms |
+| **Presence Relay Throughput** | **8,627 updates/sec** | 1,140,001 cursor/typing presence events relayed with zero backpressure drops |
+| **SQLite Group-Commit Persistence** | **101 messages (100%)** | Zero backlog queue at teardown; writes fully decoupled from WebSocket fanout |
+
+### Why Realtime Rooms Scales
+
+- **Zero-Allocation Broadcast**: Payloads are serialized once per broadcast and enqueued into per-connection bounded channels (`BoundedChannelFullMode.DropOldest`), preventing slow or stalled clients from blocking healthy peers.
+- **Write-Behind Group-Commit**: Chat messages broadcast instantly over WebSockets while background SQLite batchers coalesce disk writes into single `BEGIN ... COMMIT` transactions.

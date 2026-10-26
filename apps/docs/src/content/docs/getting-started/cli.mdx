@@ -1,0 +1,182 @@
+---
+title: CLI & Developer Tooling
+description: Complete reference for the `bun reptar` command line, machine-readable inspection, MCP server, and interactive AI agent.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Reptar provides a unified CLI runner (`bun reptar`) that serves as the developer control plane across local development, Native AOT compilation, Cloudflare Workers deployment, database migrations, and AI agent orchestration.
+
+---
+
+## Command Reference
+
+| Command | Usage | Description |
+| :-- | :-- | :-- |
+| `new` / `create` | `bun reptar new [name]` | Scaffold a new fullstack Reptar project. |
+| `dev` | `bun reptar dev` | Run the local development server with hot reloading. |
+| `run` | `bun reptar run <path/to/app.cs>` | Execute any single file-based Reptar application directly. |
+| `build` | `bun reptar build` | Compile the C# framework and Native AOT binaries. |
+| `build:worker` | `bun reptar build:worker` | Compile C# to `netwasm0.1` and patch the NetWasm host. |
+| `test` | `bun reptar test` | Run the test suite via xUnit. |
+| `db` | `bun reptar db <subcommand>` | Database operations: `status`, `new`, `migrate`, `plan`, `generate`. |
+| `codegen` | `bun reptar codegen` | Regenerate `@reptar/client` TypeScript contracts from C# routes. |
+| `inspect` | `bun reptar inspect [--json]` | Machine-readable inspection of routes, tables, and project state. |
+| `doctor` | `bun reptar doctor [--json] [--strict] [--app <dir>]` | Diagnose SDK toolchain, database connectivity, and RPC sync. `--strict` treats warnings as failures (CI mode). |
+| `mcp` | `bun reptar mcp` | Launch the stdio Model Context Protocol (MCP) server. |
+| `agent` | `bun reptar agent [flags]` | Boot the interactive terminal AI agent. |
+
+---
+
+## Database Commands (`bun reptar db`)
+
+Reptar includes a zero-dependency migration engine for SQLite and Cloudflare D1.
+
+### `bun reptar db status`
+
+Prints the list of all migration files, showing whether each has been applied or is pending execution:
+
+```bash
+bun reptar db status
+```
+
+### `bun reptar db new <name>`
+
+Scaffolds a new sequentially-numbered SQL migration file in `migrations/`:
+
+```bash
+bun reptar db new add_user_roles
+# Creates migrations/0002_add_user_roles.sql
+```
+
+### `bun reptar db migrate`
+
+Applies all pending migrations inside a single database transaction:
+
+```bash
+bun reptar db migrate
+```
+
+### `bun reptar db plan --json`
+
+Inspects schema drift between your C# `TableDef` schemas (`schema/*.cs`) and the live database:
+
+```bash
+bun reptar db plan --json
+```
+
+### `bun reptar db generate`
+
+Automatically generates a new SQL migration file containing the `ALTER TABLE` and `CREATE TABLE` statements needed to resolve schema drift.
+
+---
+
+## Machine-Readable Inspection (`inspect` & `doctor`)
+
+Reptar is built for both human developers and AI coding agents. The CLI outputs clean, machine-readable JSON for tooling and IDEs:
+
+### `bun reptar inspect --json`
+
+Emits the complete inventory of routes, HTTP methods, input validators, produces types, database tables, and migration state:
+
+```json
+{
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/api/posts",
+      "summary": "List published posts",
+      "tags": ["Posts"],
+      "produces": [{ "status": 200, "type": "Post[]" }]
+    }
+  ],
+  "tables": [
+    {
+      "name": "posts",
+      "columns": [
+        { "name": "id", "type": "TEXT", "primaryKey": true },
+        { "name": "title", "type": "TEXT", "nullable": false }
+      ]
+    }
+  ],
+  "migrations": {
+    "total": 3,
+    "applied": 3,
+    "pending": 0
+  }
+}
+```
+
+### `bun reptar doctor --json`
+
+Verifies environment prerequisites, .NET compiler toolchain, database connection, and TypeScript RPC sync:
+
+```json
+{
+  "healthy": true,
+  "strict": false,
+  "checks": [
+    {
+      "name": "database",
+      "title": "Database Connectivity & Schema",
+      "passed": true,
+      "details": "Reachable at .reptar/reptar.db (10 table(s) discovered)"
+    },
+    {
+      "name": "migrations",
+      "title": "Database Migrations",
+      "passed": true,
+      "details": "4 applied, 0 pending in migrations"
+    }
+  ]
+}
+```
+
+`doctor` fails closed: a missing SQLite file or an unreachable PostgreSQL host is a
+failed check, not a warning. PostgreSQL URLs are detected and probed over TCP
+(credentials are redacted in the output). Use `--strict` in CI to also fail on
+soft warnings such as a PATH `dotnet` that differs from the pinned SDK.
+
+---
+
+## Model Context Protocol (`bun reptar mcp`)
+
+Reptar includes a native stdio **MCP server** allowing AI coding assistants (Claude Code, Cursor, Windsurf, Antigravity) to query project state directly:
+
+```json
+{
+  "mcpServers": {
+    "reptar": {
+      "command": "bun",
+      "args": ["reptar", "mcp"],
+      "cwd": "/path/to/project"
+    }
+  }
+}
+```
+
+The MCP server exposes tools for:
+
+- Reading database schemas and table definitions
+- Checking migration status and applying migrations
+- Generating typed client contracts
+- Inspecting route definitions and validation rules
+
+---
+
+## Interactive AI Terminal Agent (`bun reptar agent`)
+
+Boot an autonomous coding agent directly in your project terminal:
+
+```bash
+bun reptar agent
+```
+
+### Features & Slash Commands:
+
+- **/connect**: Interactive provider picker (OpenAI, Anthropic, Gemini, Ollama, Groq, OpenRouter, Cloudflare Workers AI) with live credential testing and encrypted storage in `~/.reptar/agent/auth.json`.
+- **/models**: Browse and switch models dynamically from the provider's live catalog.
+- **/providers**: View connection status and source (environment variable vs saved auth).
+- **/disconnect**: Remove saved provider credentials.
+- **`--web [port]`**: Launch the agent's web companion interface (defaults to `http://localhost:4324`).
+- **Autonomous tools**: The agent can inspect workspace files, run shell commands, apply migrations, and edit code with full approval rules.

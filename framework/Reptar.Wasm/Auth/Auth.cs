@@ -35,6 +35,71 @@ public static class Auth
 
     public static void Configure(AuthOptions options) => _options = options;
 
+    // Per-isolate best-effort login throttling. Cloudflare isolates are
+    // short-lived and distributed, so this is not a replacement for the
+    // platform RateLimit binding — but it closes the "no limiter at all"
+    // gap on the primary edge target.
+    private static readonly Dictionary<string, (int Failures, DateTimeOffset WindowStart)> _loginAttempts = new();
+    private static readonly object _loginLock = new();
+
+    private static bool IsRateLimited(string clientIp)
+    {
+        if (!_options.EnableRateLimiting)
+            return false;
+
+        lock (_loginLock)
+        {
+            if (_loginAttempts.TryGetValue(clientIp, out var attempt))
+            {
+                var window = TimeSpan.FromMinutes(_options.RateLimitWindowMinutes);
+                if (DateTimeOffset.UtcNow - attempt.WindowStart < window)
+                    return attempt.Failures >= _options.RateLimitMaxAttempts;
+
+                _loginAttempts.Remove(clientIp);
+            }
+        }
+
+        return false;
+    }
+
+    private static void RecordFailedLogin(string clientIp)
+    {
+        if (!_options.EnableRateLimiting)
+            return;
+
+        var now = DateTimeOffset.UtcNow;
+        var window = TimeSpan.FromMinutes(_options.RateLimitWindowMinutes);
+
+        lock (_loginLock)
+        {
+            if (_loginAttempts.TryGetValue(clientIp, out var existing) &&
+                now - existing.WindowStart <= window)
+            {
+                _loginAttempts[clientIp] = (existing.Failures + 1, existing.WindowStart);
+            }
+            else
+            {
+                _loginAttempts[clientIp] = (1, now);
+            }
+        }
+    }
+
+    private static void ResetFailedLogins(string clientIp)
+    {
+        if (!_options.EnableRateLimiting)
+            return;
+
+        lock (_loginLock)
+        {
+            _loginAttempts.Remove(clientIp);
+        }
+    }
+
+    private static string GetClientIp(Ctx ctx) =>
+        ctx.Req.Header("CF-Connecting-IP")
+        ?? ctx.Req.Header("X-Forwarded-For")?.Split(',')[0].Trim()
+        ?? "127.0.0.1";
+
     public static ReptarApp Routes()
     {
         var app = ReptarApp.Create();
@@ -82,6 +147,15 @@ public static class Auth
 
         app.Post("/signin", SignInSchema, async (ctx, input) =>
         {
+            var clientIp = GetClientIp(ctx);
+            if (IsRateLimited(clientIp))
+            {
+                return ctx.Error(
+                    429,
+                    "rate_limited",
+                    "Too many failed login attempts. Please try again later.");
+            }
+
             var email = input.Email.Trim().ToLowerInvariant();
             var user = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
                 """
@@ -95,9 +169,11 @@ public static class Auth
             if (user is null ||
                 !await ctx.Crypto.VerifyPassword(input.Password, user.PasswordHash))
             {
+                RecordFailedLogin(clientIp);
                 return ctx.Unauthorized("Invalid email or password.");
             }
 
+            ResetFailedLogins(clientIp);
             await StartSession(ctx, user.Id);
 
             return ctx.Json(new SessionUser(user.Id, user.Email, user.Name));
@@ -114,7 +190,7 @@ public static class Auth
                     Params(await ctx.Crypto.Sha256(token)));
             }
 
-            ctx.Cookies.Delete(_options.CookieName);
+            ctx.Cookies.Delete(_options.CookieName, _options.CookieDomain, _options.SecureCookies);
             return ctx.Status(204);
         });
 
@@ -294,7 +370,8 @@ public static class Auth
             _options.CookieName,
             token,
             TimeSpan.FromDays(_options.SessionDays),
-            _options.CookieDomain);
+            _options.CookieDomain,
+            _options.SecureCookies);
     }
 
     private static string Params(params string?[] values)

@@ -36,14 +36,11 @@ app.OnWebSocket("/rooms/{roomId}", new WebSocketHandlers
 
 ## 2. Key Architecture Primitives
 
-1. **Lock-Free Read Fanout**:
-   Room rosters use concurrent collections so broadcasts and cursor moves never block joins, leaves, or REST queries.
+1. **Lock-Free Read Fanout**: Room rosters use concurrent collections so broadcasts and cursor moves never block joins, leaves, or REST queries.
 
-2. **Per-Socket Bounded Channels**:
-   Kestrel transport uses bounded channels (`BoundedChannelFullMode.DropOldest`) to ensure slow or lagging clients cannot exhaust server memory or block the event loop.
+2. **Per-Socket Bounded Channels**: Kestrel transport uses bounded channels (`BoundedChannelFullMode.DropOldest`) to ensure slow or lagging clients cannot exhaust server memory or block the event loop.
 
-3. **Write-Behind Persistence**:
-   Chat messages are enqueued into a background SQLite channel batcher. Broadcast fanout to connected peers occurs with microsecond latency, while disk writes coalesce into batched SQLite transactions.
+3. **Write-Behind Persistence**: Chat messages are enqueued into a background SQLite channel batcher. Broadcast fanout to connected peers occurs with microsecond latency, while disk writes coalesce into batched SQLite transactions.
 
 ---
 
@@ -59,3 +56,16 @@ bun rooms:smoke
 # Run 5,000-socket concurrency load test
 bun rooms:bench --clients 5000 --rooms 100 --peers 50
 ```
+
+---
+
+## Benchmarks & Performance
+
+Measured with 500 concurrent WebSocket clients across 20 rooms (25 peers/room):
+
+- **Connection Ramp-Up:** **4,926 sockets/s** (500 connections established and joined in 101.5 ms)
+- **Fanout Latency:** **0.32 ms p50**, **0.71 ms p99** (2,500 delivery receipts, **0 dropped receipts**)
+- **Presence Throughput:** **1,140,001 presence updates relayed** at **8,627/sec** sustained
+- **Write Persistence:** 100% of room chat messages persisted via background SQLite group-commits with zero backlog.
+
+See [RealWorld & Benchmarks](/overview/realworld#5-realtime-rooms-multi-peer-websocket-fanout-benchmarks) for full latency breakdown and comparison with PartyKit and Elixir Phoenix.

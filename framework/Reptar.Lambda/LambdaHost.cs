@@ -20,6 +20,10 @@ public static class LambdaHost
 
         var nextInvocationUrl = $"http://{runtimeApi}/2018-06-01/runtime/invocation/next";
 
+        await app.StartModulesAsync(cancellationToken);
+
+        try
+        {
         while (!cancellationToken.IsCancellationRequested)
         {
             HttpResponseMessage nextResponse;
@@ -48,10 +52,14 @@ public static class LambdaHost
                 try
                 {
                     var eventJson = await nextResponse.Content.ReadAsStringAsync(cancellationToken);
-                    var reptarRequest = ParseApiGatewayV2Event(eventJson);
 
-                    var reptarResponse = await app.HandleAsync(reptarRequest);
-                    var responsePayload = FormatApiGatewayV2Response(reptarResponse);
+                    // SQS event source mappings (with FunctionResponseTypes:
+                    // ReportBatchItemFailures) dispatch to the queue consumer
+                    // pipeline; everything else is API Gateway.
+                    var responsePayload = TryParseSqsEvent(eventJson, out var batch)
+                        ? FormatSqsBatchResponse(await app.HandleQueueBatchAsync(batch))
+                        : FormatApiGatewayV2Response(
+                            await app.HandleAsync(ParseApiGatewayV2Event(eventJson, cancellationToken)));
 
                     using var responseContent = new StringContent(responsePayload, Encoding.UTF8, "application/json");
                     await HttpClient.PostAsync(responseUrl, responseContent, cancellationToken);
@@ -74,9 +82,16 @@ public static class LambdaHost
                 }
             }
         }
+        }
+        finally
+        {
+            await app.DisposeAsync();
+        }
     }
 
-    public static ReptarRequest ParseApiGatewayV2Event(string eventJson)
+    public static ReptarRequest ParseApiGatewayV2Event(
+        string eventJson,
+        CancellationToken cancellationToken = default)
     {
         var doc = JsonNode.Parse(eventJson);
         if (doc is null)
@@ -159,7 +174,78 @@ public static class LambdaHost
             Headers = headers,
             Cookies = cookies,
             Body = body,
+            Aborted = cancellationToken,
         };
+    }
+
+    /// <summary>
+    /// Recognizes Lambda SQS event batches and maps them onto the portable
+    /// queue consumer contract. The logical queue name comes from the ARN's
+    /// last segment, so OnQueue("orders") matches arn:aws:sqs:...:orders.
+    /// </summary>
+    public static bool TryParseSqsEvent(string eventJson, out QueueBatch batch)
+    {
+        batch = new QueueBatch("", "", []);
+
+        var doc = JsonNode.Parse(eventJson);
+        if (doc?["Records"] is not JsonArray records || records.Count == 0)
+            return false;
+
+        if (records[0]?["eventSource"]?.ToString() != "aws:sqs")
+            return false;
+
+        var queueName = "default";
+        var arn = records[0]?["eventSourceARN"]?.ToString();
+        if (arn is { Length: > 0 })
+        {
+            var lastColon = arn.LastIndexOf(':');
+            if (lastColon >= 0 && lastColon + 1 < arn.Length)
+                queueName = arn[(lastColon + 1)..];
+        }
+
+        var messages = new List<QueueMessage>(records.Count);
+        foreach (var record in records)
+        {
+            var id = record?["messageId"]?.ToString();
+            var body = record?["body"]?.ToString();
+            if (id is null || body is null)
+                continue;
+
+            var attributes = record?["attributes"] as JsonObject;
+            var attempts = 1;
+            if (attributes?["ApproximateReceiveCount"] is { } receiveCount &&
+                int.TryParse(receiveCount.ToString(), out var count))
+            {
+                attempts = count;
+            }
+
+            messages.Add(new QueueMessage(
+                id,
+                body,
+                attributes?["SentTimestamp"]?.ToString() ?? DateTimeOffset.UtcNow.ToString("O"),
+                attempts));
+        }
+
+        batch = new QueueBatch(Ids.New("qbatch"), queueName, messages);
+        return messages.Count > 0;
+    }
+
+    /// <summary>
+    /// Lambda partial-batch response: unprocessed IDs go back to SQS and
+    /// redrive per the queue's maxReceiveCount; processed IDs are dropped.
+    /// </summary>
+    public static string FormatSqsBatchResponse(QueueBatchResult result)
+    {
+        if (result.Success)
+            return "{}";
+
+        var failures = new JsonArray();
+        foreach (var id in result.FailedMessageIds)
+        {
+            failures.Add(new JsonObject { ["itemIdentifier"] = id });
+        }
+
+        return new JsonObject { ["batchItemFailures"] = failures }.ToJsonString();
     }
 
     public static string FormatApiGatewayV2Response(ReptarResponse response)

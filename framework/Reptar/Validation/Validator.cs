@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
 using System.Reflection;
 
@@ -23,16 +24,17 @@ public sealed class PropertyRuleMeta
     public string? Pattern { get; internal set; }
 }
 
-public sealed class Validator<T> : IValidatorMeta
+public sealed class Validator<
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)] T> : IValidatorMeta
 {
-    private readonly List<PropertyRule> _properties = new();
+    private readonly List<IPropertyRule> _properties = new();
     private readonly List<RefineRule> _refines = new();
     private readonly List<PropertyRuleMeta> _propertyMetas = new();
 
     public IReadOnlyList<PropertyRuleMeta> Properties => _propertyMetas;
 
-    public Validator<T> Prop(
-        Expression<Func<T, object?>> property,
+    public Validator<T> Prop<TProp>(
+        Expression<Func<T, TProp>> property,
         Action<PropertyRules> configure)
     {
         var body = property.Body is UnaryExpression
@@ -57,14 +59,28 @@ public sealed class Validator<T> : IValidatorMeta
         configure(rules);
 
 #if NETWASM
-        Func<T, object?> getter = property.Compile();
+        var compiled = property.Compile();
 #else
-        Func<T, object?> getter = value => value is null ? null : propertyInfo.GetValue(value);
+        Func<T, TProp> compiled;
+        try
+        {
+            // Interpreted expression trees avoid dynamic IL generation, which
+            // is unavailable in Native AOT. This keeps Rule<T> usable there;
+            // the reflection fallback is only for runtimes that reject even
+            // the interpreter.
+            compiled = property.Compile(preferInterpretation: true);
+        }
+        catch (Exception ex) when (ex is PlatformNotSupportedException or NotSupportedException)
+        {
+            compiled = value => value is null
+                ? default!
+                : (TProp)propertyInfo.GetValue(value)!;
+        }
 #endif
 
-        _properties.Add(new PropertyRule(
+        _properties.Add(new PropertyRule<TProp>(
             name,
-            getter,
+            value => value is null ? default! : compiled(value),
             rules));
 
         _propertyMetas.Add(meta);
@@ -87,9 +103,9 @@ public sealed class Validator<T> : IValidatorMeta
         var rules = PropertyRules.Create(typeof(TProp), meta);
         configure(rules);
 
-        _properties.Add(new PropertyRule(
+        _properties.Add(new PropertyRule<TProp>(
             propName,
-            value => value is null ? null : getter(value),
+            value => value is null ? default! : getter(value),
             rules));
 
         _propertyMetas.Add(meta);
@@ -103,31 +119,37 @@ public sealed class Validator<T> : IValidatorMeta
         return this;
     }
 
-    public List<ValidationIssue> Validate(T value)
+    public IReadOnlyList<ValidationIssue> Validate(T value)
     {
-        var issues = new List<ValidationIssue>();
+        List<ValidationIssue>? issues = null;
 
         foreach (var property in _properties)
-            issues.AddRange(property.Check(value));
+            property.Check(value, ref issues);
 
         foreach (var refine in _refines)
         {
             if (!refine.Test(value))
-                issues.Add(new ValidationIssue(refine.Message, refine.Path));
+                PropertyRules.AddIssue(ref issues, refine.Message, refine.Path);
         }
 
-        return issues;
+        return issues is null ? Array.Empty<ValidationIssue>() : issues;
     }
 
     private static string Camelize(string name) =>
         name.Length == 0 ? name : char.ToLowerInvariant(name[0]) + name[1..];
 
-    private sealed class PropertyRule(
-        string path,
-        Func<T, object?> getter,
-        PropertyRules rules)
+    private interface IPropertyRule
     {
-        public List<ValidationIssue> Check(T value) => rules.Check(getter(value), path);
+        void Check(T value, ref List<ValidationIssue>? issues);
+    }
+
+    private sealed class PropertyRule<TProp>(
+        string path,
+        Func<T, TProp> getter,
+        PropertyRules rules) : IPropertyRule
+    {
+        public void Check(T value, ref List<ValidationIssue>? issues) =>
+            rules.Check(getter(value), path, ref issues);
     }
 
     private sealed record RefineRule(Func<T, bool> Test, string Message, string[]? Path);
@@ -156,7 +178,17 @@ public abstract class PropertyRules
     public virtual PropertyRules Url() => this;
     public virtual PropertyRules NotNull() => this;
 
-    internal abstract List<ValidationIssue> Check(object? value, string path);
+    internal abstract void Check(
+        object? value,
+        string path,
+        ref List<ValidationIssue>? issues);
+
+    internal static void AddIssue(
+        ref List<ValidationIssue>? issues,
+        string message,
+        string[]? path) =>
+        (issues ??= new List<ValidationIssue>(1))
+            .Add(new ValidationIssue(message, path));
 
     internal static PropertyRules Create(Type type, PropertyRuleMeta? meta = null)
     {
@@ -253,44 +285,43 @@ public sealed class StringRules : PropertyRules
         return this;
     }
 
-    internal override List<ValidationIssue> Check(object? value, string path)
+    internal override void Check(
+        object? value,
+        string path,
+        ref List<ValidationIssue>? issues)
     {
-        var issues = new List<ValidationIssue>();
-
         if (value is null)
         {
             if (ShouldRequire)
-                issues.Add(new ValidationIssue("Required.", [path]));
+                AddIssue(ref issues, "Required.", [path]);
 
-            return issues;
+            return;
         }
 
         var text = (string)value;
 
         if (_min is { } min && text.Length < min)
-            issues.Add(new ValidationIssue($"Must be at least {min} characters.", [path]));
+            AddIssue(ref issues, $"Must be at least {min} characters.", [path]);
 
         if (_max is { } max && text.Length > max)
-            issues.Add(new ValidationIssue($"Must be at most {max} characters.", [path]));
+            AddIssue(ref issues, $"Must be at most {max} characters.", [path]);
 
         if (_length is { } length && text.Length != length)
-            issues.Add(new ValidationIssue($"Must be exactly {length} characters.", [path]));
+            AddIssue(ref issues, $"Must be exactly {length} characters.", [path]);
 
 #if !NETWASM
         if (_pattern is not null &&
             !System.Text.RegularExpressions.Regex.IsMatch(text, _pattern))
         {
-            issues.Add(new ValidationIssue("Invalid format.", [path]));
+            AddIssue(ref issues, "Invalid format.", [path]);
         }
 #endif
 
         if (_email && !IsEmail(text))
-            issues.Add(new ValidationIssue("Must be a valid email.", [path]));
+            AddIssue(ref issues, "Must be a valid email.", [path]);
 
         if (_url && !Uri.TryCreate(text, UriKind.Absolute, out _))
-            issues.Add(new ValidationIssue("Must be a valid URL.", [path]));
-
-        return issues;
+            AddIssue(ref issues, "Must be a valid URL.", [path]);
     }
 
     private static bool IsEmail(string text)
@@ -339,27 +370,26 @@ public sealed class NumberRules : PropertyRules
         return this;
     }
 
-    internal override List<ValidationIssue> Check(object? value, string path)
+    internal override void Check(
+        object? value,
+        string path,
+        ref List<ValidationIssue>? issues)
     {
-        var issues = new List<ValidationIssue>();
-
         if (value is null)
         {
             if (ShouldRequire)
-                issues.Add(new ValidationIssue("Required.", [path]));
+                AddIssue(ref issues, "Required.", [path]);
 
-            return issues;
+            return;
         }
 
         var number = Convert.ToDouble(value);
 
         if (_min is { } min && number < min)
-            issues.Add(new ValidationIssue($"Must be at least {min}.", [path]));
+            AddIssue(ref issues, $"Must be at least {min}.", [path]);
 
         if (_max is { } max && number > max)
-            issues.Add(new ValidationIssue($"Must be at most {max}.", [path]));
-
-        return issues;
+            AddIssue(ref issues, $"Must be at most {max}.", [path]);
     }
 }
 
@@ -375,11 +405,12 @@ public sealed class BasicRules : PropertyRules
         return this;
     }
 
-    internal override List<ValidationIssue> Check(object? value, string path)
+    internal override void Check(
+        object? value,
+        string path,
+        ref List<ValidationIssue>? issues)
     {
         if (value is null && ShouldRequire)
-            return [new ValidationIssue("Required.", [path])];
-
-        return [];
+            AddIssue(ref issues, "Required.", [path]);
     }
 }

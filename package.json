@@ -1,9 +1,13 @@
 {
   "name": "reptar",
   "private": true,
+  "bin": {
+    "reptar": "./scripts/reptar.ts"
+  },
   "workspaces": {
     "packages": [
       "apps/*",
+      "examples/*/worker",
       "packages/*",
       "spikes/*"
     ],
@@ -34,6 +38,17 @@
     "rooms:dev": "bun scripts/reptar.ts rooms:dev",
     "rooms:smoke": "bun examples/realtime-rooms/smoke.ts",
     "rooms:bench": "bun examples/realtime-rooms/bench.ts",
+    "jobs:dev": "bun --cwd examples/jobs run app.cs",
+    "jobs:bench": "bun examples/jobs/bench.ts",
+    "check:netwasm": "bun scripts/reptar.ts check:netwasm",
+    "check:host": "bun scripts/reptar.ts check:host",
+    "check:worker": "bun scripts/reptar.ts check:worker",
+    "check:architecture": "bun scripts/check-architecture.ts --strict",
+    "check:size": "bun scripts/check-size.ts",
+    "bench:gate": "bun scripts/bench-gate.ts",
+    "test:realtime": "bun scripts/reptar.ts test:realtime",
+    "dev:status": "bun scripts/reptar.ts dev:status",
+    "self-check": "bun scripts/reptar.ts self-check",
     "realworld:worker:build": "bun scripts/reptar.ts build:realworld",
     "realworld:worker:dev": "bun --cwd spikes/realworld-worker dev",
     "realworld:hurl": "bun scripts/realworld-hurl.ts",
@@ -47,9 +62,12 @@
     "bench:mixed": "bun bench/load/mixed.ts",
     "bench:report": "bun bench/load/report.ts",
     "e2e": "bun scripts/e2e.ts",
+    "test:scaffold": "bun scripts/test-scaffold.ts",
+    "test:host": "bun test packages/host/src",
     "api:codegen": "bun scripts/reptar.ts codegen",
     "rpc:gen": "bun scripts/reptar.ts codegen",
-    "rpc:check": "bunx tsc --noEmit -p examples/blog/rpc",
+    "rpc:check:generated": "bun scripts/reptar.ts codegen --check",
+    "rpc:check": "bun scripts/reptar.ts codegen --check && bunx tsc --noEmit -p examples/blog/rpc",
     "docs:check:snippets": "bun scripts/check-doc-snippets.ts",
     "deploy": "cd packages/infra && bun run deploy",
     "destroy": "turbo run destroy -F @reptar/infra --",

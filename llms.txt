@@ -8,13 +8,22 @@ Reptar is a high-performance, single-binary C# 13 web framework engineered for N
 
 Before writing code or assuming database schema, query the framework's machine-readable state:
 
-- `bun reptar inspect --json`: Complete project schema, active database dialect, tables, columns, indexes, routes, and migrations.
-- `bun reptar doctor --json`: Diagnoses SDK toolchain (>= 10.0.401), Bun runtime, database connectivity, and RPC status.
+- `bun reptar inspect [--json] [--app <path>]`: Complete project schema, active database dialect, tables, columns, indexes, routes, and migrations. Supports `--app <dir>` to inspect a specific sub-project.
+- `bun reptar doctor [--json] [--fix] [--strict] [--app <path>]`: Diagnoses SDK toolchain (>= 10.0.401), Bun runtime, database connectivity, and RPC status. Fails closed on unreachable SQLite/PostgreSQL; `--strict` also fails on soft warnings (e.g. PATH/pinned SDK divergence).
 - `bun reptar db plan --json`: Diffs C# `TableDef` schemas against the active database and returns planned SQL.
 - `bun reptar db generate [--name <name>]`: Generates a timestamped `.sql` migration from planned changes.
 - `bun reptar db migrate`: Applies all pending SQL migrations to the database.
 - `bun reptar codegen`: Regenerates `@reptar/client` TypeScript RPC contracts from the C# route tree.
+- `bun reptar check:netwasm [--strict] [path]`: Scans C# sources for NetWasm/Workers incompatibilities (Channels, Process/filesystem APIs, background Task.Run loops, anonymous ctx.Json, runtime reflection) with `#if !NETWASM`-aware regions. See §6 for the rules it enforces.
+- `bun reptar test:realtime [--workers|--kestrel]`: Two-host protocol smoke — runs `examples/realtime-rooms/smoke.ts` against local workerd (Durable Object + D1) AND native Kestrel (SQLite). Catches host-specific regressions (thread safety, WS event lifetime, D1 marshaling) before deploy.
+- `bun reptar dev:status`: Lists running dev servers and their listening ports — orphaned `dotnet run`/runfile processes serve stale builds and hold ports hostage in multi-agent repos.
+- `bun reptar self-check`: One-command ground truth: doctor → framework tests → netwasm lint → two-host realtime smoke. Run this after concurrent edits or before trusting cached state.
 - `bun reptar mcp`: Launches the Model Context Protocol stdio server exposing `reptar_inspect`, `reptar_schema`, `reptar_routes`, `reptar_db_status`, `reptar_db_plan`, `reptar_check`, and `reptar_doctor`.
+- `bun reptar make:model <Name> [-f] [-m]`: Generates a `TableDef` + `[ReptarEntity]` DTO, wires `#:include`, updates the JSON context when present, and optionally generates a CRUD feature slice (`-f`) and migration (`-m`).
+- `bun reptar make:feature <Name>`: Generates a CRUD feature slice for an existing model.
+- `bun reptar json:gen [--app <dir>]`: Scans `[ReptarEntity]`, `Rule<T>`, and `Produces<T>` types and writes `json-context.g.cs` so the STJ source generator can emit an AOT-safe context.
+- `bun reptar check:architecture --strict`: Enforces the core/AI/terminal boundary.
+- `bun scripts/bench-gate.ts --results <result.json> --baseline bench/perf-baseline.json`: Compares a benchmark run to the baseline and fails on RPS/p95 regressions.
 
 ---
 
@@ -75,6 +84,19 @@ var activePosts = await ctx.Db.ListAsync<PostDto>(
 var post = await ctx.Db.From<PostDto>(Schema.Posts)
     .Where(Schema.PostsCols.Slug.Eq("my-slug") & Schema.PostsCols.Published.Eq(1))
     .FirstOrDefaultAsync();
+
+// 2b. Batched relation preload (reflection-free, WHERE IN, no N+1)
+var author = Relation.BelongsTo<PostDto, UserDto, string>(
+    post => post.AuthorId,
+    Schema.Users,
+    Schema.Users.Col<string>("id"),
+    user => user.Id,
+    (post, user) => post with { Author = user });
+
+var postsWithAuthors = await ctx.Db.From<PostDto>(Schema.Posts)
+    .Where(Schema.PostsCols.Published.Eq(1))
+    .Preload(author)
+    .ToListAsync();
 
 // 3. Count and Exists
 var count = await ctx.Db.CountAsync(Schema.Posts, Schema.PostsCols.Published.Eq(1));
@@ -163,7 +185,8 @@ Any Reptar route marked with `.AsAiTool(name, description)` automatically export
 
 ```csharp
 // Export tools as JSON schema:
-app.MapAiTools("/api/ai/tools"); // Returns OpenAI/Anthropic/Gemini compatible JSON
+app.MapAiTools("/api/ai/tools"); // Explicit .AsAiTool(...) routes only (safe default)
+// app.MapAiTools("/api/ai/tools", onlyExplicit: false); // opt-in: expose every route
 
 // In-process tool execution (no extra network hop):
 var toolResult = await app.ExecuteAiToolAsync("create_post", argumentsJson, ctx);
@@ -178,16 +201,24 @@ app.Post("/api/chat", async ctx =>
 
 ---
 
-## 5b. Built-in Agent Engine (`Reptar.AI`, namespace `Reptar.AI`)
+## 5b. Optional Agent Engine (`Reptar.AI`, namespace `Reptar.AI`)
 
-Reptar ships a provider-agnostic agent engine in the framework core (`framework/Reptar/AI/`): streaming LLM clients (OpenAI-compatible, Anthropic, Gemini, Ollama, offline Echo), a ReAct loop, the standard workspace tools, SQLite session persistence, and the interactive terminal behind `bun reptar agent`.
+Reptar ships a provider-agnostic agent engine as an **optional** project (`framework/Reptar.AI/`): streaming LLM clients (OpenAI-compatible, Anthropic, Gemini, Ollama, offline Echo), a ReAct loop, the standard workspace tools, SQLite session persistence, evals, and background agents. The web core does not reference it.
+
+The terminal UI lives in `examples/agent-cli/terminal/`; `bun reptar agent` runs that example. The AI gateway is a separate optional SDK (`framework/Reptar.AI.Gateway/`); `examples/ai-gateway` is a thin composition over it.
 
 ### Mount workspace tools in one line
 
 ```csharp
 using Reptar.AI;
 
-app.UseWorkspaceTools(workspaceRoot: ".");   // read_file, write_file, edit_file, list_dir, run_command
+// read_file, write_file, edit_file, list_dir are mounted by default.
+// run_command is opt-in (a shell is a full sandbox escape by design).
+app.UseWorkspaceTools(workspaceRoot: ".", options =>
+{
+    options.AllowRunCommand = true;
+    // options.AllowedCommandPrefixes = ["bun ", "dotnet ", "git "];
+});
 ```
 
 Every tool is a normal Reptar route marked `.AsAiTool(...)` with path-traversal
@@ -226,18 +257,39 @@ credentials saved by `/connect` in `~/.reptar/agent/auth.json` (flat map,
 `0600`, override the path with `REPTAR_AGENT_AUTH`) → offline `Echo` provider.
 
 Interactive connection (pi `/login`, opencode `/connect` parity):
-`bun reptar agent --connect [provider]` or `/connect` in-session — provider
-picker with per-row status, hidden API-key entry, base URL override, live
-connection test via `LlmCatalog.ListAsync` (models endpoint per provider),
-model pick, then save + switch. `/providers` shows the status table
-(source: env var or saved), `/models` picks from the live catalog,
+`bun reptar agent --connect [provider]` or `/connect` in-session — arrow-key
+provider picker with per-row status and type-to-search, hidden API-key entry
+with validation, base URL override, live spinner connection test via
+`LlmCatalog.ListAsync` (models endpoint per provider), model pick, then save
++ switch. `/providers` renders a bordered status table (source: env var or
+saved), `/models` picks from the live catalog — falling back to the free
+[models.dev](https://models.dev) curated catalog (display names + context
+windows, no key required) when the provider endpoint is unavailable —
 `/disconnect` removes saved credentials. `Other` registers a custom
 OpenAI-compatible endpoint (id + base URL + key + model); custom ids are
 resolvable everywhere afterwards (`/model myid/model`, `--model myid/model`).
 
-Registry: `LlmProviders.Known` (openai, anthropic, gemini, ollama, openrouter,
-gateway) with env keys, default base URLs, and default models; custom
-providers extend it through the auth file.
+### Input editor (pi-style)
+
+The terminal prompt is `TerminalEditor` (zero-dependency): `/` opens a filtered
+slash-command dropdown, `@path` attaches workspace files (text inlined as
+context, images as base64 vision blocks via `ChatMessage.Images` /
+`AgentImage(mimeType, base64)` — rendered into OpenAI `image_url`, Anthropic
+`image`, and Gemini `inline_data` wire formats), `!command` runs shell commands
+locally without the model, Ctrl+P opens a command palette, ↑/↓ navigates
+history, and a status bar shows cwd + git branch + model + token/cost totals
+(provider usage events → `AgentEvent.UsageReported`; pricing and context
+limits from models.dev). All widgets degrade to plain input when stdin is piped.
+
+Registry: `LlmProviders.Known` — openai, anthropic, gemini, ollama,
+openrouter, gateway (Vercel AI Gateway), opencode (OpenCode Zen at
+`opencode.ai/zen/v1`), cloudflare-gateway (Cloudflare AI Gateway; requires
+your `gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}`
+URL, the API key is the upstream provider's) — each with env keys, default
+base URLs, and default models; custom providers extend it through the auth
+file. The terminal UI (`TerminalUi`) is zero-dependency raw ANSI with piped
+fallbacks: arrow-key selection, validated secret prompts, spinner, and
+bordered tables.
 
 ### Session persistence (AOT-safe)
 
@@ -268,6 +320,22 @@ dependency for Native AOT apps).
 Reference app: `examples/agent-cli/` (see `plans/agent-engine.md` for the
 full build report and AOT findings).
 
+### Terminal input ownership (TerminalInput)
+
+The agent's terminal input is owned by a dedicated reader thread after
+`TerminalInput.Activate()` — a termios P/Invoke (`tcgetattr`/`cfmakeraw`/
+`tcsetattr`) puts the terminal in raw mode, then one background thread reads
+stdin and parses the byte stream into `TermKey` events (arrows, Home/End,
+PageUp/Down, Delete, bracketed paste `\x1b[200~`…`\x1b[201~`, OSC 52
+clipboard responses, UTF-8 text, Ctrl-combos). **.NET's `Console.ReadKey`
+is never called after activation** — it silently discards ESC-]-prefixed
+sequences (OSC 52, arrows, paste) on Unix. Every UI component (editor,
+selection prompts, text prompts) routes through `TerminalInput.ReadKey()`
+once active. The input history persists to `~/.reptar/agent/history`
+(HISTFILE-style, 500 entries, leading-space entries never written to disk).
+`Ctrl+V` sends the OSC 52 clipboard query; the response is sniffed by magic
+bytes and attached as an `AgentImage` when it's a PNG/JPEG/GIF/WebP.
+
 ### Native AOT rule (critical)
 
 Under Native AOT, `ctx.Json(new { ... })` and `ctx.Json(record)` serialize via
@@ -277,10 +345,86 @@ In AOT-published code paths, build `JsonObject`/`JsonArray` and return
 
 ---
 
-## 6. Strict Agent Conventions
+## 5c. Object Storage & File Serving
+
+`c.Storage` is provider-agnostic: R2 on Workers, S3-compatible or local disk on
+Native AOT. The core contract is `PutAsync` / `GetAsync` / `ExistsAsync` /
+`DeleteAsync`; richer providers add `HeadAsync`, `GetRangeAsync`, `ListAsync`,
+`PresignPutAsync`, `PresignGetAsync`, and `PublicUrl`. Check
+`c.Storage.Capabilities.Has(StorageFeatures.X)` rather than switching on the
+concrete provider type.
+
+```csharp
+// Validate magic bytes + size, then write with metadata.
+var check = Files.Check(ctx.Req.Form?.File("avatar"), 5_000_000, "image/*");
+if (!check.Ok) return check.ToError(ctx);
+
+await ctx.Storage.PutAsync(
+    $"avatars/{ctx.User!.Id}.{check.Extension}",
+    check.Data,
+    check.ContentType,
+    new StoragePutOptions
+    {
+        CacheControl = "public, max-age=31536000, immutable",
+        Metadata = new Dictionary<string, string> { ["owner"] = ctx.User.Id },
+    });
+
+// Serve with ETag/304, Range/206, HEAD, Content-Length, and cache headers.
+app.Get("/files/:key", ctx => ctx.File(ctx.Param("key")!));
+app.Get("/download/:key", ctx => ctx.Attachment(ctx.Param("key")!));
+```
+
+Rules:
+
+- Always use `Files.Check` (magic bytes) before storing user uploads; never
+  trust the client `Content-Type`.
+- Keys go through `StorageKey.Normalize`, which rejects traversal (`..`), empty
+  segments, control characters, and over-long segments. Do not hand-roll key
+  validation.
+- `c.File` handles `If-None-Match`, `If-Modified-Since`, `If-Range`, single
+  byte ranges, and `HEAD`. The router maps `HEAD` to `GET` automatically.
+- Storage failures are `StorageException` with a `StorageErrorCode`; `c.File`
+  maps them to 400/403/404/409/412/413/416/501/503.
+- Presigned URLs are for large uploads/downloads. `PresignGetAsync` can override
+  response `Content-Type`, `Content-Disposition`, and `Cache-Control` without
+  mutating the object.
+- `PutAsync(..., new StoragePutOptions { Overwrite = false })` fails with
+  `PreconditionFailed` (HTTP 412) instead of replacing an existing object.
+
+---
+
+## 6. Multi-Target Compatibility & Four-Target Feature Matrix
+
+Reptar compiles to two runtimes (`net10.0` Native AOT and `netwasm0.1` WebAssembly) deploying to four targets:
+
+| Feature / Primitive | Cloudflare Workers (`netwasm0.1`) | Cloudflare Durable Objects | Kestrel (`net10.0` Native AOT) | AWS Lambda (`net10.0` Native AOT) |
+| :-- | :-- | :-- | :-- | :-- |
+| **Routing & Validation** | ✅ Native C# (`Wasm`) | ✅ Native C# (`Wasm`) | ✅ Native C# | ✅ Native C# |
+| **Database (`c.Db`)** | ✅ D1 (`[JSImport]`) & Postgres | ✅ D1 & DO Storage | ✅ SQLite, Postgres, MySQL | ✅ SQLite, Postgres, MySQL |
+| **Background Tasks** | ✅ `ctx.WaitUntil()` bridge | ✅ `ctx.WaitUntil()` + Alarms | ✅ Unblocked ThreadPool | ⚠️ Buffered execution |
+| **SSE Streaming** | ⚡ TS Worker `ReadableStream` | ⚡ TS Worker `ReadableStream` | ✅ Native C# `PipeWriter` | ⚠️ Buffered response |
+| **WebSockets** | ⚡ Single-socket (`WebSocketPair`) | ✅ Multi-peer Fanout/Presence | ✅ Native C# WebSockets | ❌ API Gateway WS API |
+| **AI Workspace Tools** | ❌ Confined in-memory | ❌ Confined in-memory | ✅ Native Process/FS Tools | ⚡ `/tmp` filesystem |
+| **Channels / Task.Run** | ❌ Freeze between events | ⚡ Use DO Alarms | ✅ Full CLR ThreadPool | ✅ Full CLR ThreadPool |
+
+Code that compiles locally can still fail at runtime under NetWasm. Run `bun reptar check:netwasm <path>` to scan before publishing:
+
+1. **JSON serialization must be source-generated under NetWasm.** `ctx.Json(...)` of anonymous objects, unregistered records, or `Dictionary<string, object?>` throws `NotSupportedException` at runtime (the app's `JsonSerializerContext` has no metadata for them). Register types with `[JsonSerializable]` in the worker's `Program.cs`, or hand-roll payloads with `ctx.JsonRaw(...)` / string interpolation.
+2. **`D1DbClient.InsertAsync(TableDef, IDictionary)` was the trap**: prefer `ExecuteAsync` with `@`-named parameters for dictionary-shaped writes under NetWasm (the D1 client rewrites them to positional parameters).
+3. **`System.Threading.Channels` and background `Task.Run` loops don't exist under NetWasm.** Workers freeze the isolate between events — background drain workers never run. Do work inline during the event, or use Durable Object alarms/Queues. Gate local-only code with `#if !NETWASM`.
+4. **Top-level-statement locals are invisible to type declarations later in the file** (file-based programs). Move shared constants into a static class.
+5. **OS/IO APIs are gone under NetWasm**: `System.Diagnostics.Process`, `System.IO.File`, filesystem APIs. Gate with `#if !NETWASM`.
+6. **WebSockets on Workers require a Durable Object for cross-socket fanout.** A plain Worker cannot send on another request's socket ("Cannot perform I/O on behalf of a different request"). Use `createReptarDurableObjectHost` from `@reptar/host` (see `examples/realtime-rooms/worker`).
+7. **Binding I/O must complete before the WS event handler returns.** Apps that export `supportsWsMessageDone()` and call back `wsMessageDone(sessionId)` after their async pipeline finishes let the host hold the event open (D1 writes etc.).
+8. **Per-request I/O objects cannot cross requests** on Workers — same rule as #6, stated by the runtime.
+
+
+## 7. Strict Agent Conventions
 
 1. **Check Before Assuming**: Always run `bun reptar inspect --json` or use `reptar_schema` to verify existing tables, columns, and routes.
 2. **Never Use Runtime Reflection**: Keep everything Native AOT and NetWasm compliant.
 3. **No Attribute Salad DDL**: Do not attach `[PrimaryKey]` or `[Unique]` attributes to DTO records. Use `TableDef` in `schema/`.
 4. **Always Use ColumnRef Over Strings**: Avoid `ctx.Db.ListAsync<T>(table, "where col = @val")` when `table.Col<T>("col").Eq(...)` is available.
 5. **Keep Raw SQL Available**: Never remove raw SQL escape hatches (`QueryAsync`, `ExecuteAsync`).
+6. **Respect the Module Boundary**: `framework/Reptar` must not reference `Reptar.AI`, terminal UI, process, or termios code. Run `bun reptar check:architecture --strict` after structural changes.
+7. **Preload, Don't N+1**: For list endpoints, use `TableQuery<T>.Preload(Relation.BelongsTo/HasMany(...))` instead of a per-row query. Relations are explicit and reflection-free.

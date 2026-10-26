@@ -50,7 +50,7 @@ if (existingRooms.Count == 0)
 }
 
 // REST Routes for Campfire Chat & Action Cable Broadcasts
-app.Get("/health", ctx => Task.FromResult(ctx.Json(new { status = "ok" })));
+app.Get("/health", ctx => Task.FromResult(ctx.JsonRaw("{\"status\":\"ok\"}")));
 
 app.Get("/rooms", async ctx =>
 {
@@ -66,7 +66,7 @@ app.Post<CreateRoomInput>("/rooms", async (ctx, input) =>
     }
 
     await ctx.Db.InsertAsync(Rooms, new Dictionary<string, object?> { ["name"] = input.Name, ["topic"] = input.Topic });
-    return ctx.Json(new { name = input.Name, topic = input.Topic }, status: 201);
+    return ctx.JsonRaw($"{{\"name\":\"{input.Name}\",\"topic\":\"{input.Topic}\"}}", status: 201);
 });
 
 app.Get("/rooms/:id/messages", async ctx =>
@@ -161,11 +161,8 @@ app.Post("/rooms/:id/messages", async ctx =>
         return ctx.Text(turboHtml, status: 200, contentType: "text/vnd.turbo-stream.html; charset=utf-8");
     }
 
-    return ctx.Json(new Dictionary<string, object?>
-    {
-        ["message"] = messageObj,
-        ["subscribersMessaged"] = subscriberCount
-    }, status: 201);
+    var messageJson = ctx.JsonCodec.Serialize(messageObj);
+    return ctx.JsonRaw($"{{\"message\":{messageJson},\"subscribersMessaged\":{subscriberCount}}}", status: 201);
 });
 
 app.Put<UpdateMessageInput>("/rooms/:id/messages/:messageId", async (ctx, input) =>

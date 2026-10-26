@@ -72,6 +72,13 @@ export const patchNetWasmHost = (browserDirectory: string): number => {
       "importModule:e=>import(e)",
       `importModule:async()=>{const m=await import("./${rawAdapter}");return{createAdapter:m.createAdapter,rawAdapterMetadata:m.rawAdapterMetadata}}`,
     ],
+    // wasm-opt removes unused WASI imports, but the NetWasm host still lists
+    // them from the raw adapter. They are unused by definition, so skip them
+    // instead of failing module instantiation.
+    [
+      "if(n===void 0)throw TypeError(`generated raw canonical import is absent from the final ABI`);",
+      "if(n===void 0)continue;",
+    ],
   ];
 
   for (const [from, to] of replacements) {

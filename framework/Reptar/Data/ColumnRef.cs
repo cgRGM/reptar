@@ -145,6 +145,7 @@ public sealed class TableQuery<T>
 {
     private readonly IDbClient _db;
     private readonly TableDef _table;
+    private readonly List<Func<IDbClient, List<T>, Task<List<T>>>> _preloads = [];
     private SqlFilter? _filter;
     private SqlOrderBy? _orderBy;
     private int _limit;
@@ -186,15 +187,45 @@ public sealed class TableQuery<T>
         return this;
     }
 
+    /// <summary>
+    /// Eager-loads a typed relation for every row in this query. Relations are
+    /// batched with WHERE IN, so a list of N parents costs one extra query per
+    /// relation instead of N queries.
+    /// </summary>
+    public TableQuery<T> Preload<TRelated>(Relation<T, TRelated> relation)
+    {
+        ArgumentNullException.ThrowIfNull(relation);
+        _preloads.Add((db, parents) => relation.ApplyAsync(db, parents));
+        return this;
+    }
+
     public Task<List<T>> ToListAsync()
     {
+        Task<List<T>> query;
+
         if (_filter is null)
         {
             var clause = _orderBy is not null ? $"ORDER BY {_orderBy.Sql}" : null;
-            return _db.ListAsync<T>(_table, clause, null, _limit, _offset);
+            query = _db.ListAsync<T>(_table, clause, null, _limit, _offset);
+        }
+        else
+        {
+            query = _db.ListAsync<T>(_table, _filter, _orderBy, _limit, _offset);
         }
 
-        return _db.ListAsync<T>(_table, _filter, _orderBy, _limit, _offset);
+        return _preloads.Count == 0
+            ? query
+            : ApplyPreloadsAsync(query);
+    }
+
+    private async Task<List<T>> ApplyPreloadsAsync(Task<List<T>> query)
+    {
+        var rows = await query;
+
+        foreach (var preload in _preloads)
+            rows = await preload(_db, rows);
+
+        return rows;
     }
 
     public async Task<T?> FirstOrDefaultAsync()

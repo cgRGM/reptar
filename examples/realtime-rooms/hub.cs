@@ -6,10 +6,16 @@
 // uWebSockets (serialize-once fanout over per-socket bounded send channels).
 // ---------------------------------------------------------------------------
 
+using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
+using System.Threading;
+#if !NETWASM
 using System.Threading.Channels;
+#endif
+using System.Threading.Tasks;
 using Reptar;
 
 public sealed class RoomHub
@@ -21,6 +27,7 @@ public sealed class RoomHub
 
     private long _messagesRelayed;
     private long _presenceUpdatesRelayed;
+    private long _fanoutFailures;
     private long _joins;
     private long _leaves;
 
@@ -36,54 +43,68 @@ public sealed class RoomHub
         Close = HandleCloseAsync,
     };
 
-    public object HealthSnapshot() => new
-    {
-        ok = true,
-        rooms = _rooms.Count,
-        activeConnections = _connections.Count,
-    };
+    // Snapshot payloads are hand-rolled strings (not anonymous objects) so the
+    // same code is Native-AOT/NetWasm-safe without a JsonSerializerContext.
 
-    public object StatsSnapshot()
+    public string HealthJson() =>
+        $"{{\"ok\":true,\"rooms\":{_rooms.Count},\"activeConnections\":{_connections.Count}}}";
+
+    public string StatsJson()
     {
         var nowUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        return new
-        {
-            rooms = _rooms.Count,
-            activeConnections = _connections.Count,
-            joins = Interlocked.Read(ref _joins),
-            leaves = Interlocked.Read(ref _leaves),
-            messagesRelayed = Interlocked.Read(ref _messagesRelayed),
-            presenceUpdatesRelayed = Interlocked.Read(ref _presenceUpdatesRelayed),
-            messagesPersisted = _persister.PersistedCount,
-            persisterQueueDepth = _persister.QueueDepth,
-            uptimeSeconds = (nowUnixMs - _startedAtUnixMs) / 1000,
-            process = ProcessInfo.Snapshot(),
-        };
+        return $"{{\"rooms\":{_rooms.Count},\"activeConnections\":{_connections.Count}" +
+               $",\"joins\":{Interlocked.Read(ref _joins)},\"leaves\":{Interlocked.Read(ref _leaves)}" +
+               $",\"messagesRelayed\":{Interlocked.Read(ref _messagesRelayed)}" +
+               $",\"presenceUpdatesRelayed\":{Interlocked.Read(ref _presenceUpdatesRelayed)}" +
+               $",\"messagesPersisted\":{_persister.PersistedCount},\"messagesPersistFailed\":{_persister.FailedCount},\"lastPersistError\":{_persister.LastErrorJson},\"persisterQueueDepth\":{_persister.QueueDepth}" +
+               $",\"fanoutFailures\":{Interlocked.Read(ref _fanoutFailures)}" +
+               $",\"fanoutAttempts\":{Interlocked.Read(ref _fanoutAttempts)}" +
+               $",\"fanoutDelivered\":{Interlocked.Read(ref _fanoutDelivered)}" +
+               $",\"lastFanoutError\":{RoomProtocol.Escape(Volatile.Read(ref _lastFanoutError) ?? "null")}" +
+               $",\"uptimeSeconds\":{(nowUnixMs - _startedAtUnixMs) / 1000},\"process\":{ProcessInfo.Json()}" +
+               "}";
     }
 
-    public List<object> ListRooms()
+    public string RoomsJson()
     {
-        var rooms = new List<object>(_rooms.Count);
+        var sb = new System.Text.StringBuilder(64);
+        sb.Append('[');
+        var first = true;
         foreach (var (roomId, room) in _rooms)
         {
-            rooms.Add(new { roomId, peers = room.Peers.Count });
+            if (!first)
+            {
+                sb.Append(',');
+            }
+            first = false;
+            sb.Append("{\"roomId\":").Append(RoomProtocol.Escape(roomId))
+              .Append(",\"peers\":").Append(room.Peers.Count).Append('}');
         }
-        return rooms;
+        sb.Append(']');
+        return sb.ToString();
     }
 
-    public List<object> GetPeers(string roomId)
+    public string PeersJson(string roomId)
     {
         if (!_rooms.TryGetValue(roomId, out var room))
         {
-            return [];
+            return "[]";
         }
 
-        var peers = new List<object>(room.Peers.Count);
+        var sb = new System.Text.StringBuilder(256);
+        sb.Append('[');
+        var first = true;
         foreach (var peer in room.Peers.Values)
         {
-            peers.Add(PeerView(peer));
+            if (!first)
+            {
+                sb.Append(',');
+            }
+            first = false;
+            RoomProtocol.AppendPeer(sb, peer);
         }
-        return peers;
+        sb.Append(']');
+        return sb.ToString();
     }
 
     /// <summary>Fanout a message into a room without a live socket (REST trigger).</summary>
@@ -104,7 +125,7 @@ public sealed class RoomHub
 
         var delivered = Fanout(room, frame, exceptConnectionId: null);
         Interlocked.Increment(ref _messagesRelayed);
-        _persister.TryEnqueue(roomId, senderId, payloadJson);
+        _ = _persister.PersistAsync(roomId, senderId, payloadJson);
         return delivered;
     }
 
@@ -285,12 +306,13 @@ public sealed class RoomHub
             payloadJson: payloadJson);
 
         // Fan out first (including the sender, so it gets a durable id/ack);
-        // persistence happens write-behind so disk I/O never sits in the
-        // hot path.
+        // persistence is write-behind locally (SQLite group-commit) and
+        // inline via the D1 binding under NetWasm, where the isolate freezes
+        // between events.
         _ = Fanout(room, frame, exceptConnectionId: null);
         Interlocked.Increment(ref _messagesRelayed);
 
-        _persister.TryEnqueue(peer.RoomId, peer.UserId, payloadJson);
+        await _persister.PersistAsync(peer.RoomId, peer.UserId, payloadJson);
     }
 
     private async Task HandleLeaveAsync(Peer peer)
@@ -347,7 +369,11 @@ public sealed class RoomHub
     /// per-socket send channels are bounded; a saturated peer's frame is
     /// dropped by the transport rather than stalling the fanout loop.
     /// </summary>
-    private static int Fanout(Room room, string frame, string? exceptConnectionId)
+    private long _fanoutAttempts;
+    private long _fanoutDelivered;
+    private string? _lastFanoutError;
+
+    private int Fanout(Room room, string frame, string? exceptConnectionId)
     {
         var delivered = 0;
         foreach (var (connectionId, target) in room.Peers)
@@ -357,14 +383,18 @@ public sealed class RoomHub
                 continue;
             }
 
+            Interlocked.Increment(ref _fanoutAttempts);
             try
             {
                 target.Connection.SendAsync(frame);
                 delivered++;
+                Interlocked.Increment(ref _fanoutDelivered);
             }
-            catch
+            catch (System.Exception exception)
             {
                 // Disconnected connection is cleaned up by its close handler.
+                Interlocked.Increment(ref _fanoutFailures);
+                Volatile.Write(ref _lastFanoutError, $"{exception.GetType().Name}: {exception.Message}");
             }
         }
 
@@ -376,17 +406,6 @@ public sealed class RoomHub
             ? element.GetString()
             : null;
 
-    private static object PeerView(Peer peer) => new
-    {
-        connectionId = peer.Connection.Id,
-        userId = peer.UserId,
-        name = peer.Name,
-        avatar = peer.Avatar,
-        x = peer.CursorX,
-        y = peer.CursorY,
-        typing = peer.Typing,
-    };
-
     /// <summary>
     /// Hub-level guards. Top-level-statement locals are not visible to types
     /// declared later in a file-based program, so these live here.
@@ -396,6 +415,89 @@ public sealed class RoomHub
         public const int MaxInboundMessageBytes = 64 * 1024; // transport accepts any size; guard the hub
 
         public const int MaxRoomIdLength = 128;
+    }
+}
+
+/// <summary>
+/// Route + WebSocket wiring shared by the local file-based app (app.cs) and
+/// the NetWasm worker Program.cs, so both hosts expose identical surfaces.
+/// </summary>
+public static class RoomsRoutes
+{
+    public static ReptarApp Configure(ReptarApp app, RoomHub hub)
+    {
+        app.OnWebSocket("/rooms/{roomId}", hub.CreateHandlers());
+
+        app.Get("/health", ctx => ctx.JsonRaw(hub.HealthJson()));
+
+        app.Get("/stats", ctx => ctx.JsonRaw(hub.StatsJson()));
+
+        app.Get("/rooms", ctx => ctx.JsonRaw(hub.RoomsJson()));
+
+        app.Get("/rooms/:roomId/peers", ctx =>
+        {
+            var roomId = ctx.Req.Param("roomId")!;
+            return ctx.JsonRaw(hub.PeersJson(roomId));
+        });
+
+        app.Get("/rooms/:roomId/messages", async ctx =>
+        {
+            var roomId = ctx.Req.Param("roomId")!;
+            var limit = int.TryParse(ctx.Req.QueryValue("limit"), out var parsed)
+                ? Math.Clamp(parsed, 1, 200)
+                : 50;
+
+            var recent = await ctx.Db.From<RoomMessageRecord>(Schema.RoomMessages)
+                .Where(Schema.RoomMessages.Col<string>("room_id").Eq(roomId))
+                .OrderBy(Schema.RoomMessages.Col<string>("created_at").Desc())
+                .Limit(limit)
+                .ToListAsync();
+
+            recent.Reverse(); // oldest-first for display
+            return ctx.Json(recent);
+        });
+
+        // Server-side fanout trigger (bench + admin use): same wire protocol
+        // as a peer broadcasting, minus a live socket.
+        app.Post("/rooms/:roomId/broadcast", async ctx =>
+        {
+            var roomId = ctx.Req.Param("roomId")!;
+
+            string senderId = "server";
+            string payloadJson = "{}";
+
+            if (string.IsNullOrWhiteSpace(ctx.Req.BodyText))
+            {
+                return ctx.BadRequest("Body must be valid JSON.");
+            }
+
+            try
+            {
+                using var doc = JsonDocument.Parse(ctx.Req.BodyText);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("senderId", out var senderElement) &&
+                    senderElement.ValueKind == JsonValueKind.String)
+                {
+                    senderId = senderElement.GetString() ?? "server";
+                }
+
+                if (root.TryGetProperty("payload", out var payloadElement) &&
+                    payloadElement.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                {
+                    payloadJson = payloadElement.GetRawText();
+                }
+            }
+            catch
+            {
+                return ctx.BadRequest("Body must be valid JSON.");
+            }
+
+            var delivered = hub.BroadcastFromServer(roomId, senderId, payloadJson);
+            return ctx.JsonRaw($"{{\"delivered\":{delivered}}}", status: 202);
+        });
+
+        return app;
     }
 }
 
@@ -433,11 +535,14 @@ public sealed class Peer
 public sealed class RoomMessagePersister
 {
     private readonly IDbClient _db;
-    private readonly Channel<RoomMessageRow> _queue;
-    private readonly Task[] _workers;
     private long _persisted;
     private long _persistFailed;
+    private string? _lastPersistError;
+#if !NETWASM
     private long _dropped;
+
+    private readonly Channel<RoomMessageRow> _queue;
+    private readonly Task[] _workers;
 
     public RoomMessagePersister(IDbClient db, int workerCount, int queueCapacity)
     {
@@ -455,10 +560,41 @@ public sealed class RoomMessagePersister
         }
     }
 
+    public long QueueDepth => _queue.Reader.Count;
+#else
+    // Cloudflare Workers freeze the isolate between events, so background
+    // drain workers would never run — persistence is awaited inline through
+    // the D1 binding instead (concurrent events still batch at the binding).
+    public RoomMessagePersister(IDbClient db, int workerCount, int queueCapacity)
+    {
+        _db = db;
+    }
+
+    public long QueueDepth => 0;
+#endif
+
     public long PersistedCount => Interlocked.Read(ref _persisted);
 
-    public long QueueDepth => _queue.Reader.Count;
+    public long FailedCount => Interlocked.Read(ref _persistFailed);
 
+    public string LastErrorJson => RoomProtocol.Escape(Volatile.Read(ref _lastPersistError) ?? "null");
+
+    /// <summary>
+    /// Persist a broadcast snapshot. Locally this enqueues into the
+    /// write-behind queue (group-commit coalescing); under NetWasm it awaits
+    /// the D1 binding inline so the write lands before the event ends.
+    /// </summary>
+    public ValueTask PersistAsync(string roomId, string senderId, string payloadJson)
+    {
+#if NETWASM
+        return PersistInlineAsync(roomId, senderId, payloadJson);
+#else
+        TryEnqueue(roomId, senderId, payloadJson);
+        return ValueTask.CompletedTask;
+#endif
+    }
+
+#if !NETWASM
     public bool TryEnqueue(string roomId, string senderId, string payloadJson)
     {
         var row = new RoomMessageRow(
@@ -481,26 +617,61 @@ public sealed class RoomMessagePersister
     {
         await foreach (var row in _queue.Reader.ReadAllAsync())
         {
-            try
-            {
-                await _db.InsertAsync(Schema.RoomMessages, new Dictionary<string, object?>
-                {
-                    ["id"] = row.Id,
-                    ["room_id"] = row.RoomId,
-                    ["sender_id"] = row.SenderId,
-                    ["payload"] = row.PayloadJson,
-                    ["created_at"] = row.CreatedAt,
-                });
-                Interlocked.Increment(ref _persisted);
-            }
-            catch
-            {
-                Interlocked.Increment(ref _persistFailed);
-            }
+            await InsertRowAsync(row);
+        }
+    }
+#endif
+
+    private sealed record RoomMessageRow(string Id, string RoomId, string SenderId, string PayloadJson, string CreatedAt);
+
+    private async ValueTask PersistInlineAsync(string roomId, string senderId, string payloadJson)
+    {
+        try
+        {
+            await InsertRowAsync(new RoomMessageRow(
+                Ids.New("msg"),
+                roomId,
+                senderId,
+                payloadJson,
+                DateTimeOffset.UtcNow.ToString("O")));
+        }
+        catch (System.Exception exception)
+        {
+            Interlocked.Increment(ref _persistFailed);
+            // Note: exception.Message can itself throw under NetWasm JS
+            // interop, so only the type name is surfaced.
+            Volatile.Write(
+                ref _lastPersistError,
+                exception.GetType().FullName ?? "unknown");
         }
     }
 
-    private sealed record RoomMessageRow(string Id, string RoomId, string SenderId, string PayloadJson, string CreatedAt);
+    private async Task InsertRowAsync(RoomMessageRow row)
+    {
+        try
+        {
+            // InsertAsync(TableDef, IDictionary) maps dictionaries straight
+            // onto columns on both hosts — no JSON serialization involved,
+            // which matters under NetWasm where the source-generated
+            // serializer has no metadata for Dictionary<string, object?>.
+            await _db.InsertAsync(Schema.RoomMessages, new Dictionary<string, object?>
+            {
+                ["id"] = row.Id,
+                ["room_id"] = row.RoomId,
+                ["sender_id"] = row.SenderId,
+                ["payload"] = row.PayloadJson,
+                ["created_at"] = row.CreatedAt,
+            });
+            Interlocked.Increment(ref _persisted);
+        }
+        catch (System.Exception exception)
+        {
+            Interlocked.Increment(ref _persistFailed);
+            Volatile.Write(
+                ref _lastPersistError,
+                exception.GetType().FullName ?? "unknown");
+        }
+    }
 }
 
 /// <summary>Hand-rolled envelope builder: zero-reflection, serialize-once fanout.</summary>
@@ -563,7 +734,7 @@ public static class RoomProtocol
     public static string Error(string error, string message) =>
         $"{{\"type\":\"error\",\"error\":{Escape(error)},\"message\":{Escape(message)}}}";
 
-    private static void AppendPeer(System.Text.StringBuilder sb, Peer peer)
+    public static void AppendPeer(System.Text.StringBuilder sb, Peer peer)
     {
         sb.Append("{\"connectionId\":")
             .Append(Escape(peer.Connection.Id))
@@ -585,7 +756,7 @@ public static class RoomProtocol
     private static string Number(double value) =>
         value.ToString("R", CultureInfo.InvariantCulture);
 
-    private static string Escape(string value)
+    public static string Escape(string value)
     {
         var sb = new System.Text.StringBuilder(value.Length + 2);
         sb.Append('"');
@@ -626,18 +797,15 @@ public sealed record RoomMessageRecord(string Id, string RoomId, string SenderId
 /// <summary>Server RSS for the stats endpoint. Full .NET only (NetWasm has no Process API).</summary>
 public static class ProcessInfo
 {
-    public static object? Snapshot()
+    public static string Json()
     {
 #if NETWASM
-        return null;
+        return "null";
 #else
         using var process = System.Diagnostics.Process.GetCurrentProcess();
-        return new
-        {
-            peakWorkingSetMb = process.PeakWorkingSet64 / (1024.0 * 1024.0),
-            workingSetMb = process.WorkingSet64 / (1024.0 * 1024.0),
-            threads = process.Threads.Count,
-        };
+        var peak = (process.PeakWorkingSet64 / (1024.0 * 1024.0)).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        var working = (process.WorkingSet64 / (1024.0 * 1024.0)).ToString("R", System.Globalization.CultureInfo.InvariantCulture);
+        return $"{{\"peakWorkingSetMb\":{peak},\"workingSetMb\":{working},\"threads\":{process.Threads.Count}}}";
 #endif
     }
 }

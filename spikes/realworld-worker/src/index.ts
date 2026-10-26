@@ -177,7 +177,7 @@ export default {
       }
     }
 
-    const response = await host.fetch(request, env);
+    const response = await host.fetch(request, env, ctx);
 
     if (cacheable && response.status === 200) {
       ctx.waitUntil(writeCache(url, response.clone()));

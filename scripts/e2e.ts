@@ -33,6 +33,32 @@ const assertStatus = async (
 const json = async <T>(response: Response): Promise<T> =>
   (await response.json()) as T;
 
+/** Reap a stale wrangler/workerd tree from a previous run. */
+const killPort = (portToKill: string): void => {
+  try {
+    const listeners = spawnSync(
+      "lsof",
+      ["-nP", `-iTCP:${portToKill}`, "-sTCP:LISTEN", "-t"],
+      { encoding: "utf-8" }
+    );
+    for (const line of listeners.stdout.trim().split("\n")) {
+      const pid = Number.parseInt(line, 10);
+      if (Number.isFinite(pid) && pid !== process.pid) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // already gone
+        }
+      }
+    }
+  } catch {
+    // lsof unavailable
+  }
+  spawnSync("pkill", ["-f", `wrangler.*--port ${portToKill}`], {
+    stdio: "ignore",
+  });
+};
+
 const waitForServer = async (): Promise<void> => {
   const deadline = Date.now() + 45_000;
 
@@ -170,6 +196,7 @@ const run = async (): Promise<void> => {
     fail("wrangler d1 execute failed");
   }
 
+  killPort(port);
   console.log(`Starting wrangler dev on ${baseUrl}...`);
   const server = spawn(
     "bunx",
@@ -432,9 +459,7 @@ const run = async (): Promise<void> => {
     console.log("\nE2E PASSED");
   } finally {
     server.kill("SIGTERM");
-    spawnSync("pkill", ["-f", `wrangler dev --port ${port}`], {
-      stdio: "ignore",
-    });
+    killPort(port);
   }
 };
 

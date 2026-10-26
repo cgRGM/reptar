@@ -25,10 +25,22 @@ const features = [
     title: "Sliding-Window Rate Limiting",
   },
   {
-    code: "app.GetAiTools() + ctx.StreamLlmAsync()",
+    code: "POST /v1/chat/completions",
     description:
-      "Turn your REST API into an autonomous Agent Harness. Auto-export routes with Validator<T> rules as OpenAI, Claude, and Gemini tools, dispatch tool calls in-process, and stream tokens with client-abort cancellation.",
+      "Universal streaming LLM proxy with in-connection failover, SHA-256 prompt caching (0.196 ms hit), and Vercel AI SDK Data Stream protocol compatibility. Benchmarked at 28,499 req/s under 500 concurrent connections.",
+    title: "AI Gateway & Streaming",
+  },
+  {
+    code: "app.GetAiTools() + StreamingAgentHarness",
+    description:
+      "Turn your REST API into an autonomous Agent Harness. Auto-export routes with Validator<T> rules as tools, dispatch in-process, and drive multi-step execution loops with checkpoints and human approval rules.",
     title: "AI Tools & Agent Harness",
+  },
+  {
+    code: "app.OnWebSocket(\"/rooms/{roomId}\")",
+    description:
+      "High-concurrency WebSocket rooms with presence awareness and write-behind SQLite group-commit persistence. Benchmarked at 0.32 ms p50 fanout latency across 500 concurrent connections (4,926 sockets/s ramp-up).",
+    title: "Realtime Rooms & WebSockets",
   },
   {
     code: "Reptar.Auth + Better Auth",
@@ -37,15 +49,27 @@ const features = [
     title: "Built-in Auth & Better Auth",
   },
   {
-    code: "bun scripts/reptar.ts db migrate",
+    code: "ctx.WaitUntil(async () => ...)",
     description:
-      "Zero-dependency database migrations in both CLI and C#. Scaffold sequential SQL files with db new, inspect applied state with db status, or run programmatic migrations at startup via app.MigrateAsync().",
-    title: "Integrated Migrations Engine",
+      "Serverless-safe background tasks inspired by Hono and FastAPI. Prevents Cloudflare Workers isolate freezing after response completion while dispatching unblocked to Kestrel thread pools.",
+    title: "Serverless Background Tasks",
+  },
+  {
+    code: "app.DefinePolicy<T> + ctx.Can<T>",
+    description:
+      "Declarative, reflection-free resource authorization inspired by AdonisJS Bouncer and Laravel Gates. Define granular ownership policies once at startup and evaluate them cleanly across route handlers.",
+    title: "Declarative Resource Policies",
+  },
+  {
+    code: "app.CreateTestClient()",
+    description:
+      "Sub-millisecond in-memory testing engine without TCP port bindings, socket churn, or OS firewall alerts. Test complete request, validation, authorization, and background task pipelines in-process.",
+    title: "In-Memory Testing Engine",
   },
   {
     code: "-p:ReptarSqliteOnly=true",
     description:
-      "Compile the exact same C# routes to netwasm0.1 for Cloudflare Workers or net10.0 Native AOT. Trimming unused database drivers produces a 10.9 MB standalone Linux binary that boots in 258 ms.",
+      "Compile the exact same C# routes to netwasm0.1 for Cloudflare Workers or net10.0 Native AOT. Trimming unused database drivers produces a 10.4 MB standalone Linux binary that boots in 124 ms.",
     title: "Dual-Target Wasm & Native AOT",
   },
 ];
@@ -78,6 +102,20 @@ const features = [
 
     <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 border-x border-b border-[#222630] bg-[#0f1116] divide-y md:divide-y-0 md:divide-x divide-[#222630]">
       {features.slice(4, 8).map((feature) => (
+        <div class="p-6 flex flex-col justify-between">
+          <div>
+            <h3 class="text-base font-semibold text-white tracking-tight">{feature.title}</h3>
+            <p class="mt-2.5 text-xs text-zinc-400 leading-relaxed">{feature.description}</p>
+          </div>
+          <div class="mt-6 pt-3 border-t border-[#1b1f28] font-mono text-[11px] text-emerald-400 truncate">
+            {feature.code}
+          </div>
+        </div>
+      ))}
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 border-x border-b border-[#222630] bg-[#0f1116] divide-y md:divide-y-0 md:divide-x divide-[#222630]">
+      {features.slice(8, 12).map((feature) => (
         <div class="p-6 flex flex-col justify-between">
           <div>
             <h3 class="text-base font-semibold text-white tracking-tight">{feature.title}</h3>

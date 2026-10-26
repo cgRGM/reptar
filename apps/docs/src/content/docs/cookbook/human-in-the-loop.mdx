@@ -1,0 +1,74 @@
+---
+title: Human-in-the-Loop Agents
+description: Pause a running agent for hours or days — ask a question or request a tool approval, persist the checkpoint to SQLite/D1, and resume exactly where it stopped.
+---
+
+Autonomous agents eventually hit a wall only a human can break: a question only the user can answer, or a tool call that shouldn't run unattended. Reptar's request ports make that a **first-class pause** — the run suspends, the full conversation state is persisted, and the run resumes when the answer arrives, **even in a fresh process**.
+
+---
+
+## 1. The built-in ask: `ask_user`
+
+Wrap the streaming harness with `RequestPortAgent` and give it a checkpoint store. The agent gains an `ask_user` tool; when it calls it, the run suspends instead of executing:
+
+```csharp
+using Reptar.AI;
+
+var checkpoints = new RunCheckpointStore(db, AgentRunCheckpointSchema.RunCheckpoints());
+await checkpoints.EnsureCreatedAsync();
+
+var result = await RequestPortAgent.RunAsync(
+    history, llm.StreamAsync, executor, tools,
+    checkpoints, sessionId,
+    onPortEvent: port => PushToBrowser(port.CheckpointId, port.Question));
+
+if (!result.Completed)
+{
+    // The run is paused. Surface result.SuspendedCheckpoint.Question —
+    // the answer may arrive minutes or days from now.
+    SaveForLater(result.SuspendedCheckpoint!.Id);
+}
+```
+
+Resuming is one call. The conversation is restored from the checkpoint's persisted state, so this works from a completely new process:
+
+```csharp
+var resumed = await RequestPortAgent.ResumeAsync(
+    checkpoints, checkpointId, "Use the staging cluster.",
+    llm.StreamAsync, executor, tools);
+```
+
+## 2. Tool approvals: the same pause, with two buttons
+
+Approvals are request ports with exactly two outcomes. `ToolApprovalGate` wraps any tool executor: gated calls persist a checkpoint and suspend; on resume, an approved answer executes the **real tool** (ungated — it was just approved), a denial returns a reasoned refusal the model can plan around:
+
+```csharp
+// Reads auto-approve; writes and deletes require a human decision.
+var approval = ToolApproval.ApproveReadOnly("read_file", "list_files", "grep");
+
+var gated = ToolApprovalGate.WrapWithCheckpoint(
+    innerExecutor, approval, checkpoints, sessionId, history);
+
+// Later: the approval arrives
+await RequestPortAgent.ResumeAsync(
+    checkpoints, checkpointId, answer: "approve",
+    llm.StreamAsync, gated, tools,
+    liveHistory: history,
+    pendingToolExecutor: innerExecutor); // runs the tool ungated
+```
+
+The rule model follows the Microsoft Agent Framework's discipline, worth copying exactly: a **tool-level** rule (`ToolApprovalRule.ForTool("read_file")`) approves every call; a **tool + exact-arguments** rule approves only calls whose normalized JSON matches — and a non-null but empty argument rule matches only zero-argument calls, so an argument-scoped rule can never silently widen into a tool-wide one.
+
+## 3. What persists
+
+`agent_run_checkpoints` (a plain `TableDef`): the session, the port name, the human-readable question, the **entire conversation as JSON**, the pending tool call id (plus tool name/args for approval checkpoints), and the status (`pending` → `answered`). On D1 it is the same story — the store is just `IDbClient`.
+
+## 4. Where the wire fits
+
+Over HTTP, suspension is a structured event your frontend renders as a prompt:
+
+- `RequestPortEvent.RunSuspended(CheckpointId, Port, Question)` → render the question
+- `POST /agent/runs/resume` with `{ checkpointId, answer }` → the run continues
+- With the [AI Gateway](/ai/ai-gateway/)'s data-stream protocol, tool-call frames (`9:`/`a:`) map one-to-one onto approvals
+
+The checkpoint store composes with the session store: redact secrets with `IMessagePersistFilter` before the suspended history hits disk, and scope sessions per user with `ScopedAgentSessionStore` so one tenant can never resume another's checkpoint.

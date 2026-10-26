@@ -4,6 +4,9 @@ export {
   type D1DatabaseLike,
   type D1PreparedStatementLike,
   type R2BucketLike,
+  type R2GetOptions,
+  type R2ObjectLike,
+  type R2ObjectsLike,
   type R2PutOptions,
   type ReptarBindings,
   type ReptarStorageBinding,
@@ -14,4 +17,6 @@ export {
   type ReptarHostOptions,
   type ReptarWasmApp,
 } from "./host";
+export { createReptarDurableObjectHost } from "./durable-object";
+export { createOtlpExporter, type OtlpExporterOptions } from "./otlp";
 export { patchNetWasmHost } from "./patch";

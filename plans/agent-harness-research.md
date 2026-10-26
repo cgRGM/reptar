@@ -271,3 +271,50 @@ The repo itself (`.agents/skills/*/SKILL.md`) already follows this convention fo
 5. **G19** evals through the gateway (mock provider = free CI).
 6. **G12** continuation tokens on the wire; **G15** Magentic prompt pack; **G20** skills directory.
 7. **G13/G16/G17** (A2A provider type, compile-time graph validation, declarative workflows) — design notes for when the engine stabilizes.
+
+---
+
+# Part 3: Implementation log (2026-10-25, same session)
+
+All gems below are **implemented in `framework/Reptar/AI/` and the ai-gateway**, zero
+leave-behinds copied, all behind the existing `#if !NETWASM` folder convention, all
+zero-reflection in request paths, all with tests in `AgentEngineTests.cs`.
+Suite went **148 → 187 passing**.
+
+| Gem | File(s) | Notes |
+| :-- | :-- | :-- |
+| **G11** structured output + `Rule<T>` retry | `AI/StructuredOutput.cs` | `GenerateAsync<T>` extension on `ILlmClient`; schema rendered from `IValidatorMeta` via the same OpenAPI generator the API export uses; fence stripping; per-attempt fresh issue lists; `CompleteAsync` stream-drain helper; AOT doc note (pass source-gen options). |
+| **G14** request ports + checkpoints | `AI/RunCheckpoints.cs` | `agent_run_checkpoints` TableDef + manual-mapped row + `RunCheckpointStore`; `ask_user` tool; suspend via `RequestPortSuspendedException`; **resume from persisted state works in a fresh process** (verified by test). Two 3-line additive edits to `AgentHarness.cs` rethrow the suspension exception instead of swallowing it. |
+| **G4** tool approval | `AI/ToolApproval.cs` | Tool-level vs tool+exact-args rules with MSFT's null/non-null no-widening discipline; read-only vs mutating groups; **normalized-JSON exact matching**; sync gate + checkpoint-backed human-in-the-loop gate; approval resume executes the real tool (ungated, `pendingToolExecutor`), denial returns a reasoned refusal. |
+| **G1–G3** modules | `AI/AgentModules.cs` | `AgentModule` record contract + `ComposeInstructions/Tools/Executor`; `TodoModule` (5 tools, MSFT todo prompt text); `PlanExecuteModule` (mode_set/mode_get, per-turn interpolated instructions, session-isolated modes). |
+| **G5** loop evaluators | `AI/LoopEvaluators.cs` | `LoopEvaluation.Stop/Continue(feedback)`; `CompletionMarker` (self-contained feedback works with fresh context); `TodoCompletion` (defers while in plan mode); `Delegate`; `LoopRunner` with **hard MaxIterations cap** and no-looping-dead-runs rule. |
+| **G18** persistence gating | `AI/AgentSafety.cs` + `AI/SessionStore.cs` (additive) | `IMessagePersistFilter` on the session store: secret redaction (OpenAI/Anthropic/AWS/bearer/hex patterns), tool-result drops, composable; dropped messages never hit disk. |
+| **G21** isolation keys | `AI/AgentSafety.cs` | `ScopedAgentSessionStore`: every id composed `{isolationKey}:{id}`, bare ids never leak, cross-tenant reads structurally impossible. |
+| **G19** evals | `AI/AgentEvals.cs` | `EvalCase`/scorers (expected-output, predicate, **LLM judge via G11 structured output with validation retry**), `AgentEvalRunner`, durable `agent_evals` TableDef + store — free/deterministic against mock providers. |
+| **G15** Magentic prompts | `AI/MagenticPrompts.cs` | Full task-ledger pack (fact-sheet pre-survey, facts update, plan, replan, full ledger, progress ledger) with the `{schema}`-must-keep rule + `Render` helper. |
+| **G20** skills directory | `AI/SkillsDirectory.cs` | Discovers `.agents/skills/*/SKILL.md` (frontmatter parse), catalogs in instructions, `use_skill` loads content on demand (progressive disclosure); names restricted to a safe slug pattern, reads confined to the root, unknown names rejected before any filesystem access. |
+| **G12** continuation tokens | `examples/ai-gateway/app.cs` | SSE `id:` on every frame, `X-Reptar-Continuation` header, `?continuation=&last_event=` (or `Last-Event-ID` header) resume from the prompt cache. **Verified live: 51-frame stream resumed at `id: 3` with exactly 48 frames, cache HIT, zero upstream cost.** |
+| **G13** A2A provider | `examples/ai-gateway/app.cs` | `a2a/<agent-url>` routing: card resolved once (cached), `message/send` JSON-RPC, `tasks/get` polling for long-running tasks, synchronous-completion artifacts honored, full failover integration. **Verified live against a scripted A2A server; dead endpoint falls back down the chain.** |
+| **G8/G9** observers + run telemetry | `AI/AgentObservability.cs` | `TraceObserver` (event buffer + tool timings), `JsonLines` (per-event JSONL with flush), `Compose`; `agent_runs` TableDef + `AgentRunStore` so every run leaves an inspectable trace. |
+| **G6** background agents | `AI/BackgroundAgents.cs` | The four-tool MSFT set (`start_task` / `wait_for_first_completion` / `get_task_results` / `get_all_tasks`), each child in its own concurrent session via `Task.Run`; unknown agents rejected structurally; clear-completed hook for session release. |
+| **G7** module state slices | `AI/BackgroundAgents.cs` | `agent_module_state` TableDef (composite PK, upsert) + `ModuleStateStore` — the durable version of the MSFT session state bag. |
+
+**Deliberately not implemented (design notes in Part 2):** G16 compile-time graph
+validation (needs a workflow-module type first — the `Workflows.Generators` pattern
+remains the reference), G17 declarative YAML workflows (sketch only), and every confirmed
+leave-behind.
+
+**Known limitations, honestly stated:** the in-memory `BackgroundAgentsModule` doesn't
+cancel abandoned tasks on dispose (documented; the durable version belongs on
+`IQueueClient`/`IDurableBridge` under NetWasm); `SkillsDirectory` reads skill content but
+does not execute skill scripts (deferred until it composes with the G4 approval gate);
+`Rule<T>`'s expression-based `Prop()` still relies on the existing validator internals
+(the AOT-safe `Prop(name, getter)` overload exists for strict AOT paths).
+
+**Late additions, same session (Part 3 update):** G16 and G17 are now implemented
+too — the gem list is complete, nothing left as a design note.
+
+| Gem | File(s) | Notes |
+| :-- | :-- | :-- |
+| **G16** compile-time graph validation | `AI/WorkflowGraph.cs` (runtime attribute + edge record, deliberately platform-neutral) + `Reptar.SourceGenerators/ReptarWorkflowGenerator.cs` | `[WorkflowStep(id, Produces, Consumes, IsOutput)]` on methods → generated `<Type>Graph` class (Steps, Edges, UnhandledMessages, OrphanConsumers, IsComplete) in the same namespace + **REPTARWF001/REPTARWF002 build warnings** for produced-without-consumer / consumed-without-producer — verified firing. Mirrors the MSFT `Workflows.Generators` philosophy; warning severity keeps negative cases unit-testable. 3 tests (`WorkflowGraphTests.cs`). |
+| **G17** declarative workflows, Reptar form | `AI/DeclarativeWorkflow.cs` | `agent.json` → `DeclarativeWorkflow` via `JsonDocument` (zero reflection, zero dependencies — YAML/PowerFx stays a leave-behind); the SAME graph rules as G16 in `Validate()`; `DeclarativeWorkflowRunner` executes steps topologically over an in-memory message bus with agent-name → `ILlmClient` resolution, cycles reported as `StalledStep`, outputs snapshotted from `isOutput` steps. 4 tests. |

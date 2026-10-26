@@ -2,6 +2,7 @@ import { createReptarHost } from "@reptar/host";
 import type {
   D1DatabaseLike,
   MessageBatch,
+  R2BucketLike,
   ReptarBindings,
   ReptarWasmApp,
 } from "@reptar/host";
@@ -129,6 +130,7 @@ const host = createReptarHost<Env>({
       >[string],
     },
     r2: {
+      bucket: env.BUCKET as unknown as R2BucketLike,
       delete: async (key) => {
         await env.BUCKET.delete(key);
       },
@@ -160,7 +162,7 @@ const host = createReptarHost<Env>({
 });
 
 export default {
-  async fetch(request: Request, env: Env) {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
     const origin = request.headers.get("origin");
     const cors = corsHeaders(origin, env.CORS_ORIGINS);
@@ -252,15 +254,24 @@ export default {
       );
     }
 
-    return withCors(await host.fetch(request, env), origin, env.CORS_ORIGINS);
+    return withCors(
+      await host.fetch(request, env, ctx),
+      origin,
+      env.CORS_ORIGINS
+    );
   },
-  async queue(batch: MessageBatch<unknown>, env: Env) {
-    await host.queue(batch, env);
+  async queue(
+    batch: MessageBatch<unknown>,
+    env: Env,
+    ctx: ExecutionContext
+  ) {
+    await host.queue(batch, env, ctx);
   },
   async scheduled(
     event: { cron: string; scheduledTime: number | Date },
-    env: Env
+    env: Env,
+    ctx: ExecutionContext
   ) {
-    await host.scheduled(event, env);
+    await host.scheduled(event, env, ctx);
   },
 };

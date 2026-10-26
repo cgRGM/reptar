@@ -1,0 +1,57 @@
+---
+title: Realtime Server-Sent Events (SSE)
+description: Push live notifications, activity feeds, and progress updates to browser EventSource clients.
+---
+
+Server-Sent Events (SSE) provide lightweight, one-way HTTP streaming from server to client. Unlike WebSockets, SSE operates over standard HTTP, traverses corporate firewalls effortlessly, supports native browser reconnection via `EventSource`, and integrates cleanly with edge proxies.
+
+---
+
+## 1. Streaming Live Server-Sent Events
+
+Use `ctx.Sse()` with an `IAsyncEnumerable<string>` stream:
+
+```csharp
+app.Get("/api/events/live", ctx =>
+{
+    // Returns text/event-stream with no-cache and keep-alive headers
+    return ctx.Sse(async cancellationToken =>
+    {
+        return StreamLiveEventsAsync(ctx, cancellationToken);
+    });
+});
+
+static async IAsyncEnumerable<string> StreamLiveEventsAsync(
+    Ctx ctx,
+    [EnumeratorCancellation] CancellationToken cancellationToken)
+{
+    var count = 0;
+    while (!cancellationToken.IsCancellationRequested && count < 10)
+    {
+        await Task.Delay(1000, cancellationToken);
+        count++;
+
+        // Emits: "data: {"time":"...","tick":1}\n\n"
+        yield return $"{{\"time\":\"{DateTimeOffset.UtcNow:O}\",\"tick\":{count}}}";
+    }
+}
+```
+
+---
+
+## 2. Browser Client Integration
+
+Connect from any browser or frontend framework using standard `EventSource`:
+
+```ts
+const source = new EventSource("/api/events/live");
+
+source.onmessage = (event) => {
+  const payload = JSON.parse(event.data);
+  console.log("Live tick:", payload.tick, payload.time);
+};
+
+source.onerror = (err) => {
+  console.error("SSE stream error", err);
+};
+```

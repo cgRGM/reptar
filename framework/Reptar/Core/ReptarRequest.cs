@@ -29,6 +29,13 @@ public sealed class ReptarRequest
 
     public byte[]? Body { get; init; }
     public bool BodyTooLarge { get; init; }
+
+    /// <summary>
+    /// Host cancellation signal for this request. Kestrel/Lambda populate it;
+    /// Workers and the in-memory test client leave it at CancellationToken.None.
+    /// </summary>
+    public CancellationToken Aborted { get; set; } = CancellationToken.None;
+
     public Dictionary<string, string> RouteParams { get; internal set; } = new(StringComparer.OrdinalIgnoreCase);
 
     private MultipartForm? _form;

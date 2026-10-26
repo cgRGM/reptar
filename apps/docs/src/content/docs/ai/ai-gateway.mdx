@@ -11,22 +11,18 @@ It is 100% wire-compatible with both standard Server-Sent Events (SSE) and the *
 
 ## Architecture & Features
 
-1. **Universal Model Proxy (`POST /v1/chat/completions`)**:
-   Accepts standard OpenAI-compatible JSON payloads and transparently converts requests and streaming responses for the destination provider.
+1. **Universal Model Proxy (`POST /v1/chat/completions`)**: Accepts standard OpenAI-compatible JSON payloads and transparently converts requests and streaming responses for the destination provider.
 
-2. **In-Connection Failover**:
-   If the primary provider returns `429 Too Many Requests` or `5xx Server Error`, the gateway automatically retries the next configured fallback provider in the same HTTP connection before any tokens are streamed to the client.
+2. **In-Connection Failover**: If the primary provider returns `429 Too Many Requests` or `5xx Server Error`, the gateway automatically retries the next configured fallback provider in the same HTTP connection before any tokens are streamed to the client.
 
 3. **Dual Wire Protocols**:
    - **Standard SSE**: `Accept: text/event-stream` returns OpenAI-compatible `data: {"choices":[{"delta":{"content":"..."}}]}` stream.
    - **Vercel Data Stream**: `Accept: text/vnd.ai` or `?stream_protocol=data-stream` returns `0:"token"` text deltas and `d:{"finishReason","usage"}` payloads for `useChat()`.
    - **Buffered JSON**: `"stream": false` returns standard OpenAI `chat.completion` objects.
 
-4. **SHA-256 Prompt Cache**:
-   Keyed on `SHA-256(model + messages)`. Cache hits replay the token stream at sub-millisecond latencies with `X-Reptar-Cache: HIT`, dramatically cutting upstream token costs.
+4. **SHA-256 Prompt Cache**: Keyed on `SHA-256(model + messages)`. Cache hits replay the token stream at sub-millisecond latencies with `X-Reptar-Cache: HIT`, dramatically cutting upstream token costs.
 
-5. **Fire-and-Forget SQLite Telemetry**:
-   Token counts, latencies, and cache metrics are written via Reptar's SQLite group-commit channel batcher, ensuring persistence never stalls response throughput.
+5. **Fire-and-Forget SQLite Telemetry**: Token counts, latencies, and cache metrics are written via Reptar's SQLite group-commit channel batcher, ensuring persistence never stalls response throughput.
 
 ---
 
@@ -39,3 +35,15 @@ bun gateway:dev
 # Run 500-connection streaming benchmark
 bun gateway:bench
 ```
+
+---
+
+## Benchmarks & Performance
+
+Under 500-connection concurrent load:
+
+- **Uncached Throughput:** **22,044 req/s** (220,000 requests, 100% success, TTFT p50 59ms)
+- **Prompt Cache HIT:** **28,499 req/s** (285,000 requests, 100% success, TTFT p50 36ms)
+- **Zero Client Drops:** Failover between upstream providers completes within the same HTTP request without connection termination.
+
+See [RealWorld & Benchmarks](/overview/realworld#4-ai-gateway--universal-streaming-benchmarks) for complete methodology and comparison tables.

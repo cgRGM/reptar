@@ -1,0 +1,94 @@
+---
+title: Build with an AI Agent
+description: Hand this prompt to Claude Code, Cursor, Codex, or any coding agent and get a deployed Reptar app — the framework is designed to be agent-driven.
+---
+
+import { Tabs, TabItem, Aside, Code, LinkCard, CardGrid, Card } from "@astrojs/starlight/components";
+
+Reptar was built for this workflow: **an AI agent reads your intent and writes the C# backend directly.** The framework's constraints do the rest — zero runtime reflection and compile-time validation mean the compiler catches what a human would catch in review. Most frameworks make agents guess; Reptar gives them contracts.
+
+## The copy-paste prompt
+
+Open your agent in the repo clone and paste this. It encodes the conventions, the loop, and the definition of done.
+
+````text
+You are building a Reptar fullstack app. Read llms.txt at the repo root first —
+it is the canonical API reference and its rules are hard requirements.
+
+Working rules:
+- Storage schema: plain `TableDef` declarations in apps/api/schema/ — never
+  attribute-laden DTOs. Projection DTOs stay clean records.
+- Queries: generated ColumnRef tokens (e.g. AppSchema.NotesCols.Title.Eq(...))
+  over `ctx.Db.From<T>(table)`; raw SQL only when a JOIN or CTE demands it.
+- Validation: Rule<T> on every input route. Auth: ctx.UserAsync() gates every
+  write.
+- Zero reflection: parse request bodies with JsonDocument or validated typed
+  routes; serialize responses with Utf8JsonWriter or the typed JSON codec.
+  Bare JsonSerializer.Serialize throws at runtime in file-based apps.
+- Features live in apps/api/features/, one file per slice, mounted from app.cs.
+
+Loop:
+1. bun scripts/reptar.ts inspect --json  (or the MCP tools) before assuming
+   any schema or route exists.
+2. Write the TableDef, then the feature file, then mount both in app.cs.
+3. bun run dev, then verify with curl:
+   - anonymous write returns 401
+   - sign-up via POST /api/auth/sign-up/email returns 201 and a cookie
+   - signed-in write returns 201
+   - a validation violation returns the Rule<T> error envelope
+4. bun run api:codegen — the TypeScript client must regenerate cleanly.
+5. bun scripts/reptar.ts doctor --json before you say anything is done.
+
+Build: <describe your app in 1-3 sentences, e.g. "an internal tool where
+signed-in users log customer calls, tag them, and export CSVs">
+
+Done means: the dev server boots, every checkpoint above passes with curl
+output pasted, the generated client compiles, and `doctor --json` reports
+healthy. Do not mark success from the build alone — run the checkpoints.
+````
+
+<Aside type="tip" title="Why agents do well here">
+  The same properties that make Reptar fast on Cloudflare and Native AOT — no runtime reflection, generated column tokens, `Rule<T>` as a single source of truth for both prompts and validation — are exactly what makes agents productive: the compiler is the reviewer. See [Why Reptar](/overview/why-reptar/) for the full argument.
+</Aside>
+
+## The machine-readable surface
+
+The prompt above works because the repo exposes state, not guesses. Use it yourself, too:
+
+| Command | What the agent (or you) gets |
+| :-- | :-- |
+| `bun scripts/reptar.ts inspect --json` | Full project state: tables, columns, routes, migrations |
+| `bun scripts/reptar.ts doctor --json` | Toolchain, database connectivity, contract freshness |
+| `bun scripts/reptar.ts db plan --json` | Schema drift between `TableDef`s and the live database |
+| `bun scripts/reptar.ts mcp` | MCP stdio server: `reptar_inspect`, `reptar_schema`, `reptar_routes`, `reptar_doctor`… |
+| `llms.txt` (repo root) | The canonical, rules-first API reference |
+
+If your agent supports MCP, skip the prompt's manual steps and add the server:
+
+```json
+{
+  "mcpServers": {
+    "reptar": {
+      "command": "bun",
+      "args": ["scripts/reptar.ts", "mcp"],
+      "cwd": "/path/to/reptar-clone"
+    }
+  }
+}
+```
+
+## The agent loop, visualized
+
+1. **Inspect** — `inspect --json` / MCP: what tables and routes exist today
+2. **Schema** — declare the `TableDef`; nothing else — creation is automatic
+3. **Feature** — one file: validated routes with `Rule<T>`, auth gates, typed queries
+4. **Verify** — curl the 401 → 201 → validation sequence against the running dev server
+5. **Contracts** — `api:codegen` regenerates the typed client; typecheck the frontend
+6. **Doctor** — `doctor --json` green, then (and only then) claim done
+7. **Deploy** — `my-app/deploy/deploy.sh`; the health gate is the last checkpoint
+
+<CardGrid>
+  <LinkCard title="Quick Start" description="The exact app your agent will build, with every checkpoint." href="/getting-started/quickstart/" />
+  <LinkCard title="AI Cookbook: Agent Tools" description="Expose routes as OpenAI/Anthropic tool schemas with one line." href="/cookbook/ai-agent-tools/" />
+  <LinkCard title="The Agent Harness" description="Modules, request ports, approvals, loops — the full agent engine." href="/ai/agent-harness/" />
+</CardGrid>

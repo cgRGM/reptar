@@ -1,0 +1,17 @@
+{
+  "label": "vps-2026-10-25 (2 vCPU Lightsail, 100 connections)",
+  "scenarios": [
+    { "name": "plaintext", "rps": 41877, "p95Ms": 2.8 },
+    { "name": "json", "rps": 42239, "p95Ms": 2.7 },
+    { "name": "router-params", "rps": 41355, "p95Ms": 2.9 },
+    { "name": "validate", "rps": 36262, "p95Ms": 3.3 },
+    { "name": "task-detail", "rps": 13765, "p95Ms": 10.3 },
+    { "name": "task-list", "rps": 5945, "p95Ms": 21.8 },
+    { "name": "task-comments", "rps": 10707, "p95Ms": 13.7 },
+    { "name": "create-task", "rps": 6224, "p95Ms": 28.1 },
+    { "name": "me", "rps": 15683, "p95Ms": 9.2 },
+    { "name": "login", "rps": 14, "p95Ms": 1040.5 },
+    { "name": "update-task", "rps": 4925, "p95Ms": 31.1 },
+    { "name": "mixed", "rps": 6143 }
+  ]
+}

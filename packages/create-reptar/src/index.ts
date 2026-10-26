@@ -7,6 +7,7 @@ import type { ScaffoldOptions } from "./scaffold";
 
 type DbChoice = "d1" | "sqlite" | "postgres" | "mysql";
 type AuthChoice = "better-auth" | "none";
+type TemplateChoice = "fullstack" | "minimal-api" | "agent";
 
 const printHelp = (): void => {
   console.log(`
@@ -14,7 +15,9 @@ create-reptar [project-name] [options]
 
 Options:
   -y, --yes          Scaffold with sensible defaults non-interactively
+  --template <type>  Project template: fullstack (default; minimal-api/agent are planned)
   --db <type>        Database engine: d1 (default), sqlite, postgres, mysql
+  --database <type>  Alias for --db
   --auth <type>      Auth provider: better-auth (default), none
   -h, --help         Show this help message
 `);
@@ -34,11 +37,24 @@ const parseFlags = (
 ): {
   database: DbChoice;
   auth: AuthChoice;
+  template: TemplateChoice;
 } => {
   let database: DbChoice = "d1";
   let auth: AuthChoice = "better-auth";
+  let template: TemplateChoice = "fullstack";
 
-  const dbFlagIndex = args.indexOf("--db");
+  const templateFlagIndex = args.indexOf("--template");
+  if (templateFlagIndex !== -1 && args[templateFlagIndex + 1]) {
+    const val = args[templateFlagIndex + 1]?.toLowerCase();
+    if (val === "fullstack" || val === "minimal-api" || val === "agent") {
+      template = val;
+    }
+  }
+
+  const dbFlagIndex =
+    args.indexOf("--db") !== -1
+      ? args.indexOf("--db")
+      : args.indexOf("--database");
   if (dbFlagIndex !== -1 && args[dbFlagIndex + 1]) {
     const val = args[dbFlagIndex + 1]?.toLowerCase();
     if (
@@ -59,7 +75,7 @@ const parseFlags = (
     }
   }
 
-  return { auth, database };
+  return { auth, database, template };
 };
 
 const promptDatabase = async (rl: readline.Interface): Promise<DbChoice> => {
@@ -132,11 +148,15 @@ const run = async (): Promise<void> => {
 
   const config =
     process.stdin.isTTY && !isYes
-      ? await runInteractive(initialName)
+      ? {
+          ...(await runInteractive(initialName)),
+          template: parsed.template,
+        }
       : {
           auth: parsed.auth,
           database: parsed.database,
           projectName: initialName || "my-app",
+          template: parsed.template,
         };
 
   const targetDir = path.resolve(process.cwd(), config.projectName);
@@ -148,7 +168,27 @@ const run = async (): Promise<void> => {
     process.exit(1);
   }
 
+  // In-repo scaffolding: when run from a framework clone, build the app
+  // file-based against the in-repo framework sources (`#:project`), the same
+  // proven mechanism examples/blog uses. Standalone NuGet-based scaffolds
+  // arrive with the 0.1 package release.
+  const repoRoot = path.resolve(
+    path.dirname(new URL(import.meta.url).pathname),
+    "../../.."
+  );
+  const frameworkDir = path.join(repoRoot, "framework");
+  const inRepo =
+    existsSync(path.join(frameworkDir, "Reptar", "Reptar.csproj")) &&
+    targetDir.startsWith(repoRoot + path.sep);
+
+  if (inRepo) {
+    console.log(
+      "   • Build mode: file-based (#:project) against the in-repo framework"
+    );
+  }
+
   console.log(`\n🚀 Scaffolding ${config.projectName} with Reptar...`);
+  console.log(`   • Template: ${config.template}`);
   console.log(`   • Database: ${config.database}`);
   console.log(`   • Authentication: ${config.auth}`);
   console.log(`   • Frontend: React 19 + Tailwind CSS v4 + shadcn/ui`);
@@ -157,8 +197,10 @@ const run = async (): Promise<void> => {
   const options: ScaffoldOptions = {
     auth: config.auth,
     database: config.database,
+    frameworkDir: inRepo ? frameworkDir : undefined,
     projectName: config.projectName,
     targetDir,
+    template: config.template,
   };
 
   scaffoldProject(options);

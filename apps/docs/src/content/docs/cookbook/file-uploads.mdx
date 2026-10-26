@@ -1,0 +1,231 @@
+---
+title: File Uploads & Object Storage
+description: Validate uploads with magic bytes, stream them to R2/S3/local disk, and serve them with ETags, byte ranges, and presigned URLs.
+---
+
+Reptar's `c.Storage` is a small, provider-agnostic object store. The same C# code
+runs against Cloudflare R2 on Workers, S3-compatible storage on Native AOT, and
+local disk during development.
+
+---
+
+## 1. Configure storage
+
+```csharp
+var app = ReptarApp.Create(new ReptarConfig
+{
+#if NETWASM
+    Storage = Storage.R2(),                 // binds to env.BUCKET
+#else
+    Storage = Storage.Disk("./uploads"),    // local disk
+    // Storage = Storage.S3(new S3StorageOptions { ... });
+#endif
+});
+```
+
+All providers share the same core operations:
+
+| Operation | What it does |
+| :-- | :-- |
+| `PutAsync(key, bytes, contentType)` | Write an object. |
+| `GetAsync(key)` | Read the full object, or `null` when missing. |
+| `ExistsAsync(key)` / `DeleteAsync(key)` | Cheap existence check / delete. |
+| `HeadAsync(key)` | Size, content type, ETag, last-modified, user metadata. |
+| `GetRangeAsync(key, offset, length)` | Read a byte range without downloading the object. |
+| `ListAsync(options)` | Prefix listing with an opaque cursor. |
+| `PresignPutAsync(...)` | Direct browser → R2/S3 upload URL. |
+| `PresignGetAsync(...)` | Direct browser → R2/S3 download URL. |
+
+Use `c.Storage.Capabilities` to branch portably:
+
+```csharp
+if (c.Storage.Capabilities.Has(StorageFeatures.PresignUpload))
+{
+    var upload = await c.Storage.PresignPutAsync(
+        $"avatars/{c.User!.Id}.png",
+        "image/png",
+        TimeSpan.FromMinutes(10));
+}
+```
+
+---
+
+## 2. Validate and upload
+
+Never trust the client `Content-Type`. `Files.Check` sniffs magic bytes, enforces
+a size limit, and accepts MIME families such as `image/*`:
+
+```csharp
+app.Post("/api/avatar", Auth.RequireUser, async ctx =>
+{
+    var form = ctx.Req.Form;
+    var file = form?.File("avatar") ?? (form is { Files.Count: > 0 } ? form.Files[0] : null);
+
+    var check = Files.Check(
+        file?.Data ?? ctx.Req.Body,
+        maxBytes: 5 * 1024 * 1024,
+        "image/*");
+
+    if (!check.Ok)
+        return check.ToError(ctx); // 400 / 413 / 415 with a standard error envelope
+
+    var key = $"avatars/{ctx.User!.Id}.{check.Extension}";
+
+    await ctx.Storage.PutAsync(
+        key,
+        check.Data,
+        check.ContentType,
+        new StoragePutOptions
+        {
+            // Fail with 412 instead of silently replacing an existing object.
+            Overwrite = true,
+            CacheControl = "public, max-age=31536000, immutable",
+            Metadata = new Dictionary<string, string>
+            {
+                ["uploaded-by"] = ctx.User.Id,
+            },
+        });
+
+    return ctx.Json(new { key, url = $"/files/{key}" }, 201);
+});
+```
+
+`StorageKey` normalizes every provider key and rejects traversal, control
+characters, empty segments, and over-long segments before any I/O happens.
+
+---
+
+## 3. Serve with ETags, 304s, and byte ranges
+
+`c.File(key)` is the one-liner file server. It uses `HeadAsync` for metadata,
+emits `ETag` / `Last-Modified` / `Cache-Control`, answers `If-None-Match` with
+`304`, and answers `Range` with `206 Partial Content`. `HEAD` is handled
+automatically by the router.
+
+```csharp
+app.Get("/files/:key", ctx =>
+    ctx.File(ctx.Req.Param("key")!, new StorageFileOptions
+    {
+        Immutable = true, // public, max-age=31536000, immutable
+        Headers = new Dictionary<string, string>
+        {
+            ["X-Content-Type-Options"] = "nosniff",
+            ["Content-Security-Policy"] = "default-src 'none'; sandbox",
+        },
+    }))
+    .Produces(200)
+    .Produces(206)
+    .Produces(304);
+```
+
+Downloads use `c.Attachment`:
+
+```csharp
+app.Get("/download/:key", ctx => ctx.Attachment(ctx.Param("key")!));
+```
+
+`c.File` defaults to `Cache-Control: private, max-age=0, must-revalidate` so a
+private object is never stored by a shared cache. Public assets opt in with
+`Immutable = true` or an explicit `CacheControl`.
+
+If a provider only implements the four core methods, `c.File` falls back to
+`GetAsync` and still works. Range requests are served from memory in that case;
+providers with `StorageFeatures.RangeReads` avoid the full download.
+
+---
+
+## 4. Direct uploads and downloads
+
+For large files, skip the Worker/API entirely. Presign a URL and let the browser
+talk to R2/S3:
+
+```csharp
+app.Post("/api/uploads/presign", Auth.RequireUser, async ctx =>
+{
+    var key = $"uploads/{ctx.User!.Id}/{Ids.New("file")}";
+    var upload = await ctx.Storage.PresignPutAsync(
+        key,
+        "application/octet-stream",
+        TimeSpan.FromMinutes(10));
+
+    return ctx.Json(new
+    {
+        upload.Url,
+        upload.Method,
+        upload.Headers,
+        upload.ExpiresInSeconds,
+    });
+});
+```
+
+Presigned downloads can override the response headers without mutating the
+stored object:
+
+```csharp
+var download = await ctx.Storage.PresignGetAsync(
+    key,
+    TimeSpan.FromMinutes(5),
+    new PresignDownloadOptions
+    {
+        FileName = "report.pdf",
+        ContentType = "application/pdf",
+        CacheControl = "private, max-age=60",
+    });
+```
+
+---
+
+## 5. Metadata and listing
+
+```csharp
+var info = await ctx.Storage.HeadAsync(key);
+// info.Size, info.ContentType, info.ETag, info.LastModified, info.Metadata
+
+var page = await ctx.Storage.ListAsync(new StorageListOptions
+{
+    Prefix = $"avatars/{ctx.User!.Id}/",
+    Limit = 50,
+});
+
+foreach (var item in page.Items)
+{
+    // item.Key, item.Size, item.ETag, item.LastModified
+}
+
+if (page.HasMore)
+{
+    var next = await ctx.Storage.ListAsync(new StorageListOptions
+    {
+        Prefix = $"avatars/{ctx.User!.Id}/",
+        Cursor = page.Cursor,
+        Limit = 50,
+    });
+}
+```
+
+On S3-compatible storage, listing uses `ListObjectsV2` with continuation tokens.
+On R2, it uses the bucket's native cursor. On local disk, it walks the upload
+root in ordinal key order.
+
+---
+
+## 6. Error mapping
+
+Storage failures throw `StorageException` with a `StorageErrorCode`. The built-in
+HTTP helpers map them to:
+
+| Code | HTTP |
+| :-- | :-- |
+| `NotFound` | 404 |
+| `InvalidKey` | 400 |
+| `Unauthorized` / `Forbidden` | 403 |
+| `PreconditionFailed` | 412 |
+| `Conflict` | 409 |
+| `TooLarge` | 413 |
+| `RangeNotSatisfiable` | 416 |
+| `Unsupported` | 501 |
+| `Unavailable` | 503 |
+
+`c.File` performs this mapping for you. For custom routes, catch
+`StorageException` and return the matching status, or let the framework's
+`internal_error` path handle genuinely unexpected failures.

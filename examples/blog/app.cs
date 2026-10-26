@@ -17,7 +17,8 @@ var database = !string.IsNullOrWhiteSpace(databaseUrl)
 
 var app = ReptarApp.Create(new ReptarConfig
 {
-    Auth = BuiltIn(),
+    // Local Kestrel dev runs over plain HTTP; the Worker host keeps Secure.
+    Auth = BuiltIn(new AuthOptions { SecureCookies = false }),
     Database = database,
     Storage = new LocalR2Client(
         Path.Combine(Directory.GetCurrentDirectory(), "uploads")),

@@ -1,0 +1,177 @@
+---
+title: Fullstack React SPA with Reptar & @reptar/client
+description: How to build and deploy a type-safe fullstack React application backed by a Reptar C# Native AOT API.
+---
+
+Reptar supports two distinct fullstack frontend architectures:
+
+1. **Embedded Single-File SPA (Zero Build Step)**: HTML and React loaded directly in C# via ESM CDN (e.g., `examples/agent-cli/web.cs`), shipping inside a single Native AOT binary or NetWasm Worker.
+2. **Decoupled Frontend Monorepo**: A standalone React 19 / Vite / Astro frontend talking to Reptar via the typed `@reptar/client` RPC client and `@reptar/client/react` hooks.
+
+---
+
+## 1. The Decoupled Pattern: `@reptar/client`
+
+In a decoupled monorepo (such as the one scaffolded by `bun reptar create`), the C# backend defines minimal API routes, and `bun reptar codegen` produces TypeScript types for `@reptar/client`.
+
+### Backend Route (`app.cs`)
+
+```csharp
+app.Get("/api/posts", async ctx =>
+{
+    var posts = await ctx.Db.From<PostRecord>(Schema.Posts)
+        .OrderBy(Schema.Posts.Col<string>("created_at").Desc())
+        .Limit(20)
+        .ToListAsync();
+
+    return ctx.Json(posts);
+}).WithSummary("List recent blog posts");
+```
+
+### Type-Safe Frontend Query (`client.ts`)
+
+```typescript
+import { createClient } from "@reptar/client";
+import type { AppType } from "./api-types";
+
+const client = createClient<AppType>("http://localhost:8787");
+
+// Fully typed autocomplete for routes, inputs, outputs, and status codes:
+const response = await client.api.posts.$get();
+
+if (response.ok) {
+  const posts = await response.json();
+  console.log("Fetched posts:", posts);
+}
+```
+
+---
+
+## 2. Realtime Streaming with `useAgentChat`
+
+Reptar provides an official React hook for streaming agent events, reasoning traces, and in-process tool executions from `@reptar/client/react`.
+
+```tsx
+import React from "react";
+import { useAgentChat } from "@reptar/client/react";
+
+export function AgentChat() {
+  const {
+    messages,
+    input,
+    handleInputChange,
+    handleSubmit,
+    isStreaming,
+    stop,
+    clear,
+    activeSteps
+  } = useAgentChat({
+    endpoint: "/api/chat",
+    onEvent: (event) => {
+      if (event.type === "tool_start") {
+        console.log(`Executing tool: ${event.name}`);
+      }
+    }
+  });
+
+  return (
+    <div className="flex flex-col h-screen max-w-4xl mx-auto p-4">
+      {/* Messages Feed */}
+      <div className="flex-1 overflow-y-auto space-y-4 mb-4">
+        {messages.map((m) => (
+          <div
+            key={m.id}
+            className={`p-4 rounded-xl ${
+              m.role === "user"
+                ? "bg-zinc-800 text-white ml-auto max-w-[80%]"
+                : "bg-zinc-900 border border-zinc-800 text-zinc-100"
+            }`}
+          >
+            <div className="font-semibold text-xs text-zinc-400 mb-1">
+              {m.role === "user" ? "You" : "Reptar Agent"}
+            </div>
+
+            {/* Tool Executions */}
+            {m.toolCalls && m.toolCalls.map((t) => (
+              <div key={t.id} className="text-xs font-mono bg-zinc-950 p-2 rounded mb-2 border border-zinc-800">
+                <span className={t.state === "ok" ? "text-emerald-400" : "text-amber-400"}>
+                  {t.state === "ok" ? "✓" : "→"} {t.name}
+                </span>
+                {t.ms && <span className="text-zinc-500 ml-2">({t.ms}ms)</span>}
+              </div>
+            ))}
+
+            <div className="whitespace-pre-wrap">{m.content}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* Input Dock */}
+      <form onSubmit={handleSubmit} className="flex gap-2">
+        <input
+          value={input}
+          onChange={handleInputChange}
+          placeholder="Ask anything about the codebase..."
+          className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2 text-white outline-none focus:border-violet-500"
+        />
+        {isStreaming ? (
+          <button
+            type="button"
+            onClick={stop}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-medium rounded-xl"
+          >
+            Stop
+          </button>
+        ) : (
+          <button
+            type="submit"
+            disabled={!input.trim()}
+            className="px-4 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white font-medium rounded-xl"
+          >
+            Send
+          </button>
+        )}
+      </form>
+    </div>
+  );
+}
+```
+
+---
+
+## 3. The Embedded Zero-Build Pattern (`WebSpa`)
+
+For single-binary developer tools and companion dashboards, Reptar allows embedding the entire HTML/React SPA into C# as a raw multiline string literal.
+
+```csharp
+public static class WebSpa
+{
+    public const string IndexHtml = """
+        <!doctype html>
+        <html lang="en">
+        <head>
+          <meta charset="utf-8" />
+          <title>My App</title>
+        </head>
+        <body>
+          <div id="root"></div>
+          <script type="module">
+            import React from "https://esm.sh/react@19";
+            import { createRoot } from "https://esm.sh/react-dom@19/client";
+
+            function App() {
+              return React.createElement("h1", null, "Hello from Reptar Native AOT!");
+            }
+
+            createRoot(document.getElementById("root")).render(React.createElement(App));
+          </script>
+        </body>
+        </html>
+        """;
+}
+
+// In app.cs:
+app.Get("/", ctx => ctx.Html(WebSpa.IndexHtml));
+```
+
+This requires zero Node.js installation, zero build steps, and bundles cleanly into Native AOT and NetWasm outputs.

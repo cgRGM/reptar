@@ -1,134 +1,227 @@
 ---
 title: Quick Start
-description: Get up and running with a Reptar fullstack project in minutes.
+description: Build a fullstack app with real accounts and deploy it — schema, validated API, typed client, production container — in about 25 minutes.
 ---
 
-import { Code, Tabs, TabItem } from "@astrojs/starlight/components";
+import { Steps, Tabs, TabItem, Aside, Code, LinkCard, CardGrid, Card } from "@astrojs/starlight/components";
 
-## Prerequisites
+## What you're going to build
 
-Before starting, ensure you have the following installed:
+A production-shaped app with **real authentication**. When this page ends you will have:
 
-- **.NET SDK 10.0+** (used as a compiler/build toolchain; never required at runtime in production)
-- **Bun 1.3+** or **Node.js 22+**
-- **Cloudflare CLI (`cf`)** (or Wrangler for existing Wrangler projects)
+<CardGrid>
+  <Card title="Working sign-up" icon="lock">
+    Cookie sessions via the Better Auth wire protocol — built in, zero config.
+  </Card>
+  <Card title="A validated, owner-scoped API" icon="shield-check">
+    A `notes` table you define, a `Rule<T>`-validated write API, typed `ColumnRef` queries.
+  </Card>
+  <Card title="A typed TypeScript client" icon="check">
+    Generated from your C# routes — never hand-written.
+  </Card>
+  <Card title="A deployed app" icon="rocket">
+    One command builds the 10.4 MB Native AOT container and health-gates it live.
+  </Card>
+</CardGrid>
 
-## 1. Scaffold a New Project
+Every step ends with a ✅ **checkpoint**. If a checkpoint fails, stop and fix it — the next step won't work.
 
-Initialize a fullstack monorepo with a C# Reptar backend, generated TypeScript RPC client, and your frontend of choice:
+<Aside type="note" title="Why the scaffold runs from the repo clone">
+  The Reptar NuGet packages aren't published yet, so scaffolding builds your app file-based against the in-repo framework sources — the exact same `#:project` mechanism the framework's own examples use. Standalone `bun create reptar` scaffolds arrive with the 0.1 NuGet release; nothing else in this tutorial changes.
+</Aside>
 
-<Tabs syncKey="pkg">
-  <TabItem label="bun">
-    <Code code={"bun create reptar@latest my-app\ncd my-app"} lang="bash" />
-  </TabItem>
-  <TabItem label="npm">
-    <Code code={"npm create reptar@latest my-app\ncd my-app"} lang="bash" />
-  </TabItem>
-  <TabItem label="pnpm">
-    <Code code={"pnpm create reptar@latest my-app\ncd my-app"} lang="bash" />
-  </TabItem>
-</Tabs>
+## 1. Create the app
 
-### Workspace Structure
+```bash
+git clone https://github.com/your-org/reptar.git   # or your fork
+cd reptar
+bun scripts/reptar.ts new my-app -y --db sqlite --auth better-auth
+cd my-app
+bun install
+bun run dev
+```
+
+`bun run dev` starts both servers: the C# API at `http://localhost:8787` and the frontend at `http://localhost:5173` (the Vite dev server proxies `/api/*` to the backend).
+
+✅ **Checkpoint: auth already works.** Open [http://localhost:5173](http://localhost:5173), click **Sign up**, and create an account. You're logged in — the session cookie was issued by your C# API (`POST /api/auth/sign-up/email`, Better Auth wire protocol). Sign out and sign back in. You just used the framework's built-in auth without configuring anything.
+
+## 2. What you got (30 seconds)
 
 ```text
 my-app/
 ├── apps/
-│   ├── web/               # Frontend app (React 19 / Astro / TanStack Start)
-│   └── api/               # Reptar C# backend (Cloudflare Workers Wasm & Native AOT)
-├── packages/
-│   ├── client/            # Zero-dependency typed RPC client (@reptar/client)
-│   └── rpc/               # Generated AppType, DTO interfaces, and OpenAPI 3.1 spec
-└── scripts/
-    └── reptar.ts          # Dev runner, contract codegen, and CLI migration engine
+│   ├── web/                      # React 19 + Vite — sign-up/dashboard wired up
+│   │   └── src/lib/client.ts     # typed client (you'll regenerate it in step 5)
+│   └── api/                      # your backend — a file-based C# app
+│       ├── app.cs                # ~60 lines: config, middleware, feature mounts
+│       ├── schema/schema.cs      # TableDefs — you'll edit this
+│       └── features/            # one file per feature — you'll add one
+├── packages/client/              # generated TypeScript contracts
+└── deploy/                       # Dockerfile + compose + one-command deploy
 ```
 
-## 2. Application Composition (`apps/api/app.cs`)
+You will only write C# in `schema/` and `features/`. Everything on the frontend is generated or already wired.
 
-Your backend entry point configures database drivers, middleware, interactive OpenAPI documentation, and route slices:
+## 3. Define the notes table
+
+Add to `apps/api/schema/schema.cs`:
 
 ```csharp
-var authOptions = new AuthOptions
-{
-    CookieName = "better-auth.session_token",
-};
-
-var app = ReptarApp.Create(new ReptarConfig
-{
-    Auth = authOptions,
-    Database = Db.D1(), // or Db.Sqlite("app.db") / Db.Postgres(url) / Db.MySql(url)
-});
-
-// Core observability, caching, and rate-limiting middleware
-app.Use(RequestId());
-app.Use(Telemetry());
-app.Use(Cors());
-app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
-app.Use(RateLimit.SlidingWindow(limit: 120, windowSeconds: 60));
-
-// Serve OpenAPI 3.1 at /openapi.json and interactive Scalar docs at /reference
-app.UseScalar(title: "My Reptar API", version: "1.0.0");
-
-// Mount Better Auth endpoints under /api/auth
-var authGroup = app.Group("/api/auth");
-BetterAuthProtocol.Routes(authGroup, authOptions);
-
-// Mount domain feature slices
-ItemsFeature.Configure(app);
-
-await app.EnsureCreatedAsync();
-await app.RunAsync(args);
+public static readonly TableDef Notes = DefineTable("notes",
+    Col.Text("id").PrimaryKey(),
+    Col.Text("user_id").NotNull().References("users", "id", onDelete: "cascade"),
+    Col.Text("title").NotNull(),
+    Col.Text("content").NotNull(),
+    Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP")
+);
 ```
 
-## 3. Run Database Migrations
+<Aside type="tip" title="Why this looks like nothing">
+  Storage schema is plain C# — no attributes, no fluent builders, no migration ceremony. The Reptar source generators read this declaration and emit typed `ColumnRef` tokens (`AppSchema.NotesCols.Title`) at compile time, and your table is created on the next boot.
+</Aside>
 
-Create and apply sequential SQL migrations using the built-in CLI runner:
+## 4. Write the notes API
+
+Create `apps/api/features/notes.cs`:
+
+```csharp
+namespace MyApp.Features;
+
+using Reptar;
+using MyApp.Schema;
+
+public record NoteRow(string Id, string UserId, string Title, string Content, string CreatedAt);
+public record CreateNoteInput(string Title, string Content);
+
+public static class NotesFeature
+{
+    public static void Configure(ReptarApp app)
+    {
+        // Public feed — fluent query with generated ColumnRef tokens.
+        app.Get("/api/notes", async ctx =>
+        {
+            var notes = await ctx.Db
+                .From<NoteRow>(AppSchema.Notes)
+                .OrderBy(AppSchema.NotesCols.CreatedAt.Desc())
+                .Limit(50)
+                .ToListAsync();
+
+            return ctx.Json(notes);
+        });
+
+        // Authenticated write with Rule<T> validation.
+        app.Post("/api/notes",
+            ReptarApi.Rule<CreateNoteInput>()
+                .Prop(x => x.Title, r => r.NotNull().Min(1).Max(120))
+                .Prop(x => x.Content, r => r.NotNull().Min(1).Max(2000)),
+            async (ctx, input) =>
+            {
+                var user = await ctx.UserAsync();
+                if (user is null)
+                    return ctx.Unauthorized();
+
+                var note = new NoteRow(
+                    Ids.New("note"),
+                    user.Id,
+                    input.Title,
+                    input.Content,
+                    DateTimeOffset.UtcNow.ToString("O"));
+
+                await ctx.Db.InsertAsync(AppSchema.Notes, note);
+                return ctx.Json(note, 201);
+            })
+            // One line exports this route to OpenAI/Anthropic/Gemini tool schemas.
+            .AsAiTool("create_note", "Create a note for the signed-in user");
+    }
+}
+```
+
+Mount it in `app.cs` next to the other features, and register the table:
+
+```csharp
+NotesFeature.Configure(app);
+app.RegisterSchema(AppSchema.Notes);
+```
+
+Restart `bun run dev` (the table is created automatically on boot).
+
+✅ **Checkpoint: the API behaves like production.**
 
 ```bash
-# Check applied and pending migrations
-bun scripts/reptar.ts db status
+# No session → 401 (auth fires before anything else)
+curl -i -X POST localhost:8787/api/notes \
+  -H 'content-type: application/json' \
+  -d '{"title":"hi","content":"first!"}' | head -1
 
-# Scaffold a new sequential SQL migration file
-bun scripts/reptar.ts db new add_items_index
+# Sign up via the auth API and keep the session cookie
+curl -s -c cookies.txt -X POST localhost:8787/api/auth/sign-up/email \
+  -H 'content-type: application/json' \
+  -d '{"email":"you@example.com","password":"supersecret123","name":"You"}'
 
-# Apply pending migrations transactionally
-bun scripts/reptar.ts db migrate
+# Signed-in write → 201, then the feed shows your note
+curl -s -b cookies.txt -X POST localhost:8787/api/notes \
+  -H 'content-type: application/json' \
+  -d '{"title":"First note","content":"It works"}' -o /dev/null -w '%{http_code}\n'
+curl -s localhost:8787/api/notes
 ```
 
-## 4. Start Local Development
+An empty title gets a structured validation error — the same `Rule<T>` validators the generated frontend schemas are derived from.
 
-Run the fullstack development server:
+## 5. Use it from the frontend
 
-```bash
-bun run dev
-```
-
-This starts:
-
-- The Reptar C# API backend at `http://localhost:8787`
-- Interactive Scalar API Reference at `http://localhost:8787/reference`
-- The frontend application at `http://localhost:5173` (or `http://localhost:4321`)
-
-## 5. Generate & Consume Typed Contracts
-
-Whenever you add or modify C# routes, regenerate the TypeScript RPC contracts:
+Regenerate the contracts — your C# routes just became TypeScript types:
 
 ```bash
 bun run api:codegen
 ```
 
-Consume your backend from any TypeScript frontend with full autocomplete:
+Open `apps/web/src/lib/client.ts` and you'll see the new routes in `AppType`. Fetch the feed anywhere in the frontend (autocomplete comes from the generated route tree):
 
 ```tsx
-import { createClient } from "@reptar/client";
-import type { AppType } from "@reptar/rpc";
-
-export const api = createClient<AppType>("http://localhost:8787", {
-  credentials: "include",
-});
-
-const response = await api.items.$get();
-if (response.ok) {
-  const items = await response.json();
+const res = await client.api.notes.$get();
+if (res.ok) {
+  const notes = await res.json();
 }
 ```
+
+✅ **Checkpoint:** post a note through the dashboard while signed in — it appears in the feed. In devtools: the session cookie rides along, and anonymous requests get 401. You have not written a single `fetch` or interface by hand.
+
+## 6. Deploy it
+
+The same C# app compiles to a **10.4 MB Native AOT container**. Take your pick:
+
+<Tabs>
+  <TabItem label="VPS / any Docker host">
+    ```bash
+    # on the server, from the repo clone:
+    cd my-app/deploy
+    bash deploy.sh
+    ```
+    The script builds the distroless image, starts compose (your app + PostgreSQL 17),
+    and waits for the health check. Your SQLite `app.db` is fine for single-node;
+    when you're ready, set `DATABASE_URL` to the compose Postgres (already wired).
+  </TabItem>
+  <TabItem label="Docker Compose">
+    ```bash
+    cd my-app/deploy
+    docker compose up -d --build
+    curl http://localhost:8787/health   # {"ok":true,...}
+    ```
+  </TabItem>
+  <TabItem label="Cloudflare Workers">
+    The scaffold ships a `wrangler.jsonc` with D1 bindings. The Workers pipeline
+    (NetWasm publish + host shim) is documented in
+    [Deployment Targets](/overview/deployment-targets/).
+  </TabItem>
+</Tabs>
+
+✅ **Final checkpoint:** `curl http://your-server/health` returns `{"ok":true,...}` — then open the site and **create a real account on production**. Auth, validation, your notes API, and the health gate are live in a container smaller than most node_modules.
+
+## Where to go next
+
+<CardGrid>
+  <LinkCard title="Build with an AI agent" description="Copy-paste prompt that ships your app with an agent driving Reptar's MCP tools." href="/getting-started/agents/" />
+  <LinkCard title="File uploads & storage" description="Local or R2 storage with magic-byte sniffing and size limits." href="/cookbook/file-uploads/" />
+  <LinkCard title="Realtime SSE rooms" description="Server-sent events rooms and streams for live UIs." href="/cookbook/realtime-sse/" />
+  <LinkCard title="The AI Gateway" description="Universal LLM proxy: failover, prompt cache, Vercel-stream compatible." href="/ai/ai-gateway/" />
+</CardGrid>

@@ -4,7 +4,6 @@
 #:include schema.cs
 #:include hub.cs
 
-using System.Text.Json;
 using Reptar;
 using Reptar.Hosting;
 using static Reptar.ReptarApi;
@@ -20,6 +19,9 @@ using static Reptar.ReptarApi;
 //                    per-peer presence (cursor x/y, typing) fanout to others
 //   - uWebSockets:   serialize-once fanout over per-socket bounded send
 //                    channels (Kestrel transport) — the "corked publish" analog
+//
+// The NetWasm/Workers build (worker/) shares the exact hub and routes via
+// RoomsRoutes.Configure; this file only wires the local SQLite host.
 // ---------------------------------------------------------------------------
 
 var database = Db.Sqlite("rooms.db");
@@ -38,78 +40,6 @@ await app.EnsureCreatedAsync();
 // pending statements into one group-commit transaction (MaxBatchSize = 64).
 var persister = new RoomMessagePersister(database, workerCount: 4, queueCapacity: 50_000);
 var hub = new RoomHub(persister);
-
-// ws://host/rooms/{roomId} — parameterized WebSocket route
-// (also accepts the HTTP route syntax "/rooms/:roomId")
-app.OnWebSocket("/rooms/{roomId}", hub.CreateHandlers());
-
-app.Get("/health", ctx => ctx.Json(hub.HealthSnapshot()));
-
-app.Get("/stats", ctx => ctx.Json(hub.StatsSnapshot()));
-
-app.Get("/rooms", ctx => ctx.Json(hub.ListRooms()));
-
-app.Get("/rooms/:roomId/peers", ctx =>
-{
-    var roomId = ctx.Req.Param("roomId")!;
-    return ctx.Json(hub.GetPeers(roomId));
-});
-
-app.Get("/rooms/:roomId/messages", async ctx =>
-{
-    var roomId = ctx.Req.Param("roomId")!;
-    var limit = int.TryParse(ctx.Req.QueryValue("limit"), out var parsed)
-        ? Math.Clamp(parsed, 1, 200)
-        : 50;
-
-    var recent = await ctx.Db.From<RoomMessageRecord>(Schema.RoomMessages)
-        .Where(Schema.RoomMessages.Col<string>("room_id").Eq(roomId))
-        .OrderBy(Schema.RoomMessages.Col<string>("created_at").Desc())
-        .Limit(limit)
-        .ToListAsync();
-
-    recent.Reverse(); // oldest-first for display
-    return ctx.Json(recent);
-});
-
-// Server-side fanout trigger (bench + admin use): same wire protocol as a
-// peer broadcasting, minus a live socket.
-app.Post("/rooms/:roomId/broadcast", async ctx =>
-{
-    var roomId = ctx.Req.Param("roomId")!;
-
-    string senderId = "server";
-    string payloadJson = "{}";
-
-    if (string.IsNullOrWhiteSpace(ctx.Req.BodyText))
-    {
-        return ctx.BadRequest("Body must be valid JSON.");
-    }
-
-    try
-    {
-        using var doc = JsonDocument.Parse(ctx.Req.BodyText);
-        var root = doc.RootElement;
-
-        if (root.TryGetProperty("senderId", out var senderElement) &&
-            senderElement.ValueKind == JsonValueKind.String)
-        {
-            senderId = senderElement.GetString() ?? "server";
-        }
-
-        if (root.TryGetProperty("payload", out var payloadElement) &&
-            payloadElement.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
-        {
-            payloadJson = payloadElement.GetRawText();
-        }
-    }
-    catch
-    {
-        return ctx.BadRequest("Body must be valid JSON.");
-    }
-
-    var delivered = hub.BroadcastFromServer(roomId, senderId, payloadJson);
-    return ctx.Json(new { delivered }, status: 202);
-});
+RoomsRoutes.Configure(app, hub);
 
 await app.RunAsync(args);

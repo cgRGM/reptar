@@ -12,7 +12,7 @@ TanStack Start / Expo / Next / curl / anything
         │  createClient<AppType>  (generated)
         ▼
 Cloudflare Worker — TS host shim (generated, ~thin)
-   ├─ fetch, cookies, crypto (WebCrypto + native scrypt)
+   ├─ fetch, cookies, crypto (WebCrypto + native PBKDF2)
    ├─ D1, R2, Workers AI, RateLimit bindings
    ├─ telemetry (OTel/Axiom, logs)
    ├─ Better Auth mount (only when using the adapter)

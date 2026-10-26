@@ -39,5 +39,5 @@ Reptar deliberately departs from enterprise .NET conventions in favor of a minim
 ## Constraints
 
 - **Single Reactor Loop:** Because WebAssembly isolates on Cloudflare Workers are single-threaded without raw OS sockets or threads, the TS host shim owns all underlying network I/O.
-- **CPU Limits:** Computationally heavy cryptography (such as scrypt password hashing) is delegated to the host environment’s native WebCrypto APIs.
+- **CPU Limits:** Computationally heavy cryptography (such as PBKDF2 password hashing) is delegated to the host environment’s native WebCrypto APIs.
 - **Isolate Module Caching:** The compiled Wasm instance is instantiated once per isolate and cached across requests, eliminating per-request cold start penalties.

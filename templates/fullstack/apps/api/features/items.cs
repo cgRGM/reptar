@@ -1,80 +1,73 @@
-namespace ReptarApp.Features;
+namespace {{PROJECT_PASCAL}}.Features;
 
 using Reptar;
-using ReptarApp.Schema;
+using {{PROJECT_PASCAL}}.Schema;
 
 public static class ItemsFeature
 {
     public static void Configure(ReptarApp app)
     {
-        // Public list of items
+        // Public feed — fluent query over the TableDef with generated
+        // ColumnRef tokens (no strings, no reflection).
         app.Get("/api/items", async ctx =>
         {
-            var rows = await ctx.Db.QueryMappedAsync(
-                "SELECT id, user_id, title, content, created_at FROM items ORDER BY created_at DESC LIMIT 50");
-
-            var items = rows.Select(r => new ItemRecord(
-                (string)r["id"],
-                (string)r["user_id"],
-                (string)r["title"],
-                (string)r["content"],
-                (string)r["created_at"]
-            )).ToList();
+            var items = await ctx.Db
+                .From<Item>(AppSchema.Items)
+                .OrderBy(AppSchema.ItemsCols.CreatedAt.Desc())
+                .Limit(50)
+                .ToListAsync();
 
             return ctx.Json(items);
-        });
+        })
+        .Produces<Item[]>(200);
 
-        // Protected create item
-        app.Post<CreateItemInput>("/api/items", async (ctx, input) =>
-        {
-            var user = await ctx.UserAsync();
-            if (user is null)
+        // Protected write with Rule<T> validation — the same validators that
+        // regenerate the frontend schemas.
+        app.Post("/api/items",
+            ReptarApi.Rule<CreateItemInput>()
+                .Prop(x => x.Title, r => r.NotNull().Min(1).Max(120))
+                .Prop(x => x.Content, r => r.NotNull().Min(1).Max(2000)),
+            async (ctx, input) =>
             {
-                return ctx.Json(new { error = "Unauthorized" }, 401);
-            }
-
-            var id = Ids.New("item");
-            var now = DateTime.UtcNow.ToString("O");
-
-            await ctx.Db.ExecuteAsync(
-                "INSERT INTO items (id, user_id, title, content, created_at) VALUES (@id, @user_id, @title, @content, @created_at)",
-                new Dictionary<string, object?>
+                var user = await ctx.UserAsync();
+                if (user is null)
                 {
-                    ["id"] = id,
-                    ["user_id"] = user.Id,
-                    ["title"] = input.Title,
-                    ["content"] = input.Content,
-                    ["created_at"] = now,
-                });
+                    return ctx.Unauthorized();
+                }
 
-            var created = new ItemRecord(id, user.Id, input.Title, input.Content, now);
-            return ctx.Json(created, 201);
-        });
+                var item = new Item(
+                    Ids.New("item"),
+                    user.Id,
+                    input.Title,
+                    input.Content,
+                    DateTimeOffset.UtcNow.ToString("O"));
 
-        // Protected delete item
+                await ctx.Db.InsertAsync(AppSchema.Items, item);
+                return ctx.Json(item, 201);
+            })
+            .Produces<Item>(201)
+            .Produces<ValidationError>(400)
+            // One line exports this route to OpenAI/Anthropic/Gemini tool schemas.
+            .AsAiTool("create_item", "Create an item for the signed-in user");
+
+        // Protected delete, scoped to the owner via typed filters.
         app.Delete("/api/items/:id", async ctx =>
         {
             var user = await ctx.UserAsync();
             if (user is null)
             {
-                return ctx.Json(new { error = "Unauthorized" }, 401);
+                return ctx.Unauthorized();
             }
 
-            var id = ctx.Param("id");
-            if (string.IsNullOrEmpty(id))
-            {
-                return ctx.Json(new { error = "Item ID required" }, 400);
-            }
+            var deleted = await ctx.Db.DeleteWhereAsync(
+                AppSchema.Items,
+                AppSchema.ItemsCols.Id.Eq(ctx.Param("id")!) &
+                AppSchema.ItemsCols.UserId.Eq(user.Id));
 
-            await ctx.Db.ExecuteAsync(
-                "DELETE FROM items WHERE id = @id AND user_id = @user_id",
-                new Dictionary<string, object?>
-                {
-                    ["id"] = id,
-                    ["user_id"] = user.Id,
-                });
-
-            return ctx.Json(new { success = true });
-        });
+            return deleted > 0
+                ? ctx.Json(new ActionSuccessResponse(true))
+                : ctx.NotFound("Item not found.");
+        })
+        .Produces<ActionSuccessResponse>(200);
     }
 }

@@ -1,0 +1,107 @@
+---
+title: Multiplayer Rooms on Cloudflare Workers & Durable Objects
+description: High-throughput WebSocket rooms with ephemeral presence, serialize-once fanout, and write-behind D1 persistence.
+---
+
+On serverless edge platforms like Cloudflare Workers, **standard isolates cannot cross-send messages to other isolates**. Building real-time rooms (PartyKit, Liveblocks, or y-websocket style) requires sharding rooms onto Cloudflare **Durable Objects**.
+
+Reptar’s `examples/realtime-rooms` architecture compiles the C# 13 hub to NetWasm, running inside a Durable Object backed by production D1.
+
+```
+Client A ──WebSocket──┐
+                      ▼
+Client B ──WebSocket──► [ Cloudflare Durable Object (NetWasm C# 13 Hub) ] ──Write-Behind──► [ Cloudflare D1 ]
+                      ▲
+Client C ──WebSocket──┘
+```
+
+---
+
+## 1. Parameterized WebSocket Routing (`app.cs`)
+
+Reptar supports parameterized WebSocket route templates (`/rooms/{roomId}` or `/rooms/:roomId`):
+
+```csharp
+app.Ws("/rooms/{roomId}", async (ws, ctx) =>
+{
+    var roomId = ctx.Req.Param("roomId") ?? "lobby";
+    var clientId = Ids.New("client");
+
+    // Join room
+    await hub.JoinAsync(roomId, clientId, ws);
+
+    // Stream incoming messages
+    await foreach (var frame in ws.Messages())
+    {
+        await hub.HandleMessageAsync(roomId, clientId, frame.Text);
+    }
+
+    // Leave room
+    await hub.LeaveAsync(roomId, clientId);
+});
+```
+
+---
+
+## 2. Realtime Protocols Combined
+
+The `RoomsHub` implementation blends the best patterns from the real-time ecosystem:
+
+| Architecture | Pattern Implemented |
+| :--- | :--- |
+| **PartyKit** | Per-room roster sharding with `broadcastExcept(clientId, payload)` |
+| **y-websocket** | Ephemeral cursor & presence updates that bypass disk persistence |
+| **Liveblocks** | Immediate roster snapshot upon join + delta peer events |
+| **uWebSockets** | **Serialize-once fanout**: message serialized once and fanned out over open sockets |
+| **Reptar Db** | **Write-behind persistence**: chat messages persist through SQLite group-commit locally, and batched D1 in production |
+
+### Broadcast Loop (Serialize-Once)
+
+```csharp
+public async Task BroadcastAsync(string roomId, string senderId, string jsonPayload)
+{
+    if (!_rooms.TryGetValue(roomId, out var room))
+        return;
+
+    var bytes = Encoding.UTF8.GetBytes(jsonPayload);
+
+    // Fan out to all connected peers in parallel
+    var tasks = room.Clients
+        .Where(c => c.Key != senderId)
+        .Select(c => c.Value.SendAsync(bytes));
+
+    await Task.WhenAll(tasks);
+}
+```
+
+---
+
+## 3. High-Concurrency Benchmarks
+
+Benchmarked on Apple Silicon (8 cores) with a 5,000-socket concurrency test harness:
+
+| Metric | Measured Result |
+| :--- | :--- |
+| **Socket Ramp Rate** | **3,267 sockets/sec** |
+| **Fanout Latency (p50)** | **0.50 ms** |
+| **Fanout Latency (p95)** | **2.41 ms** |
+| **Fanout Latency (p99)** | **29.4 ms** |
+| **Broadcast Storm Volume** | **6.86 Million** presence fanouts |
+| **Frame Delivery Rate** | **100%** (zero socket disconnects) |
+
+---
+
+## 4. Deploying to Cloudflare Workers
+
+Run the dedicated rooms build and deployment pipeline:
+
+```bash
+# 1. Compile C# 13 hub to NetWasm and patch host
+bun reptar build:worker:rooms
+
+# 2. Deploy to Cloudflare Workers with Durable Object binding
+cd examples/realtime-rooms/worker
+cf deploy
+```
+
+The live Durable Object serves at `wss://<your-worker>.workers.dev/rooms/{roomId}` with automatic per-room isolation and global low-latency routing.

@@ -1,0 +1,42 @@
+# Production compose for a scaffolded Reptar app.
+# Builds the Native AOT container from the framework clone (context: repo
+# root), wires a real Postgres, and health-gates startup.
+services:
+  reptar:
+    build:
+      context: ../..
+      dockerfile: {{PROJECT_NAME}}/deploy/Dockerfile
+      args:
+        APP_DIR: {{PROJECT_NAME}}/apps/api
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    environment:
+      - PORT=8787
+      - DATABASE_URL=postgres://reptar:reptar_secret@postgres:5432/reptar_app?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - reptar-uploads:/app/uploads
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: reptar_app
+      POSTGRES_USER: reptar
+      POSTGRES_PASSWORD: reptar_secret
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U reptar -d reptar_app"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  reptar-uploads:

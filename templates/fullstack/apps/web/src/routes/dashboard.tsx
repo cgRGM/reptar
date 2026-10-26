@@ -37,7 +37,7 @@ export const DashboardRoute = (): React.JSX.Element => {
   const loadItems = async () => {
     try {
       setLoadingItems(true);
-      const res = await client.api.items.get();
+      const res = await client.api.items.$get();
       if (res.ok) {
         const data = await res.json();
         setItems(data);
@@ -63,7 +63,7 @@ export const DashboardRoute = (): React.JSX.Element => {
 
     setCreating(true);
     try {
-      const res = await client.api.items.post({
+      const res = await client.api.items.$post({
         json: { content, title },
       });
       if (res.ok) {

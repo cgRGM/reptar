@@ -4,7 +4,9 @@
 using System.Collections.Concurrent;
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
+#if !NETWASM
 using System.Threading.Channels;
+#endif
 using Reptar;
 using Reptar.Hosting;
 using static Reptar.ReptarApi;
@@ -29,6 +31,8 @@ var authOptions = new AuthOptions
 {
     CookieName = "reptarbase_session",
     SessionDays = 30,
+    // Local demo runs over plain HTTP; deploy behind TLS with Secure enabled.
+    SecureCookies = false,
 };
 Auth.Configure(authOptions);
 
@@ -54,6 +58,7 @@ await app.EnsureCreatedAsync();
 // 5. In-Memory Real-Time Event Hub for SSE Streams
 var realtimeHub = new RealtimeHub();
 
+#if !NETWASM
 // 6. Realtime SSE Change Feed
 app.Get("/api/realtime", ctx =>
 {
@@ -89,6 +94,7 @@ app.Get("/api/realtime", ctx =>
         }
     });
 });
+#endif
 
 // 7. Documents API
 // GET /api/documents - List documents with optional status/owner filter and pagination
@@ -240,7 +246,7 @@ app.Delete("/api/documents/:id", async ctx =>
     await ctx.Db.ExecuteAsync("DELETE FROM documents WHERE id = @id", new { id });
     await realtimeHub.BroadcastAsync("document_deleted", ctx.JsonCodec.Serialize(new { id }));
 
-    return ctx.Json(new { deleted = true, id });
+    return ctx.JsonRaw($"{{\"deleted\":true,\"id\":\"{id}\"}}");
 });
 
 // 8. Files API
@@ -342,12 +348,13 @@ app.Delete("/api/files/:id", async ctx =>
     await ctx.Db.ExecuteAsync("DELETE FROM files WHERE id = @id", new { id });
     await realtimeHub.BroadcastAsync("file_deleted", ctx.JsonCodec.Serialize(new { id }));
 
-    return ctx.Json(new { deleted = true, id });
+    return ctx.JsonRaw($"{{\"deleted\":true,\"id\":\"{id}\"}}");
 });
 
 // 9. Studio Admin Console & End-User Client App
 string GetDashboardHtml()
 {
+#if !NETWASM
     var candidates = new[]
     {
         "dashboard.html",
@@ -360,11 +367,13 @@ string GetDashboardHtml()
         if (File.Exists(path))
             return File.ReadAllText(path);
     }
+#endif
     return "<!DOCTYPE html><html><body style='background:#050811;color:#fff;font-family:sans-serif;padding:40px;'><h1>ReptarBase Studio</h1><p>dashboard.html not found.</p></body></html>";
 }
 
 string GetAppHtml()
 {
+#if !NETWASM
     var candidates = new[]
     {
         "app.html",
@@ -377,6 +386,7 @@ string GetAppHtml()
         if (File.Exists(path))
             return File.ReadAllText(path);
     }
+#endif
     return "<!DOCTYPE html><html><body style='background:#050811;color:#fff;font-family:sans-serif;padding:40px;'><h1>ReptarDrop</h1><p>app.html not found.</p></body></html>";
 }
 
@@ -479,6 +489,7 @@ public sealed record UpdateDocumentInput(
 
 public sealed class RealtimeHub
 {
+#if !NETWASM
     private readonly ConcurrentDictionary<string, ChannelWriter<SseMessage>> _subscribers = new();
 
     public string Subscribe(ChannelWriter<SseMessage> writer)
@@ -489,9 +500,11 @@ public sealed class RealtimeHub
     }
 
     public void Unsubscribe(string id) => _subscribers.TryRemove(id, out _);
+#endif
 
     public async ValueTask BroadcastAsync(string eventName, string jsonPayload)
     {
+#if !NETWASM
         var msg = new SseMessage(jsonPayload, @event: eventName);
         foreach (var writer in _subscribers.Values)
         {
@@ -504,5 +517,8 @@ public sealed class RealtimeHub
                 // Channel closed by subscriber
             }
         }
+#else
+        await ValueTask.CompletedTask;
+#endif
     }
 }

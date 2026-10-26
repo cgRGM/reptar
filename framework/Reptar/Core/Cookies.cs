@@ -16,7 +16,12 @@ public sealed class CookieJar
     public string? Get(string name) =>
         _request.Cookies.TryGetValue(name, out var value) ? value : null;
 
-    public void Set(string name, string value, string? expiresIso = null, string? domain = null)
+    public void Set(
+        string name,
+        string value,
+        string? expiresIso = null,
+        string? domain = null,
+        bool secure = false)
     {
         var parts = new List<string> { $"{name}={value}", "Path=/" };
 
@@ -35,10 +40,17 @@ public sealed class CookieJar
 
         parts.Add("HttpOnly");
         parts.Add("SameSite=Lax");
+        if (secure)
+            parts.Add("Secure");
         Pending.Add(string.Join("; ", parts));
     }
 
-    public void Set(string name, string value, TimeSpan maxAge, string? domain = null)
+    public void Set(
+        string name,
+        string value,
+        TimeSpan maxAge,
+        string? domain = null,
+        bool secure = false)
     {
         var parts = new List<string>
         {
@@ -52,6 +64,8 @@ public sealed class CookieJar
 
         parts.Add("HttpOnly");
         parts.Add("SameSite=Lax");
+        if (secure)
+            parts.Add("Secure");
         Pending.Add(string.Join("; ", parts));
     }
 
@@ -61,7 +75,8 @@ public sealed class CookieJar
         string value,
         string secret,
         TimeSpan? maxAge = null,
-        string? domain = null)
+        string? domain = null,
+        bool secure = false)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentException.ThrowIfNullOrEmpty(secret);
@@ -71,11 +86,11 @@ public sealed class CookieJar
 
         if (maxAge.HasValue)
         {
-            Set(name, signedValue, maxAge.Value, domain);
+            Set(name, signedValue, maxAge.Value, domain, secure);
         }
         else
         {
-            Set(name, signedValue, expiresIso: null, domain);
+            Set(name, signedValue, expiresIso: null, domain, secure);
         }
     }
 
@@ -111,7 +126,8 @@ public sealed class CookieJar
         string value,
         string secret,
         TimeSpan? maxAge = null,
-        string? domain = null)
+        string? domain = null,
+        bool secure = false)
     {
         ArgumentNullException.ThrowIfNull(crypto);
         ArgumentException.ThrowIfNullOrEmpty(name);
@@ -122,11 +138,11 @@ public sealed class CookieJar
 
         if (maxAge.HasValue)
         {
-            Set(name, signedValue, maxAge.Value, domain);
+            Set(name, signedValue, maxAge.Value, domain, secure);
         }
         else
         {
-            Set(name, signedValue, expiresIso: null, domain);
+            Set(name, signedValue, expiresIso: null, domain, secure);
         }
     }
 
@@ -156,8 +172,8 @@ public sealed class CookieJar
             : null;
     }
 
-    public void Delete(string name, string? domain = null) =>
-        Set(name, "", TimeSpan.Zero, domain);
+    public void Delete(string name, string? domain = null, bool secure = false) =>
+        Set(name, "", TimeSpan.Zero, domain, secure);
 
     private static bool FixedTimeEquals(byte[] a, byte[] b)
     {

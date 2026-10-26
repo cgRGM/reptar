@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify framework, scaffold, and contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.10
+
+      - name: Setup .NET 10.0.401
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.401
+
+      - name: Cache Bun and NuGet
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.bun/install/cache
+            ~/.nuget/packages
+            .reptar/sdk
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}-dotnet-10.0.401
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Initialize local SQLite database
+        run: bun reptar db migrate
+
+      # Run sequentially: parallel test/self-check runs share bin/obj and can
+      # flake in one checkout (see plans/phase1-remediation-log.md).
+      - name: Framework tests
+        run: bun reptar test
+
+      - name: NetWasm compatibility lint
+        run: bun reptar check:netwasm --strict
+
+      - name: Architecture boundary
+        run: bun scripts/check-architecture.ts --strict
+
+      - name: Build optional AI packages
+        run: dotnet build framework/Reptar.AI.Gateway/Reptar.AI.Gateway.csproj
+
+      - name: Build file-based AI examples
+        run: |
+          dotnet build examples/agent-cli/app.cs
+          dotnet build examples/ai-gateway/app.cs
+
+      - name: Doctor (strict)
+        run: bun reptar doctor --strict
+
+      - name: Two-host realtime smoke
+        run: bun reptar test:realtime
+
+      - name: Scaffold end-to-end
+        run: bun scripts/test-scaffold.ts
+
+      - name: Generated contracts typecheck
+        run: bun rpc:check
+
+      - name: create-reptar typecheck
+        run: |
+          cd packages/create-reptar
+          bun run check-types
+
+      - name: Documentation snippet check
+        run: bun run docs:check:snippets
+
+      - name: Documentation site build
+        run: |
+          bun run build
+          test -f dist/llms.txt
+          test -f dist/llms-full.txt
+          test -f dist/llms-small.txt
+        working-directory: apps/docs
+
+      - name: Documentation markdown actions check
+        run: bun run check:markdown
+        working-directory: apps/docs

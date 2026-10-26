@@ -1963,6 +1963,63 @@ public class BetterAuthTests
             .Split('=', 2)[1];
 
     [Fact]
+    public async Task BetterAuth_does_not_duplicate_session_cookie_when_names_match()
+    {
+        var options = new AuthOptions
+        {
+            CookieName = "better-auth.session_token",
+            SecureCookies = false,
+        };
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = options,
+        });
+
+        app.Route("/api/auth", Auth.BetterAuthRoutes(options));
+        await app.EnsureCreatedAsync();
+
+        var response = await app.HandleAsync(Json(
+            "POST",
+            "/api/auth/sign-up/email",
+            """{"email":"dedupe@example.dev","password":"securepassword123","name":"Dedupe"}"""));
+
+        Assert.Equal(201, response.Status);
+        var sessionCookies = response.SetCookies
+            .Where(cookie => cookie.StartsWith(
+                "better-auth.session_token=",
+                StringComparison.Ordinal))
+            .ToList();
+        Assert.Single(sessionCookies);
+    }
+
+    [Fact]
+    public async Task Auth_session_cookie_is_secure_by_default()
+    {
+        var options = new AuthOptions { CookieName = "secure_session" };
+
+        var app = ReptarApp.Create(new ReptarConfig
+        {
+            Database = Db.Sqlite(":memory:"),
+            Auth = options,
+        });
+
+        app.Route("/api/auth", Auth.BetterAuthRoutes(options));
+        await app.EnsureCreatedAsync();
+
+        var response = await app.HandleAsync(Json(
+            "POST",
+            "/api/auth/sign-up/email",
+            """{"email":"secure@example.dev","password":"securepassword123","name":"Secure"}"""));
+
+        Assert.Equal(201, response.Status);
+        var cookie = response.SetCookies
+            .First(c => c.StartsWith("secure_session=", StringComparison.Ordinal));
+        Assert.Contains("Secure", cookie);
+    }
+
+    [Fact]
     public void Pkce_generates_valid_verifier_and_challenge()
     {
         var verifier = Pkce.GenerateCodeVerifier();

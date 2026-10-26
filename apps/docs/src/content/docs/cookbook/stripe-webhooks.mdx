@@ -1,0 +1,90 @@
+---
+title: Stripe Webhooks & Idempotency
+description: Secure webhook signature verification and idempotent event processing.
+---
+
+When accepting payment events from Stripe (e.g. `checkout.session.completed`, `customer.subscription.updated`), you must:
+
+1. Verify the `Stripe-Signature` cryptographic header to prevent forged requests.
+2. Store processed event IDs in your database to ensure **idempotency** (preventing double-crediting when Stripe retries deliveries).
+
+---
+
+## 1. Schema for Idempotent Webhook Events
+
+Record processed event IDs in a dedicated table:
+
+```csharp
+public static class Schema
+{
+    public static readonly TableDef ProcessedEvents = Db.Table("processed_webhook_events")
+        .Column("event_id", DbType.Text, primaryKey: true)
+        .Column("source", DbType.Text)
+        .Column("processed_at", DbType.Text, defaultValue: "CURRENT_TIMESTAMP");
+}
+
+[ReptarEntity]
+public sealed record ProcessedEventRecord(string EventId, string Source, string ProcessedAt);
+```
+
+---
+
+## 2. Signature Verification & Event Dispatch
+
+Read raw payload bytes for HMAC verification before parsing:
+
+```csharp
+app.Post("/api/webhooks/stripe", async ctx =>
+{
+    var signature = ctx.Req.Header("Stripe-Signature");
+    var webhookSecret = ctx.Environment.Get("STRIPE_WEBHOOK_SECRET");
+
+    if (string.IsNullOrEmpty(signature) || string.IsNullOrEmpty(webhookSecret))
+        return ctx.BadRequest("Missing webhook signature or secret.");
+
+    var rawBody = ctx.Req.Body;
+    if (rawBody is null || rawBody.Length == 0)
+        return ctx.BadRequest("Empty request body.");
+
+    // Verify HMAC-SHA256 signature
+    if (!StripeSignatures.Verify(rawBody, signature, webhookSecret))
+        return ctx.BadRequest("Invalid Stripe signature.");
+
+    using var doc = JsonDocument.Parse(rawBody);
+    var root = doc.RootElement;
+    var eventId = root.GetProperty("id").GetString()!;
+    var eventType = root.GetProperty("type").GetString()!;
+
+    // Idempotency check: discard already-processed events
+    var existing = await ctx.Db.From<ProcessedEventRecord>(Schema.ProcessedEvents)
+        .Where(Schema.ProcessedEvents.Col<string>("event_id").Eq(eventId))
+        .SingleOrDefaultAsync();
+
+    if (existing is not null)
+        return ctx.Json(new { received = true, duplicate = true });
+
+    // Mark event as processed within a transaction
+    await ctx.Db.InsertAsync(Schema.ProcessedEvents, new Dictionary<string, object?>
+    {
+        ["event_id"] = eventId,
+        ["source"] = "stripe",
+        ["processed_at"] = DateTimeOffset.UtcNow.ToString("O"),
+    });
+
+    // Handle the event asynchronously
+    ctx.WaitUntil(async () =>
+    {
+        switch (eventType)
+        {
+            case "checkout.session.completed":
+                await HandleCheckoutCompletedAsync(root.GetProperty("data").GetProperty("object"));
+                break;
+            case "customer.subscription.deleted":
+                await HandleSubscriptionCancelledAsync(root.GetProperty("data").GetProperty("object"));
+                break;
+        }
+    });
+
+    return ctx.Json(new { received = true });
+});
+```

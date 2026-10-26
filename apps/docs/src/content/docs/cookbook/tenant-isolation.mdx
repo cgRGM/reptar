@@ -1,0 +1,58 @@
+---
+title: Tenant Isolation & Safe History
+description: Scope every session to its user so cross-tenant reads are structurally impossible, and redact secrets before anything touches disk.
+---
+
+Two ten-minute setups that prevent the two most expensive multi-tenant bugs: one user reading another's data, and secrets landing in stored conversation history (which then gets replayed to a model provider).
+
+---
+
+## 1. Isolation-key scoped session stores
+
+`ScopedAgentSessionStore` composes every session id with an isolation key, so lookups from one tenant simply cannot address another tenant's sessions — not by query bug, not by guessed id:
+
+```csharp
+var inner = new AgentSessionStore(db, AgentSchema.Sessions(), AgentSchema.Messages());
+await inner.EnsureCreatedAsync();
+
+// One instance per authenticated principal:
+var store = new ScopedAgentSessionStore(inner, $"user:{ctx.User!.Id}");
+
+var session = await store.CreateSessionAsync("Project planning");
+await store.AppendMessageAsync(session.Id, new ChatMessage("user", "private note"));
+
+// Bare ids in the caller; the "user:42:" prefix never leaks out.
+// Another tenant with the same ids sees nothing:
+//   bob.FindSessionAsync(session.Id)      → null
+//   bob.LoadMessagesAsync(session.Id)     → []
+//   bob.ListSessionsAsync()              → []
+```
+
+Sessions created through the store only ever appear in that tenant's list — the isolation key is structural, not a filter someone can forget to apply.
+
+## 2. Redact or drop before persistence
+
+Conversation history is about to be shipped to model providers on the next turn. Make that safe at the storage boundary with `IMessagePersistFilter` on the session store:
+
+```csharp
+inner.PersistFilter = PersistFilters.Compose(
+    // Whole tool results from secret-reading tools never hit disk:
+    PersistFilters.DropToolResults("read_secrets"),
+    // Common credential shapes get masked first:
+    PersistFilters.RedactSecrets());
+```
+
+`RedactSecrets` masks OpenAI/Anthropic-style keys (`sk-…`), bearer tokens, AWS access keys (`AKIA…`), and 40-char hex secrets before the row is written. A filter returning `null` drops the message entirely — `AppendMessageAsync` returns `""` and nothing is persisted.
+
+## 3. The pairing
+
+These compose with the rest of the agent engine:
+
+| Concern | Tool |
+| :-- | :-- |
+| Cross-tenant session access | `ScopedAgentSessionStore` (this page) |
+| Secrets in stored history | `IMessagePersistFilter` (this page) |
+| Gating dangerous tools per human decision | [Human-in-the-loop approvals](/cookbook/human-in-the-loop/) |
+| Suspending runs across restarts | `RunCheckpointStore` — its state snapshots run through the same persist filter |
+
+Ten lines of setup, and the expensive failure modes are structurally closed rather than policy-policed.

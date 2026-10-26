@@ -14,6 +14,23 @@ public class AiToolTests
         .Prop(x => x.Priority, r => r.Min(1).Max(5));
 
     [Fact]
+    public void GetAiTools_defaults_to_explicit_routes_only()
+    {
+        var app = ReptarApp.Create();
+
+        app.Get("/api/public", ctx => Task.FromResult(ctx.JsonRaw("""{"ok":true}""")));
+        app.Get("/api/tool", ctx => Task.FromResult(ctx.JsonRaw("""{"ok":true}""")))
+            .AsAiTool("explicit_tool", "An explicitly exposed tool");
+
+        var defaults = app.GetAiTools();
+        Assert.Single(defaults);
+        Assert.Equal("explicit_tool", defaults[0].Name);
+
+        var all = app.GetAiTools(onlyExplicit: false);
+        Assert.Equal(2, all.Count);
+    }
+
+    [Fact]
     public void GetAiTools_generates_valid_tool_definitions_for_openai_claude_and_gemini()
     {
         var app = ReptarApp.Create();

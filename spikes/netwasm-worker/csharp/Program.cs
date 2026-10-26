@@ -9,22 +9,6 @@ using System.Threading.Tasks;
 using Reptar;
 using static Reptar.ReptarApi;
 
-public sealed record HostRequest(
-    string Method,
-    string Path,
-    string Query,
-    Dictionary<string, string> Headers,
-    string Body,
-    string RequestId);
-
-public sealed record HostResponse(
-    int Status,
-    Dictionary<string, string> Headers,
-    string Body,
-    string[] SetCookies);
-
-[JsonSerializable(typeof(HostRequest))]
-[JsonSerializable(typeof(HostResponse))]
 [JsonSerializable(typeof(Posts.Post))]
 [JsonSerializable(typeof(List<Posts.Post>))]
 [JsonSerializable(typeof(Posts.CreatePost))]
@@ -56,7 +40,8 @@ public static partial class PageExports
 
     static PageExports()
     {
-        ReptarJson.Options.TypeInfoResolver = BlogJsonContext.Default;
+        ReptarJson.RegisterContext(BlogJsonContext.Default);
+        ReptarJson.UseRegisteredContexts();
         App = BuildApp();
     }
 
@@ -64,110 +49,8 @@ public static partial class PageExports
     private static extern void Respond(string requestId, string json);
 
     [JSExport("handle")]
-    public static void Handle(string requestJson)
-    {
-        _ = HandleAsync(requestJson);
-    }
-
-    private static async Task HandleAsync(string requestJson)
-    {
-        var request = JsonSerializer.Deserialize<HostRequest>(
-            requestJson,
-            ReptarJson.Options);
-
-        if (request is null)
-        {
-            Respond(
-                ExtractRequestId(requestJson),
-                JsonSerializer.Serialize(
-                    new HostResponse(400, [], "e30=", []),
-                    ReptarJson.Options));
-            return;
-        }
-
-        var response = await App.HandleAsync(new ReptarRequest
-        {
-            Method = request.Method,
-            Path = request.Path,
-            Query = request.Query.TrimStart('?'),
-            Headers = request.Headers,
-            Cookies = ParseCookies(request.Headers),
-            Body = string.IsNullOrEmpty(request.Body)
-                ? []
-                : Convert.FromBase64String(request.Body),
-        });
-
-        var headers = new Dictionary<string, string>(response.Headers);
-
-        if (response.ContentType is not null)
-        {
-            headers["content-type"] = response.ContentType;
-        }
-
-        var body = response.Body is null
-            ? ""
-            : Convert.ToBase64String(response.Body);
-
-        Respond(
-            request.RequestId,
-            JsonSerializer.Serialize(
-                new HostResponse(
-                    response.Status,
-                    headers,
-                    body,
-                    response.SetCookies.ToArray()),
-                ReptarJson.Options));
-    }
-
-    private static string ExtractRequestId(string requestJson)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(requestJson);
-
-            return document.RootElement.TryGetProperty(
-                "requestId",
-                out var requestId)
-                ? requestId.GetString() ?? ""
-                : "";
-        }
-        catch (JsonException)
-        {
-            return "";
-        }
-    }
-
-    private static Dictionary<string, string> ParseCookies(
-        Dictionary<string, string> headers)
-    {
-        var cookies = new Dictionary<string, string>(
-            StringComparer.OrdinalIgnoreCase);
-
-        if (!headers.TryGetValue("cookie", out var header))
-        {
-            return cookies;
-        }
-
-        foreach (var pair in header.Split(';'))
-        {
-            var separator = pair.IndexOf('=');
-
-            if (separator <= 0)
-            {
-                continue;
-            }
-
-            var name = pair[..separator].Trim();
-            var value = pair[(separator + 1)..].Trim();
-
-            if (name.Length > 0)
-            {
-                cookies[name] = value;
-            }
-        }
-
-        return cookies;
-    }
+    public static Task Handle(string requestJson) =>
+        WorkerEntrypoint.HandleAsync(App, requestJson, Respond);
 
     private static ReptarApp BuildApp()
     {
@@ -187,6 +70,7 @@ public static partial class PageExports
         });
 
         app.Use(ReptarApi.RequestId());
+        app.Use(ReptarApi.Telemetry());
         Blog.Configure(app);
 
         app.Get("/platform/env", ctx => Task.FromResult(ctx.Json(

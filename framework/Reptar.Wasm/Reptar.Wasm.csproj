@@ -12,14 +12,22 @@
 
   <ItemGroup>
     <Compile Include="../Reptar/Core/**/*.cs" />
+    <!-- Native-only surfaces: not reachable from the Worker request path and
+         they add measurable O0 module size. -->
+    <Compile Remove="../Reptar/Core/AiTools.cs" />
+    <Compile Remove="../Reptar/Core/OpenApi.cs" />
     <Compile Include="../Reptar/Validation/**/*.cs" />
+    <Compile Include="../Reptar/Queue/QueuePort.cs" />
+    <Compile Include="../Reptar/Queue/SyncQueueClient.cs" />
     <Compile Include="../Reptar/Data/ReptarEntityAttribute.cs" />
     <Compile Include="../Reptar/Data/ColumnRef.cs" />
+    <Compile Include="../Reptar/Data/BufferedTransaction.cs" />
+    <Compile Include="../Reptar/Data/Preload.cs" />
     <Compile Include="../Reptar/Data/Services.cs" />
     <Compile Include="../Reptar/Data/SqlParamParser.cs" />
-    <Compile Include="../Reptar/Data/PostgresDbClient.cs" />
-    <Compile Include="../Reptar/Features/Stripe.cs" />
     <Compile Include="Data/TableDef.Wasm.cs" />
+    <Compile Include="Data/WorkerHost.cs" />
+    <Compile Include="Data/TelemetryLogger.cs" />
     <Compile Include="Data/D1DbClient.cs" />
     <Compile Include="Data/R2Client.cs" />
     <Compile Include="Data/WasmCrypto.cs" />

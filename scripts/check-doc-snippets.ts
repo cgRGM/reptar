@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 
-const ROOT = process.cwd();
+const ROOT = join(dirname(new URL(import.meta.url).pathname), "..");
 const DOCS_DIR = join(ROOT, "apps/docs/src/content/docs");
 
 const walkFiles = (dir: string): string[] => {
@@ -83,15 +83,32 @@ console.log(
   `Verified ${totalCsharpBlocks} C# snippets across ${files.length} documentation files.`
 );
 
+const pinnedDotnet = join(ROOT, ".reptar", "sdk", "dotnet");
+const dotnet = existsSync(pinnedDotnet)
+  ? pinnedDotnet
+  : process.env.DOTNET_ROOT
+    ? join(process.env.DOTNET_ROOT, "dotnet")
+    : "dotnet";
+
 const testResult = spawnSync(
-  "dotnet",
+  dotnet,
   [
     "test",
     "framework/Reptar.Tests/Reptar.Tests.csproj",
     "--filter",
     "FullyQualifiedName~DocSnippetsTests",
   ],
-  { cwd: ROOT, stdio: "inherit" }
+  {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      DOTNET_CLI_HOME: join(ROOT, ".reptar", "cli-home"),
+      ...(existsSync(pinnedDotnet)
+        ? { DOTNET_ROOT: join(ROOT, ".reptar", "sdk") }
+        : {}),
+    },
+    stdio: "inherit",
+  }
 );
 
 if (testResult.status !== 0) {

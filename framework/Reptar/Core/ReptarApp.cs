@@ -83,7 +83,8 @@ public sealed record QueueBatch(
 
 public sealed record QueueBatchResult(
     bool Success,
-    string[] FailedMessageIds);
+    string[] FailedMessageIds,
+    List<QueueRetry>? Retries = null);
 
 public sealed record ScheduledEvent(
     string Cron,
@@ -92,6 +93,10 @@ public sealed record ScheduledEvent(
 public sealed record ScheduledResult(
     bool Success,
     string[] Errors);
+
+public sealed record ReptarHandledResponse(
+    ReptarResponse Response,
+    Task Background);
 
 public sealed class ReptarApp
 {
@@ -119,6 +124,7 @@ public sealed class ReptarApp
         new(StringComparer.Ordinal);
     private readonly ReptarConfig _config;
     private readonly (ReptarApp Parent, string Prefix)? _groupParent;
+    private readonly List<IReptarModule> _modules = [];
     private ServiceSet? _services;
 
     internal ReptarApp(ReptarConfig config, (ReptarApp Parent, string Prefix)? groupParent = null)
@@ -156,12 +162,117 @@ public sealed class ReptarApp
         return this;
     }
 
+    public IPolicyManager Policies { get; } = new PolicyManager();
+
+    /// <summary>
+    /// Registers a declarative resource authorization policy.
+    /// Inspired by AdonisJS Bouncer and Laravel Gates.
+    /// </summary>
+    public ReptarApp DefinePolicy<TResource>(string action, Func<SessionUser?, TResource, bool> policy)
+    {
+        Policies.Define(action, policy);
+        return this;
+    }
+
+    /// <summary>
+    /// Evaluates whether the given user can perform the specified action on a resource.
+    /// </summary>
+    public bool Can<TResource>(SessionUser? user, string action, TResource resource) =>
+        Policies.Can(user, action, resource);
+
+    /// <summary>
+    /// Creates an in-memory HTTP test client that executes requests directly through the
+    /// route and middleware pipeline without binding network sockets.
+    /// </summary>
+    public ReptarTestClient CreateTestClient() => new(this);
+
+    /// <summary>
+    /// Enables standard perimeter security headers (CSP, HSTS, X-Content-Type-Options, etc.).
+    /// Works universally across both Native AOT and NetWasm Cloudflare Workers.
+    /// </summary>
+    public ReptarApp UseSecurityHeaders(SecurityHeadersOptions? options = null) =>
+        Use(Middlewares.SecurityHeaders(options));
+
+    public ReptarApp UseSecurityHeaders(Action<SecurityHeadersOptions> configure)
+    {
+        var opts = new SecurityHeadersOptions();
+        configure(opts);
+        return Use(Middlewares.SecurityHeaders(opts));
+    }
+
+    /// <summary>
+    /// Rejects requests with 413 Payload Too Large if the body exceeds <paramref name="maxBytes"/>.
+    /// </summary>
+    public ReptarApp UseBodyLimit(long maxBytes) => Use(Middlewares.BodyLimit(maxBytes));
+
+    /// <summary>
+    /// Adds an application module. Configure runs immediately; Start/Stop run
+    /// from hosts that support a lifecycle (Kestrel/Lambda).
+    /// </summary>
+    public ReptarApp AddModule(IReptarModule module)
+    {
+        ArgumentNullException.ThrowIfNull(module);
+        module.Configure(this);
+        _modules.Add(module);
+        return this;
+    }
+
+    public async Task StartModulesAsync(CancellationToken cancellationToken = default)
+    {
+        foreach (var module in _modules)
+            await module.StartAsync(this, cancellationToken);
+    }
+
+    public async Task StopModulesAsync(CancellationToken cancellationToken = default)
+    {
+        for (var index = _modules.Count - 1; index >= 0; index--)
+        {
+            try
+            {
+                await _modules[index].StopAsync(this, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _services?.Log.Error($"Module stop failed: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Stops modules (best effort) and disposes the configured database client.
+    /// Kestrel/Lambda call this on host shutdown.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        await StopModulesAsync();
+
+        if (_services?.Db is IAsyncDisposable asyncDisposable)
+        {
+            await asyncDisposable.DisposeAsync();
+        }
+        else if (_services?.Db is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+
+        _services = null;
+    }
+
     public void RegisterSchema(params TableDef[] tables) => Tables.AddRange(tables);
 
     public string ExportSchemaJson() => SchemaRegistry.ExportJson(Tables);
 
     public IDbClient Db => Services.Db;
     public IDbClient Database => Services.Db;
+    public IQueueClient Queues => Services.Queues;
+
+    /// <summary>Queue names with registered <see cref="OnQueue"/> consumers.</summary>
+    public IReadOnlyList<string> QueueNames =>
+        [.. _queueHandlers.Keys.OrderBy(name => name, StringComparer.OrdinalIgnoreCase)];
+
+    /// <summary>Cron expressions registered through <see cref="OnScheduled"/>.</summary>
+    public IReadOnlyList<string> CronExpressions =>
+        [.. _scheduledHandlers.Keys.OrderBy(cron => cron, StringComparer.Ordinal)];
 
     public Task EnsureCreatedAsync() =>
         Services.Db.EnsureCreatedAsync(Tables.ToArray());
@@ -657,7 +768,9 @@ public sealed class ReptarApp
             return new QueueBatchResult(false, batch.Messages.Select(m => m.Id).ToArray());
         }
 
+        var observer = _config.QueueObserver;
         var failed = new List<string>();
+        List<QueueRetry>? retries = null;
 
         foreach (var message in batch.Messages)
         {
@@ -683,16 +796,27 @@ public sealed class ReptarApp
             try
             {
                 await handler(ctx, message);
+                observer?.Completed(batch.Queue, message.Id);
+            }
+            catch (RetryIn retry)
+            {
+                var delaySeconds = Math.Max(1, (int)retry.Delay.TotalSeconds);
+                failed.Add(message.Id);
+                (retries ??= []).Add(new QueueRetry(message.Id, delaySeconds));
+                observer?.Retried(batch.Queue, message.Id, message.Attempts, delaySeconds);
+                ctx.Log.Warn(
+                    $"[Queue:{batch.Queue}] Message {message.Id} retry in {delaySeconds}s: {retry.Message}");
             }
             catch (Exception exception)
             {
+                failed.Add(message.Id);
+                observer?.Failed(batch.Queue, message.Id, message.Attempts, exception);
                 ctx.Log.Error(
                     $"[Queue:{batch.Queue}] Message {message.Id} processing failed: {exception.Message}");
-                failed.Add(message.Id);
             }
         }
 
-        return new QueueBatchResult(failed.Count == 0, failed.ToArray());
+        return new QueueBatchResult(failed.Count == 0, failed.ToArray(), retries);
     }
 
     public long GetMaxBodyBytes(string method, string path) =>
@@ -715,10 +839,50 @@ public sealed class ReptarApp
         return false;
     }
 
-    public async Task<ReptarResponse> HandleAsync(ReptarRequest request)
+    /// <summary>
+    /// Executes one request and returns the response. Background tasks are
+    /// started on the native hosts; the Workers entrypoint should call
+    /// <see cref="HandleWithBackgroundAsync"/> so the host can hold the event
+    /// open until the returned task completes.
+    /// </summary>
+    public async Task<ReptarResponse> HandleAsync(ReptarRequest request) =>
+        (await ExecuteAsync(request, startBackground: true)).Response;
+
+    /// <summary>
+    /// Executes one request and returns both the response and the background
+    /// work registered through <see cref="Ctx.WaitUntil"/>. The caller should
+    /// send the response first, then await <see cref="ReptarHandledResponse.Background"/>.
+    /// </summary>
+    public async Task<ReptarHandledResponse> HandleWithBackgroundAsync(
+        ReptarRequest request)
+    {
+        var result = await ExecuteAsync(request, startBackground: false);
+        var background = result.Context.BackgroundTasks.Count == 0
+            ? Task.CompletedTask
+            : Task.WhenAll(result.Context.BackgroundTasks);
+
+        return new ReptarHandledResponse(result.Response, background);
+    }
+
+    private async Task<(ReptarResponse Response, Ctx Context)> ExecuteAsync(
+        ReptarRequest request,
+        bool startBackground)
     {
         var ctx = new Ctx(request, Services);
+        ctx.RequestAborted = request.Aborted;
+        var traceParent = TraceParent.Parse(request.Header("traceparent"));
+        ctx.TraceId = traceParent?.TraceId ?? TraceContext.NewTraceId();
+        ctx.SpanId = TraceContext.NewSpanId();
+        ctx.ParentSpanId = traceParent?.SpanId;
+        using var traceScope = TraceContext.Begin(new TraceContext(
+            ctx.TraceId,
+            ctx.SpanId,
+            ctx.ParentSpanId,
+            traceParent?.Sampled ?? true));
+        using var dbScope = DbMetrics.Begin(ctx.DbMetrics);
+
         var match = Match(request.Method, request.Path);
+        ctx.RoutePattern = match?.Entry.Meta.Path ?? request.Path;
         var maxBodyBytes = match?.Entry.Meta.MaxBodyBytes ?? _config.MaxBodyBytes;
         ReptarResponse response;
 
@@ -812,7 +976,53 @@ public sealed class ReptarApp
         foreach (var cookie in ctx.Cookies.Pending)
             response.SetCookies.Add(cookie);
 
-        return response;
+        if (request.Method.Length == 4 &&
+            string.Equals(request.Method, "HEAD", StringComparison.OrdinalIgnoreCase) &&
+            (response.Body is not null || response.BodyStream is not null))
+        {
+            var head = new ReptarResponse
+            {
+                Status = response.Status,
+                ContentType = response.ContentType,
+            };
+
+            foreach (var (name, value) in response.Headers)
+                head.Headers[name] = value;
+
+            head.SetCookies.AddRange(response.SetCookies);
+
+            if (response.Body is { } headBody &&
+                !head.Headers.ContainsKey("Content-Length"))
+            {
+                head.Headers["Content-Length"] =
+                    headBody.Length.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            response = head;
+        }
+
+        if (startBackground && ctx.BackgroundTasks.Count > 0)
+        {
+#if NETWASM
+            // The Worker entrypoint uses HandleWithBackgroundAsync and awaits
+            // the returned task; detaching work on the single-threaded Wasm
+            // host would let the isolate finish before it runs.
+#else
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.WhenAll(ctx.BackgroundTasks);
+                }
+                catch (Exception ex)
+                {
+                    ctx.Log.Error($"Background task failed: {ex.Message}");
+                }
+            });
+#endif
+        }
+
+        return (response, ctx);
     }
 
     private RouteBuilder AddTypedRoute<
@@ -861,7 +1071,9 @@ public sealed class ReptarApp
                     [new ValidationIssue("Invalid JSON body.", ["body"])]);
             }
 
-            List<ValidationIssue> issues = validator is null ? [] : validator.Validate(input);
+            IReadOnlyList<ValidationIssue> issues = validator is null
+                ? Array.Empty<ValidationIssue>()
+                : validator.Validate(input);
 
             if (issues.Count > 0)
                 return ctx.Invalid(issues);
@@ -1060,16 +1272,25 @@ public sealed class ReptarApp
             }
         }
 
+        // HEAD is defined as GET without the response body. Prefer an explicit
+        // HEAD route (registered through the fallback table), then fall back to
+        // the GET route so every read endpoint supports HEAD for free.
+        if (method.Length == 4 &&
+            string.Equals(method, "HEAD", StringComparison.OrdinalIgnoreCase))
+        {
+            return Match("GET", path);
+        }
+
         return null;
     }
 
     private ServiceSet Services => _services ??= new ServiceSet(
-        _config.Database ?? DefaultDatabase(),
+        Instrument(_config.Database ?? DefaultDatabase()),
         _config.Storage ?? DefaultStorage(),
         _config.AI ?? DefaultAI(),
         _config.RateLimit ?? new MemoryRateLimiter(),
         _config.Cache ?? DefaultCache(),
-        _config.Queues ?? DefaultQueues(),
+        _config.Queues ?? DefaultQueues(this),
         _config.Durable ?? DefaultDurable(),
         _config.Http ?? DefaultHttp(),
         _config.Clock ?? new SystemClock(),
@@ -1077,8 +1298,21 @@ public sealed class ReptarApp
         _config.Environment ?? DefaultEnvironment(),
         _config.Json ?? new DefaultJsonCodec(),
         _config.Errors ?? new DefaultErrorMapper(),
-        _config.Log ?? new ConsoleAppLogger(),
-        _config.WebSocket ?? new NoopWebSocketTransport());
+        _config.Log ?? DefaultLog(),
+        _config.WebSocket ?? new NoopWebSocketTransport(),
+        Policies);
+
+    private static IAppLogger DefaultLog()
+    {
+#if NETWASM
+        return new WasmAppLogger();
+#else
+        return new ConsoleAppLogger();
+#endif
+    }
+
+    private static IDbClient Instrument(IDbClient db) =>
+        db is InstrumentedDbClient ? db : new InstrumentedDbClient(db);
 
     private static IDbClient DefaultDatabase()
     {
@@ -1116,12 +1350,15 @@ public sealed class ReptarApp
 #endif
     }
 
-    private static IQueueClient DefaultQueues()
+    private static IQueueClient DefaultQueues(ReptarApp app)
     {
 #if NETWASM
         return new QueueClient();
 #else
-        return new NoopQueueClient();
+        // Native targets default to inline execution instead of a silent
+        // no-op: dev/test apps dispatch real work, and the log tells the
+        // truth about unused options.
+        return new SyncQueueClient(() => app);
 #endif
     }
 

@@ -1,0 +1,273 @@
+{
+  "version": 1,
+  "target": "wasm32",
+  "statusAbi": {
+    "successStatus": 0,
+    "hostFailureStatus": 1,
+    "scalarResultOffset": 0
+  },
+  "targetLayout": {
+    "managedReferenceSize": 4,
+    "stringLengthOffset": 4,
+    "stringDataOffset": 8,
+    "arrayLengthOffset": 4,
+    "arrayDataPointerOffset": 8
+  },
+  "imports": [
+    {
+      "module": "app.host",
+      "name": "execute",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "i32",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.0600086d",
+      "rejectExport": "netwasm.async.import.reject.Reptar.0600086d",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.0600086d"
+    },
+    {
+      "module": "app.host",
+      "name": "hmacSha256",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.0600089d",
+      "rejectExport": "netwasm.async.import.reject.Reptar.0600089d",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.0600089d"
+    },
+    {
+      "module": "app.host",
+      "name": "query",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.0600086c",
+      "rejectExport": "netwasm.async.import.reject.Reptar.0600086c",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.0600086c"
+    },
+    {
+      "module": "app.host",
+      "name": "respond",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "void",
+      "asyncReturn": null,
+      "resolveExport": null,
+      "rejectExport": null,
+      "cancelExport": null
+    },
+    {
+      "module": "app.host",
+      "name": "sha256",
+      "parameters": [
+        "string"
+      ],
+      "result": "string",
+      "asyncReturn": "task",
+      "resolveExport": "netwasm.async.import.resolve.Reptar.0600089c",
+      "rejectExport": "netwasm.async.import.reject.Reptar.0600089c",
+      "cancelExport": "netwasm.async.import.cancel.Reptar.0600089c"
+    },
+    {
+      "module": "app.host",
+      "name": "telemetry",
+      "parameters": [
+        "string"
+      ],
+      "result": "void",
+      "asyncReturn": null,
+      "resolveExport": null,
+      "rejectExport": null,
+      "cancelExport": null
+    },
+    {
+      "module": "app.host",
+      "name": "wsCommand",
+      "parameters": [
+        "string",
+        "string"
+      ],
+      "result": "void",
+      "asyncReturn": null,
+      "resolveExport": null,
+      "rejectExport": null,
+      "cancelExport": null
+    },
+    {
+      "module": "app.host",
+      "name": "wsMessageDone",
+      "parameters": [
+        "string"
+      ],
+      "result": "void",
+      "asyncReturn": null,
+      "resolveExport": null,
+      "rejectExport": null,
+      "cancelExport": null
+    }
+  ],
+  "exports": [
+    {
+      "name": "handle",
+      "parameters": [
+        "string"
+      ],
+      "result": "void",
+      "parameterNames": [
+        "requestJson"
+      ],
+      "nonNullableParameters": [
+        true
+      ],
+      "nonNullableResult": true,
+      "asyncReturn": "task",
+      "statusExport": "netwasm.async.export.status.RoomsWorker.0600005e",
+      "resultExport": null,
+      "completeExport": "netwasm.async.export.complete.RoomsWorker.0600005e",
+      "completionResult": "exception-handle-v1"
+    },
+    {
+      "name": "handleWebSocketClose",
+      "parameters": [
+        "string"
+      ],
+      "result": "void",
+      "parameterNames": [
+        "closeJson"
+      ],
+      "nonNullableParameters": [
+        true
+      ],
+      "nonNullableResult": true,
+      "asyncReturn": null,
+      "statusExport": null,
+      "resultExport": null,
+      "completeExport": null,
+      "completionResult": null
+    },
+    {
+      "name": "handleWebSocketMessage",
+      "parameters": [
+        "string"
+      ],
+      "result": "void",
+      "parameterNames": [
+        "messageJson"
+      ],
+      "nonNullableParameters": [
+        true
+      ],
+      "nonNullableResult": true,
+      "asyncReturn": null,
+      "statusExport": null,
+      "resultExport": null,
+      "completeExport": null,
+      "completionResult": null
+    },
+    {
+      "name": "handleWebSocketOpen",
+      "parameters": [
+        "string"
+      ],
+      "result": "void",
+      "parameterNames": [
+        "openJson"
+      ],
+      "nonNullableParameters": [
+        true
+      ],
+      "nonNullableResult": true,
+      "asyncReturn": null,
+      "statusExport": null,
+      "resultExport": null,
+      "completeExport": null,
+      "completionResult": null
+    },
+    {
+      "name": "supportsWsMessageDone",
+      "parameters": [],
+      "result": "bool",
+      "parameterNames": [],
+      "nonNullableParameters": [],
+      "nonNullableResult": true,
+      "asyncReturn": null,
+      "statusExport": null,
+      "resultExport": null,
+      "completeExport": null,
+      "completionResult": null
+    }
+  ],
+  "callbacks": [],
+  "witImports": [
+    {
+      "interface": "netwasm:runtime@1.0.0/reactor-host",
+      "function": "cancel"
+    },
+    {
+      "interface": "netwasm:runtime@1.0.0/reactor-host",
+      "function": "watch"
+    },
+    {
+      "interface": "wasi:cli@0.2.11/environment",
+      "function": "get-environment"
+    },
+    {
+      "interface": "wasi:cli@0.2.11/stderr",
+      "function": "get-stderr"
+    },
+    {
+      "interface": "wasi:cli@0.2.11/stdout",
+      "function": "get-stdout"
+    },
+    {
+      "interface": "wasi:clocks@0.2.11/monotonic-clock",
+      "function": "now"
+    },
+    {
+      "interface": "wasi:clocks@0.2.11/monotonic-clock",
+      "function": "subscribe-duration"
+    },
+    {
+      "interface": "wasi:clocks@0.2.11/wall-clock",
+      "function": "now"
+    },
+    {
+      "interface": "wasi:filesystem@0.2.11/preopens",
+      "function": "get-directories"
+    },
+    {
+      "interface": "wasi:filesystem@0.2.11/types",
+      "function": "[method]descriptor.open-at"
+    },
+    {
+      "interface": "wasi:filesystem@0.2.11/types",
+      "function": "[method]descriptor.read"
+    },
+    {
+      "interface": "wasi:io@0.2.11/error",
+      "function": "[resource-drop]error"
+    },
+    {
+      "interface": "wasi:io@0.2.11/streams",
+      "function": "[method]output-stream.blocking-write-and-flush"
+    },
+    {
+      "interface": "wasi:io@0.2.11/streams",
+      "function": "[resource-drop]output-stream"
+    },
+    {
+      "interface": "wasi:random@0.2.11/random",
+      "function": "get-random-bytes"
+    }
+  ]
+}

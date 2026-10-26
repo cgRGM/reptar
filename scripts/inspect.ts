@@ -36,18 +36,33 @@ export interface RouteInfo {
   toolName?: string;
 }
 
+export type DatabaseDialect = "sqlite" | "postgres";
+export type DatabaseDriver = "sqlite" | "postgres" | "d1";
+
+/**
+ * A resolved database target. `path` is always safe to print: for PostgreSQL
+ * it is the redacted URL (no credentials), and for SQLite it is the file path.
+ */
+export interface DatabaseTarget {
+  dialect: DatabaseDialect;
+  driver: DatabaseDriver;
+  path: string;
+  host?: string;
+  port?: number;
+  error?: string;
+}
+
+export interface DatabaseInfo extends DatabaseTarget {
+  connected: boolean;
+}
+
 export interface ReptarInspection {
   project: {
     name: string;
     root: string;
     version: string;
   };
-  database: {
-    driver: "sqlite" | "postgres" | "d1";
-    dialect: "sqlite" | "postgres";
-    connected: boolean;
-    path: string;
-  };
+  database: DatabaseInfo;
   schemaSource: "compiler" | "sqlite";
   tables: TableInfo[];
   databaseTables: TableInfo[];
@@ -70,32 +85,162 @@ export interface CheckItem {
   passed: boolean;
   details?: string;
   advice?: string;
+  /** A soft warning: passes in normal mode, fails under `doctor --strict`. */
+  warning?: boolean;
 }
 
 export interface ReptarDoctorReport {
   healthy: boolean;
   checks: CheckItem[];
+  strict?: boolean;
 }
+
+/**
+ * Probe a TCP endpoint synchronously. `inspectProject` and the MCP server are
+ * synchronous, so this runs a tiny Bun/Node child that performs the connect
+ * and exits 0 on success. Cross-platform, and bounded by `timeoutMs`.
+ */
+const probeTcpSync = (host: string, port: number, timeoutMs = 1500): boolean => {
+  const script = `
+    const net = require("node:net");
+    const host = process.env.REPTAR_PROBE_HOST;
+    const port = Number(process.env.REPTAR_PROBE_PORT);
+    const socket = net.connect({ host, port });
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      process.exit(ok ? 0 : 1);
+    };
+    socket.setTimeout(${timeoutMs});
+    socket.once("connect", () => done(true));
+    socket.once("timeout", () => done(false));
+    socket.once("error", () => done(false));
+  `;
+
+  const result = spawnSync(process.execPath, ["-e", script], {
+    env: {
+      ...process.env,
+      REPTAR_PROBE_HOST: host,
+      REPTAR_PROBE_PORT: String(port),
+    },
+    stdio: "ignore",
+    timeout: timeoutMs + 750,
+  });
+
+  return result.status === 0;
+};
+
+const parsePostgresTarget = (raw: string): DatabaseTarget => {
+  try {
+    const url = new URL(raw);
+    const host = url.hostname;
+    const port = url.port ? Number(url.port) : 5432;
+    if (!host) {
+      throw new Error("missing host");
+    }
+    const database = url.pathname.replace(/^\//u, "") || "(default)";
+    return {
+      dialect: "postgres",
+      driver: "postgres",
+      host,
+      path: `postgres://${host}:${port}/${database}`,
+      port,
+    };
+  } catch (error) {
+    return {
+      dialect: "postgres",
+      driver: "postgres",
+      error: `Invalid PostgreSQL DATABASE_URL: ${(error as Error).message}`,
+      path: "postgres://<invalid-url>",
+    };
+  }
+};
+
+const sqliteTarget = (rawPath: string, cwd: string): DatabaseTarget => {
+  const cleaned = rawPath
+    .trim()
+    .replace(/^sqlite:/i, "")
+    .replace(/^Data Source=/i, "")
+    .replace(/^file:/i, "");
+  return {
+    dialect: "sqlite",
+    driver: "sqlite",
+    path: path.isAbsolute(cleaned) ? cleaned : path.resolve(cwd, cleaned),
+  };
+};
+
+/**
+ * Resolves the active database target from `--db`/DATABASE_URL, then falls
+ * back to the conventional local SQLite files. Detects PostgreSQL URLs so
+ * callers never treat `postgres://…` as a SQLite filename.
+ */
+export const resolveDatabaseTarget = (
+  repoRoot: string,
+  cwd: string,
+  explicitDb?: string
+): DatabaseTarget => {
+  const raw = explicitDb?.trim() || process.env.DATABASE_URL?.trim();
+  if (raw) {
+    if (/^postgres(ql)?:\/\//i.test(raw)) {
+      return parsePostgresTarget(raw);
+    }
+    return sqliteTarget(raw, cwd);
+  }
+
+  const cwdCandidates = [
+    path.join(cwd, ".reptar/reptar.db"),
+    path.join(cwd, ".reptar/agent.db"),
+    path.join(cwd, "reptar.db"),
+    path.join(cwd, "app.db"),
+    path.join(cwd, "blog.db"),
+    path.join(cwd, "worker/schema.db"),
+  ];
+  // Fall back to a single conventional SQLite file in the app directory.
+  if (existsSync(cwd)) {
+    const discovered = readdirSync(cwd)
+      .filter(
+        (file) =>
+          file.endsWith(".db") &&
+          !file.endsWith("-shm") &&
+          !file.endsWith("-wal")
+      )
+      .sort()
+      .map((file) => path.join(cwd, file));
+    for (const candidate of discovered) {
+      if (!cwdCandidates.includes(candidate)) {
+        cwdCandidates.push(candidate);
+      }
+    }
+  }
+  const found = cwdCandidates.find((p) => existsSync(p));
+  if (found) {
+    return { dialect: "sqlite", driver: "sqlite", path: found };
+  }
+  if (cwd === repoRoot) {
+    const rootCandidates = [
+      path.join(repoRoot, ".reptar/reptar.db"),
+      path.join(repoRoot, "examples/blog/.reptar/reptar.db"),
+    ];
+    return {
+      dialect: "sqlite",
+      driver: "sqlite",
+      path: rootCandidates.find((p) => existsSync(p)) ?? rootCandidates[0],
+    };
+  }
+  return {
+    dialect: "sqlite",
+    driver: "sqlite",
+    path: path.join(cwd, ".reptar/reptar.db"),
+  };
+};
 
 export const resolveDbPath = (
   repoRoot: string,
   cwd: string,
   explicitDb?: string
-): string => {
-  if (explicitDb) {
-    return explicitDb;
-  }
-  const envUrl = process.env.DATABASE_URL;
-  if (envUrl) {
-    return envUrl.replace(/^sqlite:/i, "").replace(/^Data Source=/i, "");
-  }
-  const candidates = [
-    path.join(cwd, ".reptar/reptar.db"),
-    path.join(repoRoot, ".reptar/reptar.db"),
-    path.join(repoRoot, "examples/blog/.reptar/reptar.db"),
-  ];
-  return candidates.find((p) => existsSync(p)) ?? candidates[0];
-};
+): string => resolveDatabaseTarget(repoRoot, cwd, explicitDb).path;
 
 export const resolveMigrationsDir = (
   repoRoot: string,
@@ -105,12 +250,22 @@ export const resolveMigrationsDir = (
   if (explicitDir) {
     return explicitDir;
   }
-  const candidates = [
+  const cwdCandidates = [
     path.join(cwd, "migrations"),
-    path.join(repoRoot, "migrations"),
-    path.join(repoRoot, "spikes/netwasm-worker/migrations"),
+    path.join(cwd, "worker/migrations"),
   ];
-  return candidates.find((d) => existsSync(d)) ?? candidates[0];
+  const found = cwdCandidates.find((d) => existsSync(d));
+  if (found) {
+    return found;
+  }
+  if (cwd === repoRoot) {
+    const rootCandidates = [
+      path.join(repoRoot, "migrations"),
+      path.join(repoRoot, "spikes/netwasm-worker/migrations"),
+    ];
+    return rootCandidates.find((d) => existsSync(d)) ?? rootCandidates[0];
+  }
+  return path.join(cwd, "migrations");
 };
 
 export const inspectProject = (
@@ -118,7 +273,12 @@ export const inspectProject = (
   cwd: string = process.cwd(),
   options?: { dbPath?: string; migrationsDir?: string }
 ): ReptarInspection => {
-  const dbPath = resolveDbPath(repoRoot, cwd, options?.dbPath);
+  const databaseTarget = resolveDatabaseTarget(
+    repoRoot,
+    cwd,
+    options?.dbPath
+  );
+  const dbPath = databaseTarget.path;
   const migrationsDir = resolveMigrationsDir(
     repoRoot,
     cwd,
@@ -127,7 +287,10 @@ export const inspectProject = (
 
   let pkgName = "reptar-app";
   let pkgVersion = "0.1.0";
-  const pkgJsonPath = path.join(repoRoot, "package.json");
+  const pkgJsonPath =
+    [path.join(cwd, "package.json"), path.join(repoRoot, "package.json")].find(
+      (p) => existsSync(p)
+    ) ?? path.join(repoRoot, "package.json");
   if (existsSync(pkgJsonPath)) {
     try {
       const parsed = JSON.parse(readFileSync(pkgJsonPath, "utf-8"));
@@ -140,7 +303,16 @@ export const inspectProject = (
   const appliedMigrations: string[] = [];
   let dbConnected = false;
 
-  if (existsSync(dbPath)) {
+  if (databaseTarget.dialect === "postgres") {
+    // PostgreSQL is reachable over TCP; table introspection needs a SQL
+    // client, so `databaseTables` stays empty and the compiler schema is used.
+    dbConnected = Boolean(
+      databaseTarget.host &&
+        databaseTarget.port &&
+        !databaseTarget.error &&
+        probeTcpSync(databaseTarget.host, databaseTarget.port)
+    );
+  } else if (existsSync(dbPath)) {
     try {
       const db = new Database(dbPath, { readonly: true });
       dbConnected = true;
@@ -238,8 +410,16 @@ export const inspectProject = (
   // Routes
   const routes: RouteInfo[] = [];
   const openApiPath = [
-    path.join(repoRoot, "packages/rpc/openapi.json"),
-    path.join(repoRoot, "examples/blog/rpc/openapi.json"),
+    path.join(cwd, "rpc/openapi.json"),
+    path.join(cwd, "packages/client/src/openapi.json"),
+    path.join(cwd, ".reptar/openapi.json"),
+    path.join(cwd, "openapi.json"),
+    ...(cwd === repoRoot
+      ? [
+          path.join(repoRoot, "packages/rpc/openapi.json"),
+          path.join(repoRoot, "examples/blog/rpc/openapi.json"),
+        ]
+      : []),
   ].find((p) => existsSync(p));
 
   if (openApiPath) {
@@ -256,13 +436,18 @@ export const inspectProject = (
                 method.toLowerCase()
               )
             ) {
+              const isAiTool = Boolean(op["x-ai-tool"]);
               routes.push({
                 description: op.description,
-                isAiTool: Boolean(op["x-ai-tool"]),
+                isAiTool,
                 method: method.toUpperCase(),
                 path: routePath,
                 summary: op.summary,
-                toolName: op["x-ai-tool-name"] ?? op.operationId,
+                // Only explicit AI tools get a tool name; a standard HTTP
+                // route's operationId is not an LLM-callable tool.
+                toolName: isAiTool
+                  ? (op["x-ai-tool-name"] ?? op.operationId)
+                  : undefined,
               });
             }
           }
@@ -271,9 +456,57 @@ export const inspectProject = (
     } catch {}
   }
 
+  // Fallback: discover routes directly from .cs files in cwd / features/
+  if (routes.length === 0) {
+    const csFiles: string[] = [];
+    try {
+      const topLevel = readdirSync(cwd)
+        .filter((f) => f.endsWith(".cs"))
+        .map((f) => path.join(cwd, f));
+      csFiles.push(...topLevel);
+    } catch {}
+    const featuresDir = path.join(cwd, "features");
+    if (existsSync(featuresDir)) {
+      try {
+        const files = readdirSync(featuresDir)
+          .filter((f) => f.endsWith(".cs"))
+          .map((f) => path.join(featuresDir, f));
+        csFiles.push(...files);
+      } catch {}
+    }
+    const routeRegex =
+      /app\.(Get|Post|Put|Delete|Patch|MapWebSocket|OnWebSocket)\s*(?:<[^>]+>)?\s*\(\s*"([^"]+)"/g;
+    for (const file of csFiles) {
+      try {
+        const content = readFileSync(file, "utf-8");
+        let match: RegExpExecArray | null;
+        while ((match = routeRegex.exec(content)) !== null) {
+          const method =
+            match[1] === "MapWebSocket" || match[1] === "OnWebSocket"
+              ? "WS"
+              : match[1].toUpperCase();
+          const routePath = match[2];
+          if (!routes.some((r) => r.method === method && r.path === routePath)) {
+            routes.push({
+              method,
+              path: routePath,
+            });
+          }
+        }
+      } catch {}
+    }
+  }
+
   // Generated status
   const openApiExists = Boolean(openApiPath && existsSync(openApiPath));
-  const typesPath = path.join(repoRoot, "packages/rpc/src/types.ts");
+  const typesPath =
+    [
+      path.join(cwd, "packages/client/src/types.ts"),
+      path.join(cwd, "rpc/types.ts"),
+      path.join(cwd, ".reptar/types.ts"),
+      ...(cwd === repoRoot ? [path.join(repoRoot, "packages/rpc/src/types.ts")] : []),
+    ].find((p) => existsSync(p)) ??
+    path.join(cwd, "packages/client/src/types.ts");
   const typesExists = existsSync(typesPath);
   let genStatus: "up-to-date" | "stale" | "missing" = "missing";
   if (openApiExists && typesExists) {
@@ -320,9 +553,12 @@ export const inspectProject = (
   return {
     database: {
       connected: dbConnected,
-      dialect: "sqlite",
-      driver: "sqlite",
+      dialect: databaseTarget.dialect,
+      driver: databaseTarget.driver,
       path: dbPath,
+      ...(databaseTarget.host ? { host: databaseTarget.host } : {}),
+      ...(databaseTarget.port ? { port: databaseTarget.port } : {}),
+      ...(databaseTarget.error ? { error: databaseTarget.error } : {}),
     },
     databaseTables,
     generated: {
@@ -337,7 +573,7 @@ export const inspectProject = (
     },
     project: {
       name: pkgName,
-      root: repoRoot,
+      root: cwd,
       version: pkgVersion,
     },
     routes,
@@ -364,7 +600,8 @@ export const versionAtLeast = (actual: string, required: string): boolean => {
 
 export const doctorProject = (
   repoRoot: string,
-  cwd: string = process.cwd()
+  cwd: string = process.cwd(),
+  options?: { strict?: boolean }
 ): ReptarDoctorReport => {
   const checks: CheckItem[] = [];
 
@@ -406,6 +643,41 @@ export const doctorProject = (
     title: ".NET 10 SDK Toolchain",
   });
 
+  // Check 1b: SDK divergence — bare `dotnet run app.cs` silently fails with
+  // 'Unrecognized directive' when the PATH SDK is older than the pinned one,
+  // because file-based app directives (#:include) need the pinned SDK.
+  const portableSdk = path.join(repoRoot, ".reptar", "sdk", "dotnet");
+  if (existsSync(portableSdk) && sdkSource !== "PATH") {
+    const pathRes = spawnSync("dotnet", ["--version"], { encoding: "utf-8" });
+    if (pathRes.status === 0) {
+      const pathVersion = pathRes.stdout.trim();
+      const portableRes = spawnSync(portableSdk, ["--version"], {
+        encoding: "utf-8",
+      });
+      const portableVersion =
+        portableRes.status === 0 ? portableRes.stdout.trim() : "?";
+      if (pathVersion === portableVersion) {
+        checks.push({
+          details: `PATH dotnet matches pinned SDK (${portableVersion})`,
+          name: "dotnet_sdk_divergence",
+          passed: true,
+          title: "PATH dotnet vs pinned .reptar/sdk",
+        });
+      } else {
+        checks.push({
+          advice: `Only the pinned SDK (${portableVersion}) supports file-based app directives. Prefer 'bun reptar dev|run' invocations, or export DOTNET_ROOT=${path.dirname(portableSdk)} before calling bare dotnet.`,
+          details: `PATH dotnet is ${pathVersion} but the pinned .reptar/sdk is ${portableVersion} — bare 'dotnet run app.cs' will fail on #:include/#:project directives (non-fatal: 'bun reptar …' commands use the pinned SDK)`,
+          name: "dotnet_sdk_divergence",
+          // Soft warning: the pinned SDK handles all 'bun reptar' commands;
+          // only bare `dotnet run app.cs` calls hit the divergence.
+          passed: true,
+          title: "PATH dotnet vs pinned .reptar/sdk",
+          warning: true,
+        });
+      }
+    }
+  }
+
   // Check 2: Bun runtime
   const bunVer = process.versions.bun ?? "unknown";
   checks.push({
@@ -415,30 +687,51 @@ export const doctorProject = (
     title: "Bun JavaScript Runtime",
   });
 
-  // Check 3: Database & Migrations
+  // Check 3: Database & Migrations. Connectivity must be real: compiler
+  // schema classes alone do not prove the runtime database exists.
   const inspection = inspectProject(repoRoot, cwd);
+  const database = inspection.database;
+  const isPostgres = database.dialect === "postgres";
+  const databaseAdvice = database.connected
+    ? undefined
+    : isPostgres
+      ? "Check DATABASE_URL and that the PostgreSQL host/port is reachable"
+      : "Run 'bun reptar db migrate' to initialize the database schema";
+  const databaseDetails = database.connected
+    ? isPostgres
+      ? `PostgreSQL reachable at ${database.path} (schema from compiler)`
+      : `Reachable at ${database.path} (${inspection.databaseTables.length} table(s) discovered)`
+    : database.error
+      ? database.error
+      : isPostgres
+        ? `PostgreSQL unreachable at ${database.path}`
+        : `Database file not found at ${database.path}`;
   checks.push({
-    advice: inspection.database.connected
-      ? undefined
-      : "Run 'bun reptar db migrate' to initialize the database schema",
-    details: inspection.database.connected
-      ? `Reachable at ${inspection.database.path} (${inspection.tables.length} table(s) discovered)`
-      : `Database file not found at ${inspection.database.path}`,
+    advice: databaseAdvice,
+    details: databaseDetails,
     name: "database",
-    passed: inspection.database.connected || inspection.tables.length > 0,
+    passed: database.connected,
     title: "Database Connectivity & Schema",
   });
 
-  // Check 4: Migrations Status
-  const migrationsPassed = inspection.migrations.pending.length === 0;
+  // Check 4: Migrations Status. The built-in runner is SQLite-only, so a
+  // PostgreSQL URL can only produce a warning (not a false "pending" list).
+  const migrationsPassed = isPostgres
+    ? true
+    : inspection.migrations.pending.length === 0;
   checks.push({
-    advice: migrationsPassed
-      ? undefined
-      : "Run 'bun reptar db migrate' to apply pending migrations",
-    details: `${inspection.migrations.applied.length} applied, ${inspection.migrations.pending.length} pending in ${inspection.migrations.directory}`,
+    advice: isPostgres
+      ? "Use your database's migration tool; the built-in runner supports SQLite only"
+      : migrationsPassed
+        ? undefined
+        : "Run 'bun reptar db migrate' to apply pending migrations",
+    details: isPostgres
+      ? "PostgreSQL detected; migration state is not inspected by the built-in SQLite runner"
+      : `${inspection.migrations.applied.length} applied, ${inspection.migrations.pending.length} pending in ${inspection.migrations.directory}`,
     name: "migrations",
     passed: migrationsPassed,
     title: "Database Migrations",
+    warning: isPostgres || undefined,
   });
 
   // Check 5: RPC Contracts
@@ -453,6 +746,9 @@ export const doctorProject = (
     title: "End-to-End RPC Contracts",
   });
 
-  const healthy = checks.every((c) => c.passed);
-  return { checks, healthy };
+  const hasFailure = checks.some((c) => !c.passed);
+  const hasWarning = checks.some((c) => c.warning);
+  const strict = Boolean(options?.strict);
+  const healthy = !hasFailure && !(strict && hasWarning);
+  return { checks, healthy, strict };
 };

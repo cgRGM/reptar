@@ -1,58 +1,103 @@
 ---
 title: Reptar Documentation
-description: A non-.NET-ceremony C# web framework for Cloudflare Workers (Wasm) and Native AOT containers.
+description: A blazing-fast C# web framework compiled to Native AOT containers and Cloudflare Workers — built so humans and AI agents ship production backends with the compiler as reviewer.
 ---
 
-import { Card, CardGrid } from "@astrojs/starlight/components";
+import { Card, CardGrid, LinkCard, Aside, Code } from "@astrojs/starlight/components";
 
-Reptar is a C# web framework built from first principles for **Cloudflare Workers (`netwasm0.1`)** and **Linux Native AOT (`net10.0`)**. It combines Hono-style routing, Drizzle-style table schemas, compile-time `[ReptarEntity]` row mapping, auto-derived OpenAPI 3.1 specifications, and end-to-end TypeScript RPC client generation—with zero runtime reflection.
+**Reptar is the backend. Full stop.**
+
+One compiled C# app — schema, routes, auth, validation, storage, streaming, agents — that runs identically as a **10.4 MB Native AOT container** on any VPS or in AWS Lambda, and as **WebAssembly** inside Cloudflare Workers. Zero runtime reflection: everything is resolved at compile time, which makes it fast, small, and *surprisingly good at being built by AI agents*.
 
 ```csharp
 var app = ReptarApp.Create(new ReptarConfig
 {
-    Database = Db.D1(), // or Db.Sqlite("app.db"), Db.Postgres(url), Db.MySql(url)
+    Auth = BuiltIn(),
+    Database = Db.Sqlite("app.db"),
 });
 
-app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
-app.Use(RateLimit.SlidingWindow(limit: 120, windowSeconds: 60));
-app.UseScalar(title: "My Reptar API");
-
-app.Get("/tasks/:id", async c =>
+app.Use(Telemetry());
+app.Get("/api/notes", async c =>
 {
-    var task = await c.Db.QuerySingleOrDefaultAsync<TaskItem>(
-        "SELECT id, title, status FROM tasks WHERE id = @id",
-        ("id", c.Req.Param("id")));
-    return task is null ? c.NotFound() : c.Json(task);
-}).Produces<TaskItem>(200);
+    var notes = await c.Db.From<NoteRow>(Schema.Notes)
+        .Where(Schema.NotesCols.UserId.Eq(c.User!.Id))
+        .OrderBy(Schema.NotesCols.CreatedAt.Desc())
+        .Limit(50)
+        .ToListAsync();
+    return c.Json(notes);
+});
 
+await app.EnsureCreatedAsync();
 await app.RunAsync(args);
 ```
 
-## Core Capabilities
+## Why it's fast (receipts, not adjectives)
 
 <CardGrid>
-  <Card title="Dual-Target Wasm & Native AOT" icon="rocket">
-    Compile the same C# feature slices to WebAssembly for Cloudflare Workers (&lt;2 ms warm execution) or a **10.4 MB** standalone Linux Native AOT binary (`-p:ReptarSqliteOnly=true`) that boots in 124 ms.
+  <Card title="41.9k req/s" icon="rocket">
+    Plaintext routing at or above raw .NET 10 Minimal API; **36.3k req/s** with validation in the path. 10.4 MB binary, **124 ms** cold boot.
   </Card>
-  <Card title="Zero-Reflection Data Layer" icon="seti:db">
-    Decorate records with `[ReptarEntity]` to emit compile-time positional `DbDataReader` mappers and `ColumnRef<T>` query tokens. Query D1, SQLite (synchronous WAL read pool + group-commit batcher), PostgreSQL (`NpgsqlBatch`), and MySQL with zero reflection.
+  <Card title="2,799 req/s on a $6 VPS" icon="seti:server">
+    Real database I/O, RealWorld spec suite passing **154/154 requests** on every target — including Cloudflare Workers via NetWasm.
   </Card>
-  <Card title="OpenAPI 3.1, SSE & SWR Cache" icon="open-book">
-    `Rule<T>()` validators automatically populate OpenAPI 3.1 JSON Schemas served via Scalar UI (`/reference`). Stream AI responses over zero-alloc `ctx.Sse(...)` channels and serve reads at 39k+ req/s with `CacheControl.SWR`.
+  <Card title="39k+ req/s cached reads" icon="zap">
+    Built-in stale-while-revalidate caching, SQLite group-commit write batching (26 ms → 2.8 ms write gate), zero-allocation routing.
   </Card>
-  <Card title="Typed RPC & Better Auth" icon="approve-check">
-    Generate zero-dependency `@reptar/client` TypeScript RPC proxies and `~standard` validators directly from `.Produces<T>()`. Authenticate with built-in C# `Reptar.Auth` or the wire-compatible Better Auth protocol.
+  <Card title="One C# app, four targets" icon="arrow-right">
+    VPS · Docker · AWS Lambda · Cloudflare Workers — same schema files, same routes, same feature slices.
   </Card>
+</CardGrid>
+
+## Why you'll build with it
+
+<CardGrid>
+  <Card title="Batteries, compiled in" icon="battery">
+    Sessions + OAuth + API keys, Stripe checkout & webhook verification, SSE/WebSockets, R2/local storage, rate limiting, SWR cache, OpenAPI 3.1 + Scalar — one binary, zero external auth services.
+  </Card>
+  <Card title="The compiler is your reviewer" icon="shield-check">
+    Generated `ColumnRef` tokens make schema typos compile errors. `Rule<T>` is one source of truth for request validation, OpenAPI schemas, **and** LLM structured-output prompts.
+  </Card>
+  <Card title="Typed frontend, no glue" icon="check">
+    TypeScript RPC clients, DTOs, and `~standard` validators regenerate from the C# route tree — `client.api.notes.$get()` with full autocomplete.
+  </Card>
+  <Card title="Agentic from first principles" icon="open-book">
+    `llms.txt` as a rules-first reference, live schema/route inspection via JSON CLIs and MCP, and a built-in agent harness: modules, plan/execute modes, human-in-the-loop request ports, tool approvals, and evals.
+  </Card>
+</CardGrid>
+
+<Aside type="tip" title="Have an AI coding agent? Start here">
+  Copy the [agent prompt](/getting-started/agents/) into Claude Code, Cursor, or any coding agent inside a Reptar clone and it can scaffold, build, and verify a deployed app on your behalf — the framework's machine-readable tooling and compile-time contracts are what make that safe.
+</Aside>
+
+## Start here
+
+<CardGrid>
+  <LinkCard title="Quick Start" description="Real app, real auth, deployed — with a checkpoint at every step." href="/getting-started/quickstart/" />
+  <LinkCard title="Build with an AI Agent" description="The copy-paste prompt plus the MCP tooling that powers it." href="/getting-started/agents/" />
+  <LinkCard title="Why Reptar" description="The honest case — including when not to choose it." href="/overview/why-reptar/" />
+  <LinkCard title="Deployment Targets" description="VPS, Docker, Lambda, and Cloudflare Workers from one codebase." href="/overview/deployment-targets/" />
 </CardGrid>
 
 ## Documentation Map
 
 | Section | Topics Covered |
 | :-- | :-- |
-| **[Quick Start](/getting-started/quickstart/)** | Scaffold a project, configure `ReptarApp`, run migrations, and call typed RPC endpoints |
-| **[Routing, SSE & Caching](/core/routing/)** | Feature slices, `.Produces<T>()`, `ctx.Sse` AI streaming, `CacheControl.SWR`, and `RateLimit.SlidingWindow` |
+| **[Why Reptar](/overview/why-reptar/)** | The honest case for humans and agents — receipts and trade-offs included |
+| **[Quick Start](/getting-started/quickstart/)** | Scaffold a project, build a validated authenticated API, deploy the AOT container |
+| **[Build with an AI Agent](/getting-started/agents/)** | The copy-paste agent prompt, MCP server, and the verify-don't-assume loop |
+| **[Project Layout](/getting-started/project-structure/)** | File-based C# apps, feature slices, and the generated contract packages |
+| **[CLI & Tooling](/getting-started/cli/)** | The runner, migrations, code generation, machine inspection (`--json`), and MCP server |
+| **[Routing, SSE & Slices](/core/routing/)** | Feature slices, `.Produces<T>()`, `ctx.Sse` streaming, route parameters, and groups |
+| **[Built-in Middleware](/core/middleware/)** | SecurityHeaders (CSP, HSTS), BodyLimit, CORS, SWR caching, sliding-window rate limiting, and Server-Timing |
+| **[The Ctx Surface](/core/context/)** | Comprehensive reference for request data, response builders, `WaitUntil` background tasks, and platform bindings |
 | **[Validation & Rule&lt;T&gt;](/core/validation/)** | AOT-safe `Rule<T>()` validators, `SourceGenJsonCodec`, and `~standard` schema generation |
+| **[Testing & TestClient](/core/testing/)** | Sub-millisecond in-memory testing (`app.CreateTestClient()`) without TCP port bindings |
 | **[Database Client (c.Db)](/data/database/)** | `[ReptarEntity]` source generator, value-tuple parameters, `BatchAsync`, and D1 / SQLite / Postgres / MySQL drivers |
-| **[Migrations Engine](/data/migrations/)** | CLI runner (`bun scripts/reptar.ts db status \| migrate \| new`), programmatic `app.MigrateAsync()`, and DDL generation |
+| **[Migrations Engine](/data/migrations/)** | CLI runner (`bun reptar db status \| migrate \| new`), programmatic `app.MigrateAsync()`, and DDL generation |
+| **[Cookbook](/cookbook/file-uploads/)** | Production recipes: uploads, authorization, structured LLM outputs, human-in-the-loop, evals, SSE, Stripe, pagination |
+| **[Cloudflare Bindings](/cloudflare/bindings/)** | Native D1, R2, KV, Workers AI, and Durable Objects integration |
+| **[Queues & Cron Triggers](/cloudflare/queues-and-cron/)** | Dual-target queue consumers (`app.OnQueue`) and scheduled cron triggers (`app.OnScheduled`) |
+| **[AI Gateway & Streaming](/ai/ai-gateway/)** | Universal LLM proxy, SSE / Vercel Data Stream dual protocol, SHA-256 prompt caching, stream resume, and failover |
+| **[The Agent Harness](/ai/agent-harness/)** | Modules, plan/execute modes, request ports, tool approvals, loop evaluators, and evals |
 | **[Typed Client & OpenAPI 3.1](/client/codegen/)** | `@reptar/client`, validator-derived OpenAPI 3.1 schemas, `app.UseScalar()`, and `app.UseSwaggerUi()` |
 | **[RealWorld & Benchmarks](/overview/realworld/)** | 154/154 Conduit Hurl compliance and Native AOT benchmarks vs .NET 10 Minimal API & Hono |

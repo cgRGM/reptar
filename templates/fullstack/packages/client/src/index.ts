@@ -6,6 +6,9 @@ export type {
   Endpoint,
   RouteTree,
 } from "./client";
-export type { CreateItemInput, Item, User } from "./types";
-export { CreateItemInputSchema, ItemSchema, UserSchema } from "./schemas";
+
+// Codegen owns types.ts, schemas.ts, and app-type.d.ts. Re-export them
+// wholesale so adding or renaming a DTO never requires hand-editing this file.
+export * from "./types";
+export * from "./schemas";
 export type { AppType } from "./app-type";

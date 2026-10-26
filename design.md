@@ -31,7 +31,7 @@ TanStack Start / Expo / Next / curl / anything
         │  createClient<AppType>  (generated)
         ▼
 Cloudflare Worker — TS host shim (generated, ~thin)
-   ├─ fetch, cookies, crypto (WebCrypto + node:crypto scrypt)
+   ├─ fetch, cookies, crypto (WebCrypto PBKDF2 + SHA-256)
    ├─ D1, R2, Workers AI, RateLimit bindings
    ├─ telemetry (OTel/Axiom, logs)
    ├─ Better Auth mount (only when using the adapter)
@@ -216,12 +216,12 @@ await app.RunAsync(args);
 | --- | --- | --- |
 | `c.Req` | request | params, query, headers, body, files |
 | `c.Db` | D1 (via shim) | Dapper-like API |
-| `c.Storage` | R2 | `PutAsync`, `GetAsync`, `ExistsAsync`, `DeleteAsync`, `Url` |
+| `c.Storage` | R2 / S3 / local disk | `PutAsync`, `GetAsync`, `ExistsAsync`, `DeleteAsync`, `HeadAsync`, `GetRangeAsync`, `ListAsync`, `PresignPutAsync`, `PresignGetAsync`, `PublicUrl` |
 | `c.AI` | Workers AI | `GenerateAsync`, `TranscribeAsync`, `EmbedAsync` |
 | `c.RateLimit` | RateLimit binding | `LimitAsync("chat", key)` |
 | `c.Cookies` | shim | get/set/delete, HttpOnly + SameSite defaults |
 | `c.Clock` | shim | `IsoNow()`, `IsoIn(ts)` — deterministic/testable |
-| `c.Crypto` | shim | `HashPassword`, `VerifyPassword` (scrypt), `Sha256`, `RandomToken` |
+| `c.Crypto` | shim | `HashPassword`, `VerifyPassword` (PBKDF2, 100k iterations), `Sha256`, `RandomToken` |
 | `c.User` | auth | set by `RequireUser` middleware |
 | `c.Json` / `c.Status` / `c.Stream` | framework | typed responses |
 
@@ -249,7 +249,7 @@ Error envelope (identical shape to what bigspella uses):
 **Default: maximum C#.** `Reptar.Auth` ships as a mountable feature slice:
 
 - `users` + `sessions` tables in `schema/auth.cs`.
-- Email/password with scrypt via `c.Crypto` (host native crypto — pure-JS scrypt blows the Workers CPU limit; this is a proven constraint).
+- Email/password with PBKDF2 (100,000 iterations) via `c.Crypto` (host native WebCrypto — pure-JS KDFs blow the Workers CPU limit; this is a proven constraint).
 - Session tokens: random 32 bytes, SHA-256 hash stored in D1, HttpOnly cookie, configurable `SessionDays` and cross-subdomain `CookieDomain`.
 - Anonymous sessions (guest flows).
 - Admin bootstrap emails + `RequireUser` / `RequireRole` middleware.
@@ -266,6 +266,10 @@ Auth = Custom(async c => ...)
 ```
 
 The Better Auth adapter is small because Better Auth writes its session table to the same D1 — cookie token → session row → `c.User`.
+
+> **Status:** built-in auth and the Better Auth wire protocol are implemented.
+> `Clerk(...)` and `Custom(...)` are roadmap APIs and are not in the current
+> release; do not copy them into an app yet.
 
 ## 7. Cloudflare bindings — written by us, exposed as C#
 
@@ -348,7 +352,7 @@ Per request, one structured JSON log line: `request_id`, `trace_id`, `route`, `s
 
 - **Parity with a Node/Hono backend for CRUD is the bar; faster is a bonus.** I/O-bound routes are dominated by D1/network, not language.
 - Design choices that get there: Wasm instance cached per isolate (no per-request instantiation); raw JSON strings across the boundary (no double serialization); prepared statements cached; source-generated JSON; ~100-line client.
-- The spike benchmarks `GET /posts` (D1 query) and `POST /signup` (scrypt) against a Hono baseline and records cold start, p50/p95, and Wasm size.
+- The spike benchmarks `GET /posts` (D1 query) and `POST /signup` (PBKDF2) against a Hono baseline and records cold start, p50/p95, and Wasm size.
 
 ## 13. Honest constraints
 
@@ -386,7 +390,7 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
 
 ## 16. Implementation status (current)
 
-- **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, Stripe module, codegen, and the file-based blog app are implemented. `bun api:test` passes (14 tests); `bun rpc:gen` + `bun rpc:check` pass.
+- **Portable core:** router, `Ctx`, `Rule<T>`, `TableDef`, Dapper-like SQLite client, built-in auth, Stripe module, codegen, and the file-based blog app are implemented. `bun api:test` passes (215 tests); `bun rpc:gen` + `bun rpc:check` pass.
 - **Wasm core & reflection-free CRUD:** `framework/Reptar.Wasm` compiles the shared router, `Ctx`, middleware, `Rule<T>`/`Validator<T>`, and the JSON codec to `netwasm0.1`. `D1DbClient` and `TableDef.Wasm` implement generic, reflection-free CRUD (`GetAsync<T>`, `ListAsync<T>`, `InsertAsync<T>`, `UpdateAsync<T>`, `DeleteAsync`, `ExistsAsync`) with transparent SQLite `snake_case` &harr; `camelCase` property normalization.
 - **Cloudflare platform bindings:**
   - **D1:** Query and execute with typed parameter binding.
@@ -416,7 +420,8 @@ create-reptar       the scaffolder (incl. optional shadcn/ui frontend starters)
   - Web: `https://reptar-web.rocktown-labs.workers.dev`
   - Blog: `https://reptar-web.rocktown-labs.workers.dev/blog`
   - Login: `https://reptar-web.rocktown-labs.workers.dev/login`
-- **Next:** Standard Schema generation from `Rule<T>`, deeper auth hardening (rate limits/CSRF/email verification), Wasm bundle trimming, and broader e2e coverage against deployed stages.
+- **Core focus pass (2026-10-26):** `Rule<T>` now uses interpreted expression trees instead of reflection/`Expression.Compile` on the native path, validates without per-property list allocations, and is trim-annotated. Telemetry v1 emits structured request logs with W3C trace/span ids, DB query count/time, slow-query detection, sampling, and automatic `Server-Timing`. `Timeout(TimeSpan)` and `IReptarModule` lifecycle hooks run on Kestrel/Lambda. `TableQuery<T>.Preload(Relation.BelongsTo/HasMany(...))` batches relations with `WHERE IN` and no reflection. `bun reptar make:model` / `make:feature` scaffold schema/DTO/feature slices. The optional AI SDK is split into `framework/Reptar.AI`, the terminal UI lives in `examples/agent-cli/terminal`, and the AI gateway is a reusable `framework/Reptar.AI.Gateway` SDK. `scripts/check-architecture.ts` and `scripts/bench-gate.ts` guard the module boundary and performance baseline.
+- **Next:** Standard Schema generation from `Rule<T>`, deeper auth hardening (rate limits/CSRF/email verification), Wasm bundle trimming, real transactions for SQLite/MySQL/D1, build-time JSON context generation, and broader e2e coverage against deployed stages.
 
 ### Phase 0 update: D1 bridge proven
 

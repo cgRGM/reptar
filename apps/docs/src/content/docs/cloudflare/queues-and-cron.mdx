@@ -1,0 +1,131 @@
+---
+title: Queues & Scheduled Cron Triggers
+description: Portable background queue consumers and cron triggers for Cloudflare Workers and Kestrel.
+---
+
+import { Code } from "@astrojs/starlight/components";
+
+In addition to handling HTTP requests, modern backends process asynchronous background events and scheduled recurring jobs. Reptar provides **`app.OnQueue()`** and **`app.OnScheduled()`**, allowing you to define queue consumers and cron tasks directly in your C# application with zero boilerplate.
+
+Both primitives are **dual-target**:
+
+- On **Cloudflare Workers (`netwasm0.1`)**, they map directly to Cloudflare's runtime `queue` and `scheduled` exports.
+- On **Kestrel (`net10.0`)**, they execute in-process via background `System.Threading.Channels` and periodic timer loops.
+
+---
+
+## Queue Consumers (`app.OnQueue`)
+
+Register a queue consumer using `app.OnQueue`:
+
+```csharp
+public record OrderEvent(string OrderId, string CustomerEmail, decimal Amount);
+
+// Register consumer for the "orders" queue
+app.OnQueue<OrderEvent>("orders", async (ctx, msg, order) =>
+{
+    ctx.Log.Info($"Processing order {order.OrderId} for {order.CustomerEmail} (${order.Amount})");
+
+    // Insert order record into D1 / SQLite
+    await ctx.Db.InsertAsync(Schema.Orders, new OrderRecord(
+        order.OrderId,
+        order.CustomerEmail,
+        order.Amount,
+        "completed",
+        ctx.Clock.IsoNow()
+    ));
+
+    // Send confirmation email via HTTP or Workers AI
+    await ctx.Http.PostJsonAsync("https://api.resend.com/emails", new
+    {
+        from = "orders@my-app.com",
+        to = order.CustomerEmail,
+        subject = $"Order Confirmed #{order.OrderId}",
+        text = $"Thank you! Your order for ${order.Amount} is confirmed."
+    });
+});
+```
+
+### Queue Message Handling & Retries
+
+- **Automatic Acknowledgment**: When the handler completes successfully without throwing an exception, the message is automatically acknowledged (`ack`).
+- **Automatic Retry**: If the handler throws an unhandled exception, Reptar marks the message for retry (`retry`) according to Cloudflare Queues' backoff policy.
+- **Raw Messages**: You can also consume raw, untyped messages with `app.OnQueue("queue-name", async (ctx, msg) => { ... })` and inspect `msg.BodyText` or `msg.Id`.
+
+### Producing Messages to Queues
+
+From any HTTP handler or background task, send messages using `ctx.Queues`:
+
+```csharp
+app.Post("/api/checkout", async ctx =>
+{
+    var checkout = await ctx.BindJsonAsync<CheckoutRequest>();
+
+    // Produce message to Cloudflare Queues
+    await ctx.Queues.SendAsync("orders", new OrderEvent(
+        OrderId: Ids.New("ord"),
+        CustomerEmail: checkout.Email,
+        Amount: checkout.Total
+    ));
+
+    return ctx.Created(new { status = "queued" });
+});
+```
+
+---
+
+## Scheduled Cron Triggers (`app.OnScheduled`)
+
+Register recurring cron jobs using `app.OnScheduled`:
+
+```csharp
+app.OnScheduled(async (ctx, scheduled) =>
+{
+    ctx.Log.Info($"Running scheduled cron trigger: {scheduled.Cron} at {scheduled.ScheduledTime}");
+
+    // Purge expired sessions older than 30 days
+    var cutoff = ctx.Clock.IsoIn(TimeSpan.FromDays(-30));
+    var purged = await ctx.Db.ExecuteAsync(
+        "DELETE FROM sessions WHERE expires_at < @cutoff",
+        ("cutoff", cutoff));
+
+    ctx.Log.Info($"Purged {purged} expired sessions.");
+});
+```
+
+### Configuring Cron Triggers in Infrastructure
+
+In `packages/infra/alchemy.run.ts` or `wrangler.jsonc`, configure the cron schedule:
+
+```jsonc
+// wrangler.jsonc
+{
+  "triggers": {
+    "crons": [
+      "0 0 * * *", // Run every midnight UTC
+    ],
+  },
+}
+```
+
+---
+
+## Infrastructure Configuration with Alchemy
+
+When using Alchemy Infrastructure as Code (`packages/infra/alchemy.run.ts`), define your Queue and wire it into your Worker:
+
+```typescript
+const ordersQueue = yield * Cloudflare.Queues.Queue("orders");
+
+const api =
+  yield *
+  Cloudflare.Worker("api", {
+    assets: "../../spikes/netwasm-worker/public",
+    env: {
+      DB: db,
+      QUEUE: ordersQueue,
+    },
+    main: "../../spikes/netwasm-worker/src/index.ts",
+    name: "reptar-api",
+  });
+```

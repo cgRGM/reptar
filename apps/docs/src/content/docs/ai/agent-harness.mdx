@@ -34,10 +34,10 @@ app.Post("/api/projects/:projectId/tasks", TaskValidator, async (ctx, input) =>
 
 ## 2. Generating Tool Schemas (`app.GetAiTools()`)
 
-Export all registered tools in standard schema formats for **OpenAI, Anthropic Claude, or Google Gemini**:
+Export tools in standard schema formats for **OpenAI, Anthropic Claude, or Google Gemini**. The safe default is **explicit opt-in**: only routes marked with `.AsAiTool(...)` are exported. Pass `onlyExplicit: false` if you deliberately want every HTTP route exposed to the model.
 
 ```csharp
-// OpenAI function calling format
+// OpenAI function calling format (explicit .AsAiTool routes only)
 var openAiTools = app.GetAiTools(AiToolFormat.OpenAi);
 
 // Anthropic Claude format
@@ -45,6 +45,9 @@ var claudeTools = app.GetAiTools(AiToolFormat.Anthropic);
 
 // Google Gemini format
 var geminiTools = app.GetAiTools(AiToolFormat.Gemini);
+
+// Opt-in: expose every route (auth mutations, admin deletes, ...)
+var allRoutes = app.GetAiTools(AiToolFormat.OpenAi, onlyExplicit: false);
 ```
 
 ### Auto-Generated Schema Example
@@ -105,31 +108,82 @@ When the LLM receives this string, modern reasoning models (Claude 3.5 Sonnet, G
 
 ---
 
-## 4. Autonomous ReAct Agent Loop (`AgentHarness.RunAsync()`)
+## 4. Autonomous Loop & Evaluators (`LoopRunner`)
 
-For multi-turn conversational agents that reason and invoke tools iteratively:
+For production agents that iterate toward a goal, Reptar provides **`LoopRunner`** and **`LoopEvaluator`**. An autonomous loop re-invokes the agent with structured feedback until an evaluator signals completion, with a hard `MaxIterations` safety cap:
 
 ```csharp
-var conversation = new List<ChatMessage>
+var todos = TodoModule.Create("session_123");
+var todoTools = AgentModuleComposition.ComposeTools(todos);
+var todoExecutor = AgentModuleComposition.ComposeExecutor(null, todos);
+
+var evaluator = LoopEvaluators.TodoCompletion("session_123", todos);
+
+var result = await LoopRunner.RunAsync(
+    history,
+    llmClient.StreamAsync,
+    todoExecutor,
+    todoTools,
+    evaluator,
+    maxIterations: 10,
+    model: "claude-3-5-sonnet");
+
+// Loop terminates deterministically with result.StopReason:
+Console.WriteLine($"Finished in {result.Iterations} iterations: {result.StopReason}");
+```
+
+Available evaluators:
+
+- `LoopEvaluators.TodoCompletion(sessionId, todos)`: Continues providing feedback until all todo items are marked complete.
+- `LoopEvaluators.CompletionMarker(marker)`: Stops when a designated sentinel token (e.g. `[TASK_COMPLETE]`) is output.
+- `LoopEvaluators.Delegate(func)`: Custom host-defined evaluation predicate.
+
+---
+
+## 5. Structured Output & Self-Healing Schemas (`StructuredOutput`)
+
+Extract strongly-typed C# records from unstructured LLM responses without runtime reflection:
+
+```csharp
+public record ExtractedTask(string Title, int Priority, string[] Tags);
+
+var candidate = await StructuredOutput.ExtractAsync<ExtractedTask>(
+    llmClient,
+    prompt: "Extract the task details from: Ship Reptar v1 with high priority (5) and tags backend, wasm",
+    cancellationToken: ctx.CancellationToken);
+
+if (candidate.Success)
 {
-    new("user", "Create a high-priority task named 'Ship Reptar v1' in project 'alpha'.")
-};
+    var task = candidate.Value;
+    Console.WriteLine($"Extracted: {task.Title} (Priority {task.Priority})");
+}
+```
 
-var runResult = await AgentHarness.RunAsync(
-    model: async (history, ct) => await CallLlmModelAsync(history, ct),
-    history: conversation,
-    toolExecutor: (name, args) => app.ExecuteAiToolAsync(name, args, ctx),
-    maxSteps: 10,
-    onStep: step => ctx.Log.Info($"Agent step: {step.Content}")
-);
+If the LLM emits malformed JSON or omits required fields, `StructuredOutput` automatically feeds the exact JSON Schema validation error back to the model in a follow-up turn to repair the payload.
 
-// Final answer after all tools executed:
-Console.WriteLine(runResult.FinalContent);
+---
+
+## 6. Human-in-the-Loop & Approval Rules (`ToolApproval`)
+
+Govern agent behavior by intercepting risky tool calls before execution:
+
+```csharp
+var rules = new ToolApprovalPolicyBuilder()
+    .RequireApproval("rm", "drop_table", "deploy_production")
+    .AllowWithoutPrompt("read_file", "list_dir", "db_status")
+    .Build();
+
+// Intercepts tool execution when approval is required
+var approvedExecutor = ToolApproval.Wrap(toolExecutor, rules, onApprovalRequired: async request =>
+{
+    Console.WriteLine($"[APPROVAL REQUIRED] Agent wants to call {request.ToolName} with {request.ArgsJson}");
+    return await PromptHumanOperatorAsync(request);
+});
 ```
 
 ---
 
-## 5. Zero-Copy LLM Streaming (`ctx.StreamLlmAsync()`)
+## 7. Zero-Copy LLM Streaming (`ctx.StreamLlmAsync()`)
 
 For ChatGPT-style web interfaces and mobile apps (React Native / Expo), stream tokens down via Server-Sent Events (SSE) with instant cancellation:
 
@@ -149,7 +203,7 @@ app.Post("/api/chat", async ctx =>
 
 ---
 
-## 6. Coding Agent Tooling: MCP Server, CLI Inspection & Two-Layer Agent Docs
+## 8. Coding Agent Tooling: MCP Server, CLI Inspection & Two-Layer Agent Docs
 
 Reptar is designed from the ground up to be operated by AI coding agents (Claude Code, Cursor, Antigravity, Windsurf) with zero guesswork:
 

@@ -1,0 +1,79 @@
+---
+title: Keyset (Cursor) Pagination with ColumnRef
+description: High-throughput keyset pagination using typed ColumnRef tokens to avoid slow OFFSET queries.
+---
+
+When querying large tables (e.g. 100,000+ rows), `OFFSET 50000 LIMIT 20` forces the database engine to scan and discard 50,000 rows on every page request.
+
+**Keyset pagination** (also known as cursor-based pagination) queries `WHERE id > :cursor ORDER BY id ASC LIMIT :limit`, utilizing index seeks to deliver consistent O(1) query latency regardless of page depth.
+
+---
+
+## 1. Schema with Ordered Index
+
+Ensure your schema defines an index matching your pagination sort order:
+
+```csharp
+public static class Schema
+{
+    public static readonly TableDef Messages = Db.Table("chat_messages")
+        .Column("id", DbType.Text, primaryKey: true)
+        .Column("created_at", DbType.Text)
+        .Column("content", DbType.Text)
+        .Index("idx_messages_created", "created_at", "id");
+}
+
+[ReptarEntity]
+public sealed record MessageRecord(string Id, string CreatedAt, string Content);
+```
+
+---
+
+## 2. Keyset Query Handler with ColumnRef
+
+Use typed `ColumnRef<T>` tokens to construct the cursor filter safely:
+
+```csharp
+app.Get("/api/messages", async ctx =>
+{
+    var cursor = ctx.Req.QueryValue("cursor"); // Last seen created_at from previous page
+    var limit = int.TryParse(ctx.Req.QueryValue("limit"), out var parsed)
+        ? Math.Clamp(parsed, 1, 100)
+        : 25;
+
+    var query = ctx.Db.From<MessageRecord>(Schema.Messages)
+        .OrderBy(Schema.Messages.Col<string>("created_at").Asc())
+        .Limit(limit + 1); // Fetch limit + 1 to detect if a next page exists
+
+    if (!string.IsNullOrEmpty(cursor))
+    {
+        query = query.Where(Schema.Messages.Col<string>("created_at").Gt(cursor));
+    }
+
+    var items = await query.ToListAsync();
+
+    var hasMore = items.Count > limit;
+    if (hasMore)
+    {
+        items.RemoveAt(items.Count - 1);
+    }
+
+    var nextCursor = hasMore ? items[^1].CreatedAt : null;
+
+    return ctx.Json(new
+    {
+        data = items,
+        pagination = new
+        {
+            hasMore,
+            nextCursor,
+            limit
+        }
+    });
+});
+```
+
+### Why Keyset Pagination Wins
+
+- **Sub-millisecond Queries:** Index seek directly to the cursor row without scanning earlier records.
+- **Stable Under Concurrent Inserts:** Rows inserted while a user is reading never cause items to shift or duplicate across pages.

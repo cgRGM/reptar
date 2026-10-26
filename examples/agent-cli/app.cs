@@ -1,9 +1,18 @@
 #:project ../../framework/Reptar/Reptar.csproj
+#:project ../../framework/Reptar.AI/Reptar.AI.csproj
 #:project ../../framework/Reptar.Kestrel/Reptar.Kestrel.csproj
 #:include schema.cs
 #:include features/chat.cs
 #:include selftest.cs
 #:include web.cs
+#:include terminal/Ansi.cs
+#:include terminal/ReptarTerm.cs
+#:include terminal/TerminalAgent.cs
+#:include terminal/TerminalBuffer.cs
+#:include terminal/TerminalEditor.cs
+#:include terminal/TerminalInput.cs
+#:include terminal/TerminalScreen.cs
+#:include terminal/TerminalUi.cs
 
 global using Reptar;
 global using Reptar.AI;
@@ -31,7 +40,9 @@ string? ValueOf(string name) =>
 
 var workspaceRoot = Path.GetFullPath(ValueOf("workspace") ?? ".");
 var dbPath = ValueOf("db") ?? Path.Combine(workspaceRoot, ".reptar", "agent.db");
+#if !NETWASM
 Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+#endif
 
 var app = ReptarApp.Create(new ReptarConfig
 {
@@ -42,7 +53,11 @@ var app = ReptarApp.Create(new ReptarConfig
 // Mount the standard workspace tools (read_file, write_file, edit_file,
 // list_dir, run_command) as in-process Reptar AI tools with path traversal
 // protection against the workspace root.
-app.UseWorkspaceTools(workspaceRoot);
+app.UseWorkspaceTools(workspaceRoot, options =>
+{
+    // A coding agent needs the shell; library users must opt in explicitly.
+    options.AllowRunCommand = true;
+});
 
 var store = new AgentSessionStore(app.Db, Schema.Sessions, Schema.Messages);
 await store.EnsureCreatedAsync();

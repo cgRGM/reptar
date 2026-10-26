@@ -1,0 +1,3 @@
+# Imported as a CompiledWasm module by src/index.ts; do not upload a duplicate
+# static asset.
+browser/*.wasm

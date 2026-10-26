@@ -1,72 +1,121 @@
 ---
 title: Observability & Telemetry
-description: Structured JSON logs, Server-Timing headers, write-gate diagnostics, dev dashboard, and Axiom OTLP export.
+description: Structured request logs, W3C trace context, database timing, Server-Timing, sampling, and health probes.
 ---
 
 ## Observability by Default
 
-Reptar is engineered to be observable in both Cloudflare Workers isolates and Native AOT containers without external agent sidecars.
+Reptar emits one structured request record per sampled request and exposes
+per-request database timing without a sidecar or external agent.
 
 ## 1. Structured JSON Log Lines
 
-Every request emits a structured JSON log line containing latency breakdowns and database query metrics:
+Enable the telemetry middleware:
+
+```csharp
+app.Use(ReptarApi.RequestId());
+app.Use(ReptarApi.Telemetry(new TelemetryOptions
+{
+    SampleRate = 0.1,       // log 10% of successful fast requests
+    SlowRequestMs = 500,    // always log requests >= 500ms
+    SlowQueryMs = 100,      // count queries >= 100ms as slow
+}));
+```
+
+Each record is a single JSON line:
 
 ```json
 {
-  "timestamp": "2026-10-25T05:15:30.123Z",
+  "timestamp": "2026-10-26T12:00:00.0000000+00:00",
   "request_id": "req_01J8F9...",
-  "trace_id": "trace_4a2c...",
-  "route": "GET /posts/:id",
+  "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+  "span_id": "00f067aa0ba902b7",
+  "parent_span_id": "a3ce929d0e0e4736",
+  "method": "GET",
+  "route": "/posts/:id",
+  "path": "/posts/42",
   "status": 200,
   "duration_ms": 2.6,
   "db_ms": 0.4,
   "db_queries": 1,
+  "cache": "HIT",
   "user_id": "usr_99a...",
-  "cf_ray": "8d39f41b2...",
-  "colo": "CMH"
+  "cf_ray": "8d39f41b2...-CMH",
+  "colo": "CMH",
+  "slow": false
 }
 ```
 
-## 2. Server-Timing Headers
+`route` is the matched template, not the raw path. `cf_ray`/`colo` are populated
+on Cloudflare Workers when the headers are present.
 
-Reptar attaches granular `Server-Timing` headers to responses so you can inspect Wasm/AOT execution vs database time directly in browser DevTools:
+## 2. W3C Trace Context
+
+Reptar parses the incoming `traceparent` header and generates a local span id.
+The parsed values are available on `Ctx` and are included in the request log:
+
+```csharp
+ctx.TraceId;
+ctx.SpanId;
+ctx.ParentSpanId;
+```
+
+The framework creates the local span id; it does not yet export spans to an
+OTLP collector. `TraceContext.Current.ToTraceParent()` is available for
+propagating the context to outbound calls.
+
+## 3. Server-Timing Headers
+
+The telemetry middleware adds database and total timings to the response:
 
 ```http
-Server-Timing: reptar;dur=0.8, db;dur=1.4, total;dur=2.2
+Server-Timing: db;dur=1.4;desc="2 queries", total;dur=2.2
 ```
 
-## 3. SQLite Write-Gate Timing Observer
+Use `ctx.ServerTiming("auth", 1.8, "JWT verification")` for custom spans.
 
-When benchmarking or diagnosing high-concurrency write workloads on SQLite, `SqliteDbClient` exposes an opt-in `WriteTimingObserver` (zero overhead when null) that separates single-writer semaphore queue wait time from actual SQLite `INSERT`/`UPDATE` execution time:
+## 4. Database Timing
+
+`InstrumentedDbClient` wraps the configured database client. When a telemetry
+scope is active it records:
+
+- query count and total time (`db_queries`, `db_ms`);
+- slow query count and the slowest SQL (truncated, logged at warning level);
+- query errors.
+
+When telemetry is not active the fast path is a single `AsyncLocal` read and no
+stopwatch is started.
+
+## 5. Sampling and Overhead
+
+- `SampleRate` applies to successful, non-slow requests.
+- Errors (`status >= 400`) and slow requests are always logged.
+- Set `SampleRate = 0` to disable successful-request logs while keeping errors
+  and slow requests.
+- `SlowQueryMs` controls the slow-query counter. SQL text is truncated to keep
+  log lines bounded.
+
+## 6. Health and Readiness
+
+`MapHealth` exposes liveness and readiness endpoints:
 
 ```csharp
-sqliteClient.WriteTimingObserver = (gateWaitMs, executeMs) =>
-{
-    // Record p50 / p95 / p99 write-gate contention vs raw statement execution
-};
+app.MapHealth();
 ```
 
-## 4. Developer Dashboard (`/_reptar`)
+`GET /health/live` returns `{"status":"healthy"}`.
+`GET /health/ready` executes `SELECT 1` against the configured database and
+returns `503` when it is unavailable.
 
-During local development, navigating to `/_reptar` renders a real-time telemetry view:
+## 7. Not Yet Shipped
 
-- **Recent Request Ring Buffer:** Full inspection of request envelopes, status codes, and timings.
-- **Latency Percentiles:** Live p50, p95, and p99 distributions.
-- **Database Diagnostics:** Query counts and slow-query identification per route.
-- **Validation Failures:** Structured inspection of rejected payloads.
+The following are roadmap items, not current behavior:
 
-## 5. OTLP & Axiom Export
+- OTLP/Axiom log export (`AxiomOptions` is not implemented);
+- a `/_reptar` developer dashboard;
+- Prometheus metrics endpoint;
+- span export and trace sampling beyond the request log.
 
-Reptar supports direct OTLP telemetry export with Axiom as a first-class destination:
-
-```csharp
-var app = ReptarApp.Create(new ReptarConfig
-{
-    Database = Db.D1(),
-    Telemetry = Axiom(new AxiomOptions
-    {
-        Dataset = "my-reptar-app",
-        ApiKey = Environment.GetEnvironmentVariable("AXIOM_API_KEY") ?? "",
-    }),
-});
-```
+Until those land, ship the structured JSON lines to your platform's log sink
+(Cloudflare Logpush, Axiom, Datadog, etc.) and use `Server-Timing` for local
+profiling.

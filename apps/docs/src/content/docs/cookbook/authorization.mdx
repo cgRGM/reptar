@@ -1,0 +1,69 @@
+---
+title: Resource Policies & Authorization
+description: Declarative resource permissions with app.DefinePolicy and ctx.Authorize (AdonisJS Bouncer & Laravel Gates pattern).
+---
+
+Authentication verifies identity (`ctx.User`). Authorization answers whether the current user has permission to perform a specific action on a specific resource (e.g. _"Can this user edit this article?"_).
+
+Reptar provides declarative, reflection-free policies inspired by **AdonisJS Bouncer** and **Laravel Gates**.
+
+---
+
+## 1. Defining Policies
+
+Define policies once at application startup. Policies are zero-reflection static delegates:
+
+```csharp
+public sealed record Post(string Id, string AuthorId, string Title, bool Published);
+
+// Register resource policies
+app.DefinePolicy<Post>("post:edit", (user, post) =>
+    user is not null && (user.Role == "admin" || post.AuthorId == user.Id));
+
+app.DefinePolicy<Post>("post:delete", (user, post) =>
+    user is not null && (user.Role == "admin" || (post.AuthorId == user.Id && !post.Published)));
+```
+
+---
+
+## 2. Using `ctx.Can()` & `ctx.Authorize()` in Routes
+
+Use `ctx.Can()` for boolean checks or `ctx.Authorize()` for one-line route gating:
+
+```csharp
+app.Put("/api/posts/:id", async ctx =>
+{
+    var id = ctx.Param("id")!;
+    var post = await ctx.Db.From<Post>(Schema.Posts)
+        .Where(Schema.Posts.Col<string>("id").Eq(id))
+        .SingleOrDefaultAsync();
+
+    if (post is null)
+        return ctx.NotFound("Post not found.");
+
+    // One-line authorization check: returns 403 Forbidden automatically if unauthorized
+    if (!ctx.Authorize("post:edit", post, out var forbidden))
+        return forbidden;
+
+    // Proceed with authorized update
+    return ctx.Json(new { ok = true, post.Id });
+});
+```
+
+---
+
+## 3. Direct Policy Evaluation
+
+Evaluate policies programmatically in controllers, background tasks, or tests:
+
+```csharp
+var alice = new SessionUser("user_1", "alice@example.com", "Alice", "user");
+var bob = new SessionUser("user_2", "bob@example.com", "Bob", "user");
+var admin = new SessionUser("user_99", "admin@example.com", "Admin", "admin");
+
+var post = new Post("post_100", "user_1", "Hello World", Published: false);
+
+app.Can(alice, "post:edit", post);   // true (author)
+app.Can(bob, "post:edit", post);     // false (unrelated user)
+app.Can(admin, "post:edit", post);   // true (admin role)
+```

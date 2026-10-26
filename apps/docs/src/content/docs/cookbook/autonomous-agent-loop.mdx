@@ -1,0 +1,77 @@
+---
+title: Autonomous Agent Loops
+description: Run an agent until the work is actually done — todo-driven and completion-marker evaluators, battle-tested planning prompts, and a hard iteration cap so it never runs unbounded.
+---
+
+A single ReAct pass rarely finishes real work. The loop evaluator pattern re-invokes the agent with feedback until an evaluator says *stop* — Reptar ships the evaluators, the planning modules, and the safety cap.
+
+---
+
+## 1. The module contract
+
+An `AgentModule` is one unit of agent capability: instructions, tools, and a dispatcher. Compose any number of them into a single system prompt, tool list, and executor:
+
+```csharp
+var todos = TodoModule.Create(sessionId);               // todos_add / todos_complete / ...
+var modes = PlanExecuteModule.Create();                  // mode_set / mode_get: plan and execute
+var skills = SkillsDirectory.Discover(".agents/skills"); // repo skills, loaded on demand
+
+var modules = new List<AgentModule> { todos, modes.Module(sessionId) };
+if (skills is not null) modules.Add(skills.ToModule());
+
+var system = AgentModuleComposition.ComposeInstructions(baseInstructions, modules);
+var tools = AgentModuleComposition.ComposeTools(modules);
+var executor = AgentModuleComposition.ComposeExecutor(appTools, modules);
+```
+
+`TodoModule` and `PlanExecuteModule` ship with prompt text adapted from the Microsoft Agent Framework's harness — the battle-tested planning discipline: plan mode asks clarifying questions one at a time and requests approval before switching; execute mode works autonomously and marks todos complete as it goes.
+
+## 2. The loop
+
+```csharp
+var loop = await LoopRunner.RunAsync(
+    history, llm.StreamAsync, executor, tools,
+    // Stops when every todo is complete — and defers while still in plan mode.
+    LoopEvaluators.TodoCompletion(sessionId, todos, modes),
+    maxStepsPerRun: 10,
+    maxIterations: 10); // hard cap: an autonomous loop never runs unbounded
+
+if (loop.StopReason == "max-iterations")
+{
+    // Surface the last run — don't pretend it finished.
+}
+```
+
+Built-in evaluators, all zero-LLM-cost:
+
+- **`CompletionMarker("[DONE]")`** — stops when the marker appears in the last response; the feedback template is self-contained, so it also works when the next iteration starts from fresh context.
+- **`TodoCompletion(todos, modes)`** — the loop's fuel: pending todos are fed back verbatim ("Todos still pending — keep working and mark them complete…").
+- **`Delegate(...)`** — any host-defined predicate via `LoopEvaluators.Delegate(run => ...)`.
+
+Dead runs don't loop: an `Error` or `Cancelled` harness result ends the iteration immediately.
+
+## 3. Every run leaves a trace
+
+Wire the event stream once — terminal, web JSONL, and a Studio page all read the same observer:
+
+```csharp
+var trace = new AgentObservers.TraceObserver();
+
+await LoopRunner.RunAsync(history, llm.StreamAsync, executor, tools,
+    LoopEvaluators.TodoCompletion(sessionId, todos, modes),
+    onEvent: AgentObservers.Compose(
+        trace.Observe,
+        AgentObservers.JsonLines(httpResponseWriter)), // one JSON object per line
+
+    model: "gpt-4o");
+
+// After: trace.Events (full stream), trace.ToolTimings (per-tool latency),
+// and one durable row per run:
+await runStore.RecordAsync(sessionId, loop.LastRun);
+```
+
+## 4. Compose with the rest of the engine
+
+- Suspend the loop for human questions or tool approvals — [human-in-the-loop](/cookbook/human-in-the-loop/) request ports work inside loop iterations.
+- Prove the loop's behavior in CI with [agent evals](/cookbook/agent-evals/).
+- For declared multi-step pipelines (declared in a file, validated against the same graph rules at runtime), see the declarative workflow runner in the [agent harness](/ai/agent-harness/) reference.

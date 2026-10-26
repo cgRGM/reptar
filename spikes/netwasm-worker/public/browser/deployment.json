@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "semanticBuildId": "46387b4940736b21f791d93bef4e43f0114c9dd0c92e5cc83a3846b1ed9fda33",
+  "semanticBuildId": "566116bf3ac3dcaf506a0b49d87ddf316b6fcb2754df87a33ca27663013433e1",
   "deploymentKind": "raw",
   "profile": "netwasm0.1",
   "target": "wasm32",
@@ -14,7 +14,7 @@
     "hosting": "0.10.1",
     "toolchain": "0.10.1"
   },
-  "buildFingerprint": "f59d77b5cff42a873576c8b32075be88d4118b225a3471ecaec5bedeb5ce4af8",
+  "buildFingerprint": "5ea3e1840b78aa1da4f672de86c7cb467d093bf738b88cb6be5c37978be5e70d",
   "runtimeFeatures": [
     "local-time"
   ],
@@ -22,8 +22,8 @@
     {
       "relativePath": "HelloReptar.exceptions.json",
       "role": "exception-type-map",
-      "mediaType": "application/vnd.netwasm.exception-types\u002Bjson;version=2",
-      "sha256": "bbed53ff7d594c983b3d524833e23990a6c3b08e7e6ca24534e1741219c3c44c",
+      "mediaType": "application/vnd.netwasm.exception-types+json;version=2",
+      "sha256": "a2d86dbde2e04f4300dbd33bb5dae9006c46222751ef104a17dd38b40df49e9f",
       "schemaVersion": 2
     },
     {
@@ -37,28 +37,28 @@
       "relativePath": "HelloReptar.wasm",
       "role": "application",
       "mediaType": "application/wasm",
-      "sha256": "12b1f7852541291070436794df1f1226dc76fffa4ddf8a4aa1ff696023501e29",
+      "sha256": "9ba0108e75fe83a2c2fe386462e383c4dc4cc1e0ab189a3f726002ae5ff1c3fb",
       "schemaVersion": null
     },
     {
       "relativePath": "interop.json",
       "role": "interop-manifest",
       "mediaType": "application/json",
-      "sha256": "2c9ba001f3e0dc0e439d3814b783aa004ccd3137496cd6b4e373fdadef3c4bce",
+      "sha256": "bdd191cee3c2d275a5ff3d7a9b81fe8c5312fed57daccef53d2cbb3cdb82befe",
       "schemaVersion": 1
     },
     {
       "relativePath": "netwasm.page.mjs",
       "role": "hosting-javascript",
       "mediaType": "text/javascript",
-      "sha256": "6a76af0c3a2cd7f6bfe48e263d9c3623c6ba21fb4f40ec40a36a8d1b7a50a22f",
+      "sha256": "7838e3793f363ae65da36587ba1a5374314a42dd5b86e02d8439c69fca12d9d6",
       "schemaVersion": null
     },
     {
       "relativePath": "runtime-layout.json",
       "role": "runtime-layout",
       "mediaType": "application/json",
-      "sha256": "7eb567cff4d3b248e7d9dc1048ad635479cea62076c223fae2896b6b74ddd726",
+      "sha256": "0257a8cdf1d40449c3dca78cc370e017c075dbc6fa725682672d9e6372433586",
       "schemaVersion": 1
     }
   ],
@@ -87,7 +87,7 @@
       "interface": "netwasm:runtime/reactor-host@1.0.0",
       "name": "watch",
       "parameters": [
-        "own\u003Cwasi:io/poll@0.2.11#pollable\u003E",
+        "own<wasi:io/poll@0.2.11#pollable>",
         "u32"
       ],
       "results": []
@@ -97,7 +97,7 @@
       "name": "get-environment",
       "parameters": [],
       "results": [
-        "list\u003Ctuple\u003Cstring,string\u003E\u003E"
+        "list<tuple<string,string>>"
       ]
     },
     {
@@ -105,7 +105,7 @@
       "name": "get-stderr",
       "parameters": [],
       "results": [
-        "own\u003Cwasi:io/streams@0.2.11#output-stream\u003E"
+        "own<wasi:io/streams@0.2.11#output-stream>"
       ]
     },
     {
@@ -113,7 +113,7 @@
       "name": "get-stdout",
       "parameters": [],
       "results": [
-        "own\u003Cwasi:io/streams@0.2.11#output-stream\u003E"
+        "own<wasi:io/streams@0.2.11#output-stream>"
       ]
     },
     {
@@ -131,7 +131,7 @@
         "wasi:clocks/monotonic-clock@0.2.11#duration"
       ],
       "results": [
-        "own\u003Cwasi:io/poll@0.2.11#pollable\u003E"
+        "own<wasi:io/poll@0.2.11#pollable>"
       ]
     },
     {
@@ -147,44 +147,44 @@
       "name": "get-directories",
       "parameters": [],
       "results": [
-        "list\u003Ctuple\u003Cown\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E,string\u003E\u003E"
+        "list<tuple<own<wasi:filesystem/types@0.2.11#descriptor>,string>>"
       ]
     },
     {
       "interface": "wasi:filesystem/types@0.2.11",
       "name": "[method]descriptor.open-at",
       "parameters": [
-        "borrow\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E",
+        "borrow<wasi:filesystem/types@0.2.11#descriptor>",
         "wasi:filesystem/types@0.2.11#path-flags",
         "string",
         "wasi:filesystem/types@0.2.11#open-flags",
         "wasi:filesystem/types@0.2.11#descriptor-flags"
       ],
       "results": [
-        "result\u003Cown\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E,wasi:filesystem/types@0.2.11#error-code\u003E"
+        "result<own<wasi:filesystem/types@0.2.11#descriptor>,wasi:filesystem/types@0.2.11#error-code>"
       ]
     },
     {
       "interface": "wasi:filesystem/types@0.2.11",
       "name": "[method]descriptor.read",
       "parameters": [
-        "borrow\u003Cwasi:filesystem/types@0.2.11#descriptor\u003E",
+        "borrow<wasi:filesystem/types@0.2.11#descriptor>",
         "wasi:filesystem/types@0.2.11#filesize",
         "wasi:filesystem/types@0.2.11#filesize"
       ],
       "results": [
-        "result\u003Ctuple\u003Clist\u003Cu8\u003E,bool\u003E,wasi:filesystem/types@0.2.11#error-code\u003E"
+        "result<tuple<list<u8>,bool>,wasi:filesystem/types@0.2.11#error-code>"
       ]
     },
     {
       "interface": "wasi:io/streams@0.2.11",
       "name": "[method]output-stream.blocking-write-and-flush",
       "parameters": [
-        "borrow\u003Cwasi:io/streams@0.2.11#output-stream\u003E",
-        "list\u003Cu8\u003E"
+        "borrow<wasi:io/streams@0.2.11#output-stream>",
+        "list<u8>"
       ],
       "results": [
-        "result\u003Cunit,wasi:io/streams@0.2.11#stream-error\u003E"
+        "result<unit,wasi:io/streams@0.2.11#stream-error>"
       ]
     },
     {
@@ -194,7 +194,7 @@
         "u64"
       ],
       "results": [
-        "list\u003Cu8\u003E"
+        "list<u8>"
       ]
     },
     {

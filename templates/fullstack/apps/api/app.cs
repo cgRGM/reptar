@@ -1,14 +1,16 @@
 #:include schema/schema.cs
 #:include features/auth.cs
 #:include features/items.cs
+#:include features/responses.cs
+#:include json-context.cs
 
 global using Reptar;
-global using Reptar.Auth;
 global using Reptar.Hosting;
 global using static Reptar.ReptarApi;
 
-using ReptarApp.Features;
-using ReptarApp.Schema;
+using {{PROJECT_PASCAL}};
+using {{PROJECT_PASCAL}}.Features;
+using {{PROJECT_PASCAL}}.Schema;
 
 var databaseUrl = Environment.GetEnvironmentVariable("DATABASE_URL");
 var database = !string.IsNullOrWhiteSpace(databaseUrl)
@@ -18,6 +20,10 @@ var database = !string.IsNullOrWhiteSpace(databaseUrl)
 var authOptions = new AuthOptions
 {
     CookieName = "better-auth.session_token",
+#if DEBUG
+    // Local `dotnet run` serves plain HTTP. Release/AOT builds keep Secure.
+    SecureCookies = false,
+#endif
 };
 
 // Wire Google OAuth if credentials provided
@@ -40,6 +46,8 @@ var app = ReptarApp.Create(new ReptarConfig
 {
     Auth = authOptions,
     Database = database,
+    // Source-generated JSON: no runtime reflection under Native AOT/Wasm.
+    Json = new SourceGenJsonCodec(AppJsonContext.Default),
 });
 
 app.Use(RequestId());
@@ -55,6 +63,15 @@ app.Use(Cors(new CorsOptions
 AuthFeature.Configure(app, authOptions);
 ItemsFeature.Configure(app);
 
+// Registers AppSchema.Items for EnsureCreatedAsync (the auth tables were
+// already merged from the BetterAuthProtocol mount above).
+app.RegisterSchema(AppSchema.Items);
+
+// Liveness probe — the deploy stack health-gates on it.
+app.Get("/health", ctx =>
+    ctx.Json(new HealthResponse(true, DateTimeOffset.UtcNow.ToString("O"))))
+    .Produces<HealthResponse>(200);
+
 if (args.Contains("--codegen"))
 {
     var outputIndex = Array.IndexOf(args, "--out");
@@ -67,5 +84,7 @@ if (args.Contains("--codegen"))
     return;
 }
 
+// Creates every registered table (app schema + the auth tables merged from
+// the BetterAuthProtocol mount) — idempotent, safe on every boot.
 await app.EnsureCreatedAsync();
 await app.RunAsync(args);

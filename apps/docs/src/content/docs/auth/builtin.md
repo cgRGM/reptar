@@ -26,6 +26,7 @@ var authOptions = new AuthOptions
     SessionDays = 30,
     AllowAnonymous = true,
     CookieName = "reptar_session",
+    SecureCookies = true, // default; set false only for plain-HTTP local dev
     RateLimitMaxAttempts = 5,
     RateLimitWindowMinutes = 15,
 };
@@ -47,6 +48,12 @@ var app = ReptarApp.Create(new ReptarConfig
 // Mount the standard auth routes under /auth
 app.Route("/auth", Reptar.Auth.Routes());
 ```
+
+Session cookies are `HttpOnly`, `SameSite=Lax`, and `Secure` by default. Set
+`SecureCookies = false` only when serving plain HTTP locally (for example the
+scaffolded app does this under `#if DEBUG`). Login throttling uses
+`RateLimitMaxAttempts` / `RateLimitWindowMinutes` on both Kestrel and the Wasm
+auth slice (per-isolate best effort on Workers).
 
 ---
 

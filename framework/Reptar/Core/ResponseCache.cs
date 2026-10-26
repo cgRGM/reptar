@@ -35,6 +35,9 @@ public static class CacheControl
         var ttlTicks = (long)(options.TtlSeconds * (double)Stopwatch.Frequency);
         var swrTicks = (long)(options.SwrSeconds * (double)Stopwatch.Frequency);
         var cache = new ConcurrentDictionary<string, CachedEntry>(StringComparer.Ordinal);
+#if !NETWASM
+        var missGates = new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
+#endif
         RegisterStore(cache);
 
         return async (ctx, next) =>
@@ -94,7 +97,11 @@ public static class CacheControl
                     return CreateResponse(entry, "HIT", ageSeconds, options);
                 }
 
-                // 2. Stale-while-revalidate hit
+#if !NETWASM
+                // 2. Stale-while-revalidate hit. Workers freeze between
+                // events, so a background Task.Run revalidation is not
+                // guaranteed to run; the Wasm path falls through to a
+                // synchronous revalidation instead.
                 if (ageTicks < (entry.TtlTicks + entry.SwrTicks))
                 {
                     // Kick off background revalidation if not already in progress
@@ -125,9 +132,14 @@ public static class CacheControl
 
                     return CreateResponse(entry, "STALE", ageSeconds, options);
                 }
+#endif
             }
 
-            // 3. Cache miss or expired
+            // 3. Cache miss or expired.
+#if NETWASM
+            // Workers are single-threaded per isolate and do not expose
+            // SemaphoreSlim; a per-isolate stampede is bounded by the event
+            // loop, so revalidate directly.
             var missRes = await next();
             if (missRes.Status == 200 &&
                 missRes.Body is not null &&
@@ -144,6 +156,51 @@ public static class CacheControl
             }
 
             return missRes;
+#else
+            // Single-flight the upstream call so a burst of concurrent misses
+            // does not stampede the handler.
+            var gate = missGates.GetOrAdd(
+                cacheKey,
+                static _ => new SemaphoreSlim(1, 1));
+
+            await gate.WaitAsync();
+
+            try
+            {
+                // Another request may have filled the cache while we waited.
+                if (cache.TryGetValue(cacheKey, out var filled) &&
+                    Stopwatch.GetTimestamp() - filled.CreatedTimestampTicks < filled.TtlTicks)
+                {
+                    var filledAge = (long)((Stopwatch.GetTimestamp() - filled.CreatedTimestampTicks) /
+                        (double)Stopwatch.Frequency);
+                    return CreateResponse(filled, "HIT", filledAge, options);
+                }
+
+                var missRes = await next();
+                if (missRes.Status == 200 &&
+                    missRes.Body is not null &&
+                    missRes.Body.Length <= options.MaxBodyBytes)
+                {
+                    Store(cache, cacheKey, missRes, ttlTicks, swrTicks, options.MaxEntries);
+                    missRes.Headers["X-Cache"] = "MISS";
+                    missRes.Headers["Age"] = "0";
+                    missRes.Headers["Cache-Control"] = $"public, max-age={options.TtlSeconds}, stale-while-revalidate={options.SwrSeconds}";
+                }
+                else
+                {
+                    missRes.Headers["X-Cache"] = "BYPASS";
+                }
+
+                return missRes;
+            }
+            finally
+            {
+                gate.Release();
+
+                if (gate.CurrentCount == 1)
+                    missGates.TryRemove(cacheKey, out _);
+            }
+#endif
         };
     }
 

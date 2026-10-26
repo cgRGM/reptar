@@ -92,8 +92,7 @@ public static class BetterAuthProtocol
                 ExpiresAt: expiresAt,
                 CreatedAt: ctx.Clock.IsoNow()));
 
-            ctx.Cookies.Set(BetterAuthCookie, token, expiresAt, authOptions.CookieDomain);
-            ctx.Cookies.Set(authOptions.CookieName, token, expiresAt, authOptions.CookieDomain);
+            SetSessionCookie(ctx, authOptions, token, expiresAt);
 
             var bUser = new BetterAuthUser(
                 user.Id,
@@ -148,8 +147,7 @@ public static class BetterAuthProtocol
                 ExpiresAt: expiresAt,
                 CreatedAt: now));
 
-            ctx.Cookies.Set(BetterAuthCookie, token, expiresAt, authOptions.CookieDomain);
-            ctx.Cookies.Set(authOptions.CookieName, token, expiresAt, authOptions.CookieDomain);
+            SetSessionCookie(ctx, authOptions, token, expiresAt);
 
             var bUser = new BetterAuthUser(
                 userId,
@@ -238,8 +236,14 @@ public static class BetterAuthProtocol
                     new Dictionary<string, object?> { ["hash"] = hash });
             }
 
-            ctx.Cookies.Delete(BetterAuthCookie);
-            ctx.Cookies.Delete(authOptions.CookieName);
+            ctx.Cookies.Delete(BetterAuthCookie, domain: null, secure: authOptions.SecureCookies);
+            if (!string.Equals(authOptions.CookieName, BetterAuthCookie, StringComparison.Ordinal))
+            {
+                ctx.Cookies.Delete(
+                    authOptions.CookieName,
+                    domain: null,
+                    secure: authOptions.SecureCookies);
+            }
 
             return ctx.Json(new Dictionary<string, bool> { ["success"] = true });
         });
@@ -262,7 +266,12 @@ public static class BetterAuthProtocol
             var targetCallback = input.CallbackURL ?? "/dashboard";
 
             var statePayload = $"{state}|{verifier}|{targetCallback}";
-            ctx.Cookies.Set(StateCookie, statePayload, ctx.Clock.IsoIn(TimeSpan.FromMinutes(10)));
+            ctx.Cookies.Set(
+                StateCookie,
+                statePayload,
+                ctx.Clock.IsoIn(TimeSpan.FromMinutes(10)),
+                domain: null,
+                secure: authOptions.SecureCookies);
 
             var authUrl = provider.BuildAuthorizationUrl(state, challenge, redirectUri);
             return ctx.Json(new BetterAuthSocialResponse(authUrl));
@@ -361,14 +370,39 @@ public static class BetterAuthProtocol
                 ExpiresAt: sessionExpires,
                 CreatedAt: ctx.Clock.IsoNow()));
 
-            ctx.Cookies.Set(BetterAuthCookie, sessionToken, sessionExpires, authOptions.CookieDomain);
-            ctx.Cookies.Set(authOptions.CookieName, sessionToken, sessionExpires, authOptions.CookieDomain);
-            ctx.Cookies.Delete(StateCookie);
+            SetSessionCookie(ctx, authOptions, sessionToken, sessionExpires);
+            ctx.Cookies.Delete(StateCookie, domain: null, secure: authOptions.SecureCookies);
 
             return ctx.Redirect(destination);
         });
 
         return app;
+    }
+
+    private static void SetSessionCookie(
+        Ctx ctx,
+        AuthOptions options,
+        string token,
+        string expiresAt)
+    {
+        ctx.Cookies.Set(
+            BetterAuthCookie,
+            token,
+            expiresAt,
+            options.CookieDomain,
+            options.SecureCookies);
+
+        // Avoid a duplicate Set-Cookie header when the app configures its
+        // cookie name to the Better Auth wire name.
+        if (!string.Equals(options.CookieName, BetterAuthCookie, StringComparison.Ordinal))
+        {
+            ctx.Cookies.Set(
+                options.CookieName,
+                token,
+                expiresAt,
+                options.CookieDomain,
+                options.SecureCookies);
+        }
     }
 
     private static string BuildRedirectUri(Ctx ctx, string providerName)

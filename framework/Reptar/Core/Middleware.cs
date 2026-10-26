@@ -152,17 +152,137 @@ public static class Middlewares
         return false;
     }
 
-    public static ReptarMiddleware Telemetry() => async (ctx, next) =>
+    public static ReptarMiddleware Telemetry(TelemetryOptions? options = null)
     {
-        var stopwatch = Stopwatch.StartNew();
-        var response = await next();
-        stopwatch.Stop();
+        var opts = options ?? new TelemetryOptions();
+        DbMetrics.SlowQueryThresholdMs = opts.SlowQueryMs;
 
-        ctx.Log.Info(
-            $"{ctx.RequestId} {ctx.Req.Method} {ctx.Req.Path} -> {response.Status} ({stopwatch.Elapsed.TotalMilliseconds:0.0}ms)");
+        return async (ctx, next) =>
+        {
+            var started = Stopwatch.GetTimestamp();
+            var response = await next();
+            var elapsed = Stopwatch.GetTimestamp() - started;
+            var durationMs = elapsed * 1000.0 / Stopwatch.Frequency;
 
-        return response;
-    };
+            var db = ctx.DbMetrics;
+            var slow = opts.SlowRequestMs > 0 && durationMs >= opts.SlowRequestMs;
+            var errorCode = response.Status >= 500
+                ? "internal_error"
+                : response.Status == 404
+                    ? "not_found"
+                    : null;
+            var cache = response.Headers.TryGetValue("X-Cache", out var cacheValue)
+                ? cacheValue
+                : null;
+            var cfRay = ctx.Req.Header("CF-Ray");
+            var telemetry = new RequestTelemetry(
+                ctx.RequestId,
+                ctx.TraceId,
+                ctx.SpanId,
+                ctx.ParentSpanId,
+                ctx.Req.Method,
+                ctx.RoutePattern ?? ctx.Req.Path,
+                ctx.Req.Path,
+                response.Status,
+                durationMs,
+                db.TotalMs,
+                db.QueryCount,
+                cache,
+                ctx.User?.Id,
+                cfRay,
+                ColoFrom(cfRay),
+                errorCode,
+                slow);
+
+            var shouldLog = opts.Enabled &&
+                (slow || response.Status >= 400 || Sample(opts.SampleRate));
+
+            if (shouldLog)
+                ctx.Log.Request(in telemetry);
+
+            if (db.QueryCount > 0)
+                ctx.ServerTiming("db", db.TotalMs, $"{db.QueryCount} queries");
+
+            ctx.ServerTiming("total", durationMs);
+
+            if (db.SlowQueryCount > 0 && db.SlowestSql is not null)
+                ctx.Log.Warn($"slow_query {db.SlowestQueryMs:0.0}ms {db.SlowestSql}");
+
+            return response;
+        };
+    }
+
+    /// <summary>
+    /// Cancels the request pipeline after <paramref name="timeout"/> and returns
+    /// 504 when the handler has not completed. Handlers should observe
+    /// <see cref="Ctx.RequestAborted"/> to stop database/HTTP work promptly.
+    /// </summary>
+    public static ReptarMiddleware Timeout(TimeSpan timeout)
+    {
+        if (timeout <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(timeout), "Timeout must be positive.");
+
+        return async (ctx, next) =>
+        {
+            var previous = ctx.RequestAborted;
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(previous);
+            requestCts.CancelAfter(timeout);
+            ctx.RequestAborted = requestCts.Token;
+
+            using var delayCts = new CancellationTokenSource();
+            var delay = Task.Delay(timeout, delayCts.Token);
+            var handler = next();
+
+            try
+            {
+                var completed = await Task.WhenAny(handler, delay);
+                delayCts.Cancel();
+
+                if (completed != handler)
+                {
+                    requestCts.Cancel();
+                    _ = handler.ContinueWith(
+                        static task => _ = task.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+
+                    return ctx.Error(
+                        504,
+                        "request_timeout",
+                        $"Request exceeded the {timeout.TotalMilliseconds:0}ms timeout.");
+                }
+
+                return await handler;
+            }
+            catch (OperationCanceledException) when (
+                requestCts.IsCancellationRequested && !previous.IsCancellationRequested)
+            {
+                return ctx.Error(
+                    504,
+                    "request_timeout",
+                    $"Request exceeded the {timeout.TotalMilliseconds:0}ms timeout.");
+            }
+            finally
+            {
+                ctx.RequestAborted = previous;
+            }
+        };
+    }
+
+    private static bool Sample(double rate) =>
+        rate >= 1 || (rate > 0 && Random.Shared.NextDouble() < rate);
+
+    private static string? ColoFrom(string? cfRay)
+    {
+        if (string.IsNullOrEmpty(cfRay))
+            return null;
+
+        var dash = cfRay.LastIndexOf('-');
+        return dash >= 0 && dash < cfRay.Length - 1
+            ? cfRay[(dash + 1)..]
+            : null;
+    }
 
     public static ReptarMiddleware RateLimit(
         int limit = 60,
@@ -260,16 +380,65 @@ public static class Middlewares
         Action<SwrOptions>? configure = null) =>
         CacheControl.SWR(ttlSeconds, swrSeconds, configure);
 
-#if !NETWASM
-    public static ReptarMiddleware SecurityHeaders(
-        SecurityHeadersOptions? options = null) =>
-        ProductionExtensions.SecurityHeadersMiddleware(options);
+    public static ReptarMiddleware SecurityHeaders(SecurityHeadersOptions? options = null)
+    {
+        var opts = options ?? new SecurityHeadersOptions();
 
+        return async (ctx, next) =>
+        {
+            var response = await next();
+
+            if (!string.IsNullOrEmpty(opts.ContentTypeOptions))
+                response.Headers.TryAdd("X-Content-Type-Options", opts.ContentTypeOptions);
+
+            if (!string.IsNullOrEmpty(opts.FrameOptions))
+                response.Headers.TryAdd("X-Frame-Options", opts.FrameOptions);
+
+            if (!string.IsNullOrEmpty(opts.ReferrerPolicy))
+                response.Headers.TryAdd("Referrer-Policy", opts.ReferrerPolicy);
+
+            if (!string.IsNullOrEmpty(opts.StrictTransportSecurity))
+                response.Headers.TryAdd("Strict-Transport-Security", opts.StrictTransportSecurity);
+
+            if (!string.IsNullOrEmpty(opts.XssProtection))
+                response.Headers.TryAdd("X-XSS-Protection", opts.XssProtection);
+
+            if (!string.IsNullOrEmpty(opts.PermissionsPolicy))
+                response.Headers.TryAdd("Permissions-Policy", opts.PermissionsPolicy);
+
+            if (!string.IsNullOrEmpty(opts.ContentSecurityPolicy))
+                response.Headers.TryAdd("Content-Security-Policy", opts.ContentSecurityPolicy);
+
+            return response;
+        };
+    }
+
+    public static ReptarMiddleware BodyLimit(long maxBytes) => async (ctx, next) =>
+    {
+        if (ctx.Req.Body is not null && ctx.Req.Body.Length > maxBytes)
+        {
+            return ctx.Error(413, "payload_too_large", $"Payload exceeds maximum size of {maxBytes} bytes.");
+        }
+        return await next();
+    };
+
+#if !NETWASM
     public static ReptarMiddleware StaticFiles(
         string rootDirectory = "wwwroot",
         StaticFileOptions? options = null) =>
         ProductionExtensions.StaticFilesMiddleware(rootDirectory, options);
 #endif
+}
+
+public sealed class SecurityHeadersOptions
+{
+    public string ContentTypeOptions { get; set; } = "nosniff";
+    public string FrameOptions { get; set; } = "DENY";
+    public string ReferrerPolicy { get; set; } = "strict-origin-when-cross-origin";
+    public string? StrictTransportSecurity { get; set; } = "max-age=31536000; includeSubDomains";
+    public string? XssProtection { get; set; } = "0";
+    public string? PermissionsPolicy { get; set; } = "camera=(), microphone=(), geolocation=()";
+    public string? ContentSecurityPolicy { get; set; }
 }
 
 public sealed class RateLimitOptions

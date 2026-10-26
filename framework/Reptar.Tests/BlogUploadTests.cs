@@ -133,10 +133,10 @@ public sealed class BlogUploadTests
             Assert.Equal(new byte[] { 1, 2, 3 }, await r2.GetAsync("a/x.png"));
             Assert.Equal(new byte[] { 4, 5, 6 }, await r2.GetAsync("b/x.png"));
 
-            // Traversal attempts throw ArgumentException
-            await Assert.ThrowsAsync<ArgumentException>(() =>
+            // Traversal attempts throw the storage-layer invalid-key error.
+            await Assert.ThrowsAsync<StorageException>(() =>
                 r2.PutAsync("../escape.png", [1], "image/png"));
-            await Assert.ThrowsAsync<ArgumentException>(() =>
+            await Assert.ThrowsAsync<StorageException>(() =>
                 r2.GetAsync("a/../../escape.png"));
         }
         finally

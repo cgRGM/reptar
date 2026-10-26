@@ -1,0 +1,188 @@
+---
+// Overrides Starlight's default PageTitle to add per-page Markdown actions
+// (copy, view, ask an AI) for readers pasting docs into LLM chats.
+// The default title component is rendered unchanged below the actions row.
+import Default from "@astrojs/starlight/components/PageTitle.astro";
+---
+
+<div class="sl-md-actions not-content">
+  <button type="button" class="sl-md-action" data-reptar-md-action="copy">
+    Copy as Markdown
+  </button>
+  <button type="button" class="sl-md-action" data-reptar-md-action="view">
+    View as Markdown
+  </button>
+  <details class="sl-md-actions-menu">
+    <summary class="sl-md-action">Ask AI</summary>
+    <div class="sl-md-actions-menu-items">
+      <a
+        href="https://chatgpt.com/"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-reptar-md-action="chatgpt"
+      >
+        ChatGPT
+      </a>
+      <a
+        href="https://claude.ai/new"
+        target="_blank"
+        rel="noopener noreferrer"
+        data-reptar-md-action="claude"
+      >
+        Claude
+      </a>
+    </div>
+  </details>
+</div>
+
+<Default><slot /></Default>
+
+<style>
+  .sl-md-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: center;
+    margin-block-end: 0.75rem;
+  }
+
+  .sl-md-action {
+    appearance: none;
+    background: transparent;
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 999px;
+    color: var(--sl-color-gray-3);
+    cursor: pointer;
+    font-size: var(--sl-text-sm);
+    line-height: 1.25rem;
+    padding: 0.25rem 0.75rem;
+  }
+
+  .sl-md-action:hover {
+    border-color: var(--sl-color-gray-2);
+    color: var(--sl-color-white);
+  }
+
+  .sl-md-action:focus-visible {
+    outline: 2px solid currentColor;
+    outline-offset: 2px;
+  }
+
+  summary.sl-md-action::-webkit-details-marker {
+    display: none;
+  }
+
+  .sl-md-actions-menu {
+    position: relative;
+  }
+
+  .sl-md-actions-menu-items {
+    background: var(--sl-color-bg);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.5rem;
+    box-shadow: 0 4px 12px rgb(0 0 0 / 20%);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    left: 0;
+    min-width: 8rem;
+    padding: 0.5rem;
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    z-index: 20;
+  }
+
+  .sl-md-actions-menu-items a {
+    border-radius: 0.375rem;
+    color: var(--sl-color-gray-2);
+    font-size: var(--sl-text-sm);
+    padding: 0.25rem 0.5rem;
+    text-decoration: none;
+  }
+
+  .sl-md-actions-menu-items a:hover {
+    background: var(--sl-color-gray-6);
+    color: var(--sl-color-white);
+  }
+
+  @media print {
+    .sl-md-actions {
+      display: none;
+    }
+  }
+</style>
+
+<script>
+  type MarkdownAction = "copy" | "view";
+  type ChatAction = "chatgpt" | "claude";
+
+  const MARKDOWN_ROOT_SELECTOR = "main .sl-markdown-content";
+  const CHAT_BASES: Record<ChatAction, string> = {
+    chatgpt: "https://chatgpt.com/?q=",
+    claude: "https://claude.ai/new?q=",
+  };
+
+  const flashButtonLabel = (button: HTMLButtonElement, message: string) => {
+    const original = button.dataset.originalLabel ?? button.textContent ?? "";
+    button.dataset.originalLabel = original;
+    button.textContent = message;
+    globalThis.setTimeout(() => {
+      button.textContent = original;
+    }, 1600);
+  };
+
+  const runMarkdownAction = async (
+    action: MarkdownAction,
+    button: HTMLButtonElement,
+  ) => {
+    const source = document.querySelector<HTMLElement>(
+      MARKDOWN_ROOT_SELECTOR,
+    );
+    if (!source) {return;}
+
+    const { extractMarkdown } = await import("../utils/markdown");
+    const markdown = await extractMarkdown(source);
+    if (!markdown) {return;}
+
+    if (action === "copy") {
+      try {
+        await navigator.clipboard.writeText(markdown);
+        flashButtonLabel(button, "Copied!");
+      } catch {
+        flashButtonLabel(button, "Clipboard blocked");
+      }
+      return;
+    }
+
+    const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    globalThis.open(url, "_blank", "noopener,noreferrer");
+    globalThis.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+  };
+
+  const setChatLinks = () => {
+    const prompt = `Read this Reptar documentation page and answer questions about the Reptar framework: ${globalThis.location.href}`;
+    for (const link of document.querySelectorAll<HTMLAnchorElement>(
+      "a[data-reptar-md-action='chatgpt'], a[data-reptar-md-action='claude']",
+    )) {
+      const action = link.dataset.reptarMdAction as ChatAction | undefined;
+      const base = action ? CHAT_BASES[action] : undefined;
+      if (base) {link.href = `${base}${encodeURIComponent(prompt)}`;}
+    }
+  };
+
+  document.addEventListener("click", (event) => {
+    const target = (event.target as HTMLElement).closest<HTMLElement>(
+      "[data-reptar-md-action]",
+    );
+    if (!target) {return;}
+
+    const action = target.dataset.reptarMdAction;
+    if (action !== "copy" && action !== "view") {return;}
+
+    event.preventDefault();
+    void runMarkdownAction(action, target as HTMLButtonElement);
+  });
+
+  setChatLinks();
+</script>

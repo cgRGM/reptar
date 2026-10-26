@@ -52,7 +52,7 @@
       <!-- Right: Minimalist Terminal / Live Telemetry Snapshot -->
       <div class="lg:col-span-5 border border-[#222630] bg-[#0f1116]">
         <div class="flex items-center justify-between border-b border-[#222630] px-4 py-2.5 bg-[#13161c]">
-          <span class="font-mono text-xs text-zinc-300">Program.cs</span>
+          <span class="font-mono text-xs text-zinc-300">app.cs</span>
           <span class="font-mono text-xs text-zinc-500">netwasm0.1 / net10.0</span>
         </div>
         <pre class="p-4 font-mono text-xs leading-relaxed text-zinc-300 overflow-x-auto"><code>var app = ReptarApp.Create(new ReptarConfig
@@ -60,13 +60,13 @@
     Database = Db.D1(), // or Sqlite, Postgres, MySql
 &#125;);
 
+app.UseSecurityHeaders();
 app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
-app.Use(RateLimit.SlidingWindow(limit: 120, windowSeconds: 60));
 app.UseScalar(); // OpenAPI 3.1 + Scalar UI at /reference
 
 app.Get("/tasks/:id", async c =&gt;
 &#123;
-    var id = c.Req.Param("id");
+    var id = c.Param("id");
     var task = await c.Db.QuerySingleOrDefaultAsync&lt;TaskItem&gt;(
         "SELECT id, title, status FROM tasks WHERE id = @id",
         ("id", id));
@@ -78,22 +78,30 @@ await app.RunAsync(args);</code></pre>
     </div>
 
     <!-- Clean Structural Specification Grid (No Eyebrows) -->
-    <div class="mt-16 grid grid-cols-2 lg:grid-cols-4 border border-[#222630] bg-[#0f1116] divide-y lg:divide-y-0 lg:divide-x divide-[#222630]">
-      <div class="p-5">
-        <div class="font-mono text-2xl font-bold text-white tracking-tight">42,239 req/s</div>
-        <div class="mt-1 text-xs text-zinc-400">Wins 10 of 12 benchmark tiers vs .NET 10 Minimal API</div>
+    <div class="mt-16 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 border border-[#222630] bg-[#0f1116] divide-y md:divide-y-0 divide-[#222630] divide-x">
+      <div class="p-4">
+        <div class="font-mono text-xl font-bold text-white tracking-tight">42,239 req/s</div>
+        <div class="mt-1 text-xs text-zinc-400">Wins 10 of 12 benchmark tiers vs Minimal API</div>
       </div>
-      <div class="p-5">
-        <div class="font-mono text-2xl font-bold text-white tracking-tight">10.4 MB</div>
-        <div class="mt-1 text-xs text-zinc-400">Self-contained Linux Native AOT binary (124 ms boot)</div>
+      <div class="p-4">
+        <div class="font-mono text-xl font-bold text-white tracking-tight">28,499 req/s</div>
+        <div class="mt-1 text-xs text-zinc-400">AI Gateway streaming proxy (36 ms TTFT)</div>
       </div>
-      <div class="p-5">
-        <div class="font-mono text-2xl font-bold text-white tracking-tight">&lt; 2 ms</div>
-        <div class="mt-1 text-xs text-zinc-400">Warm Cloudflare Worker Wasm isolate execution</div>
+      <div class="p-4">
+        <div class="font-mono text-xl font-bold text-white tracking-tight">0.32 ms p50</div>
+        <div class="mt-1 text-xs text-zinc-400">Realtime WebSocket rooms (4.9k sockets/s)</div>
       </div>
-      <div class="p-5">
-        <div class="font-mono text-2xl font-bold text-white tracking-tight">D1 · SQLite · PG · MySQL</div>
-        <div class="mt-1 text-xs text-zinc-400">Typed ColumnRef&lt;T&gt; queries &amp; group-commit batching</div>
+      <div class="p-4">
+        <div class="font-mono text-xl font-bold text-white tracking-tight">31,722 writes/s</div>
+        <div class="mt-1 text-xs text-zinc-400">BaaS authenticated SQLite group-commit</div>
+      </div>
+      <div class="p-4">
+        <div class="font-mono text-xl font-bold text-white tracking-tight">10.4 MB</div>
+        <div class="mt-1 text-xs text-zinc-400">Self-contained Linux Native AOT (124 ms boot)</div>
+      </div>
+      <div class="p-4">
+        <div class="font-mono text-xl font-bold text-white tracking-tight">D1 · SQLite · PG</div>
+        <div class="mt-1 text-xs text-zinc-400">Typed ColumnRef&lt;T&gt; with zero reflection</div>
       </div>
     </div>
   </div>

@@ -1,0 +1,163 @@
+# Core Focus — Implementation Log
+
+**Date:** 2026-10-26  
+**Scope:** first implementation pass on the priorities in `plans/core-focus-roadmap.md` and `plans/product-scope-and-module-boundaries.md`.
+
+---
+
+## Landed
+
+### 1. `Rule<T>` hot path
+
+- Replaced `PropertyInfo.GetValue` / `Expression.Compile()` in the non-Wasm path with interpreted expression trees (`Compile(preferInterpretation: true)`) and a reflection fallback only when the runtime rejects the interpreter.
+- `Validator<T>.Prop` now accepts `Expression<Func<T, TProp>>`, avoiding the `object?` conversion in the expression.
+- Validation no longer allocates a `List<ValidationIssue>` per property or on the valid path; `Validate` returns `Array.Empty<ValidationIssue>()` when clean.
+- Added `DynamicallyAccessedMembers(PublicProperties)` on `Validator<T>` so the reflection fallback remains trim-safe.
+- Existing tests pass; validation semantics unchanged.
+- Verified with a real Native AOT publish (`PublishAot=true`, osx-arm64): `Rule<T>` validates correctly (`ok=0 bad=2`) and the `IL2091` trim warning was fixed by annotating `ReptarApi.Rule<T>`.
+
+**Still open:** value types still box at `PropertyRules.Check(object?)`; the next step is a generic `PropertyRules<TProp>` or source-generated typed checks.
+
+### 1b. Build-time JSON context generation
+
+- `scripts/json-context.ts` scans `[ReptarEntity]`, `Rule<T>`, and `Produces<T>` and writes `json-context.g.cs`.
+- `bun reptar json:gen` runs it; `make:model` runs it automatically and wires the include.
+- `ReptarJson.RegisterContext` + `SourceGenJsonCodec`/`GeneratedFirstResolver` discover the context without a manual `AppJsonContext` list.
+- Verified: generated context compiles with the STJ source generator and is visible to the app.
+
+### 2. Observability v1
+
+- `RequestTelemetry` structured record and JSON line output.
+- `DbMetrics` + `InstrumentedDbClient`: per-request query count, total DB time, slow-query count/slowest SQL.
+- `IAppLogger.Request` structured sink; `ConsoleAppLogger` writes JSON.
+- Telemetry middleware now emits `db_ms`, `db_queries`, route template, status, cache, user, `cf_ray`, colo, error code, slow flag.
+- W3C `traceparent` parsing and `trace_id` / `span_id` / `parent_span_id` (integrated with the concurrent trace-context work).
+- Automatic `Server-Timing: db;..., total;...`.
+- Sampling (`SampleRate`), slow-request threshold, slow-query threshold.
+- `RequestId` + `Telemetry` remain opt-in middleware.
+
+**Tests:** `TelemetryTests` cover structured fields, DB timing, traceparent, `Server-Timing`, and sample-rate zero.
+
+### 3. Reliability
+
+- `Timeout(TimeSpan)` middleware: returns `504 request_timeout`, cancels `ctx.RequestAborted`, observes late handler faults.
+- `ctx.RequestAborted` wired from Kestrel (`http.RequestAborted`) and Lambda (runtime cancellation token).
+- `IReptarModule` with `Configure` / `StartAsync` / `StopAsync`; `ReptarApp.AddModule`, `StartModulesAsync`, `StopModulesAsync`, `DisposeAsync`.
+- Kestrel starts modules before serving and stops/disposes on shutdown; Lambda does the same around its runtime loop.
+- `InstrumentedDbClient` and `PostgresDbClient` dispose their inner/pool resources.
+- `ResponseCache` no longer uses `Task.Run` background revalidation under NetWasm; it falls through to synchronous revalidation because Workers freeze between events. Native cache misses are single-flight (SemaphoreSlim) to prevent stampedes; the Wasm path skips SemaphoreSlim because NetWasm does not expose it.
+- Kestrel response compression is enabled for JSON/text/HTML/SVG with SSE excluded.
+- `DefaultHttpClient` has a configurable timeout (`REPTAR_HTTP_TIMEOUT_SECONDS`, default 100s).
+- `PostgresDbClient` has `CommandTimeoutSeconds` (default 30s), including transaction-context commands.
+- `IDbClient.TransactionAsync` is no longer a silent no-op: writes are buffered and committed atomically through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside a buffered transaction fail with a clear message; provider-specific transaction contexts remain for read/write transactions.
+- `DbTransactionExtensions` exposes the transaction contract on concrete clients.
+
+**Tests:** `ReliabilityTests` cover timeout 504 and module order; `TransactionTests` cover commit, rollback, and read rejection.
+
+### 4. AI / terminal boundary
+
+- `framework/Reptar.AI` is now a separate optional project (22 files).
+- `examples/agent-cli/terminal/` owns the terminal UI (8 files: terminal agent/editor/input/screen/UI, ReptarTerm, Ansi, TerminalBuffer).
+- `framework/Reptar/Core/AiTools.cs` moved to `Reptar.AI`; core keeps only `RouteMeta` AI fields and `RouteBuilder.AsAiTool`.
+- `examples/agent-cli` references `Reptar.AI` and includes the terminal files.
+- `Reptar.Tests` references `Reptar.AI` and links the terminal example files.
+- `framework/Reptar.AI.Gateway` is a separate optional project; `examples/ai-gateway/app.cs` is now a thin composition over `AiGateway` + `GatewaySchema`.
+- Architecture guard (`scripts/check-architecture.ts`) reports core clean; CI now runs it with `--strict`.
+
+**Still open:** move terminal tests into an example-local test project; package `Reptar.AI` / `Reptar.AI.Gateway` on NuGet; update README/llms paths.
+
+### 5. Preload v1
+
+- `Relation.BelongsTo<TParent, TRelated, TKey>` and `Relation.HasMany<...>` with explicit key selectors and immutable `attach` expressions.
+- `TableQuery<T>.Preload(relation)` batches related rows with `WHERE ... IN (...)` in chunks of 500.
+- Missing related rows attach `null`/empty lists.
+- Reflection-free, AOT/Wasm-safe.
+- `PreloadTests` cover belongs-to, has-many, and orphan parents.
+
+**Still open:** attribute/source-generated relations, nested preloads, many-to-many, per-parent limits, D1 batch optimization.
+
+### 6. CLI scaffolding
+
+- `bun reptar make:model Post [-f] [-m] [--force] [--dry-run]`
+- `bun reptar make:feature Post`
+- Generates `schema/<plural>.cs` (TableDef + `[ReptarEntity]` DTO), optional `features/<plural>.cs`, updates `schema/index.cs`, inserts `#:include` lines and `Feature.Configure(app)`, and adds `[JsonSerializable(typeof(Dto))]` to an existing JSON context.
+- `--migration` invokes `reptar db generate`.
+- Verified in a temp app: files, index, includes, feature call, and JSON context are updated.
+
+**Still open:** move the generator into the project-local CLI package; add pluralization edge cases and a scaffold smoke test.
+
+### 6b. CI/codegen fixes
+
+- `reptar codegen --check` now formats its temporary output before comparing; previously it compared unformatted generated files to oxfmt-formatted committed files and always reported stale. `bun rpc:check` passes again.
+- `scripts/test-realtime.ts` accepts `REPTAR_REALTIME_WORKERS_PORT` / `REPTAR_REALTIME_KESTREL_PORT` so concurrent agents and CI jobs do not fight over 8790/8791.
+
+### 7. Measurement guardrails
+
+- `scripts/bench-gate.ts`: compares a `bench/load/run.ts` result to a compact baseline; RPS drop and p95 rise thresholds; JSON output.
+- `bench/perf-baseline.json`: current VPS T0–T11 baseline.
+- `.github/workflows/bench.yml`: manual self-hosted benchmark gate.
+- `scripts/check-architecture.ts`: core/AI/terminal boundary guard; CI step added.
+- `scripts/check-size.ts` + `bench/size-budgets.json`: AOT/Wasm size budgets.
+- `package.json`: `check:architecture`, `check:size`, `bench:gate`.
+
+---
+
+## Findings / learnings
+
+### Source generators cannot generate `JsonSerializerContext` metadata
+
+The attempted `ReptarJsonContextGenerator` failed for a structural reason: Roslyn source generators do **not** see each other's generated output. The System.Text.Json source generator cannot see a `JsonSerializerContext` class emitted by another generator, so the generated class lacks the abstract `GetTypeInfo`/`GeneratedSerializerOptions` implementation.
+
+**Do not retry this as a source generator.** The working alternative is a build-time file generator: `scripts/json-context.ts` scans `[ReptarEntity]`, `Rule<T>`, and `Produces<T>` types and writes `json-context.g.cs` as ordinary source **before** compilation. The STJ generator sees that file, emits the real context implementation, and the file's module initializer registers it through `ReptarJson.RegisterContext`.
+
+- `bun reptar json:gen` runs it manually.
+- `bun reptar make:model` runs it automatically and wires `#:include json-context.g.cs` into `app.cs`.
+- Verified in a temp app: generated file compiles and the context type is available.
+
+Other options remain: an MSBuild target, or an analyzer that flags unregistered `ctx.Json` types. The `ReptarJson.RegisterContext` registry and `SourceGenJsonCodec` lookup are the runtime bridge for build-time/manual contexts.
+
+### Concurrent-agent integration
+
+Another agent added W3C trace context (`TraceParent`, `TraceContext`, `Ctx.SpanId`) while this pass was in progress. The final telemetry middleware uses that trace context; the `RequestTelemetry` record now includes `span_id`/`parent_span_id`. Avoid reimplementing trace parsing in a separate path.
+
+### Preload API shape
+
+Explicit relation descriptors are the right v1: no reflection, no attributes, works with immutable records. The ergonomic next step is a generator/attributes that emit these descriptors, not runtime reflection.
+
+### `TransactionAsync` v1 is write-only
+
+`IDbClient.TransactionAsync` now buffers writes and commits through `BatchAsync` (transactional on SQLite/Postgres/MySQL, atomic on D1). Reads and table-shaped writes inside the buffer throw instead of silently escaping the transaction. Postgres still has `PostgresTransactionContext` for read/write transactions; SQLite/MySQL/D1 read/write transaction contexts are the next step.
+
+### Benchmark gate needs a stable runner
+
+The baseline is a 2-vCPU VPS AOT run. GitHub-hosted runners are too noisy for a 15% gate; `.github/workflows/bench.yml` is self-hosted/manual by design.
+
+---
+
+## Verification
+
+- `bun reptar test`: **247 passed**.
+- `bun reptar self-check`: **all green** on a clean port set (doctor, tests, host contract, NetWasm lint, workers + Kestrel realtime smoke). A concurrent agent's `bun e2e` held 8790 during one run; the new `REPTAR_REALTIME_*_PORT` env vars avoid that collision.
+- `bun scripts/check-architecture.ts --strict`: **core is clean**.
+- `framework/Reptar.Wasm` builds (NetWasm 0.10.1) with telemetry/preload/queue changes; the Rooms Worker module is 13.13 MB against a 16 MB budget.
+- `framework/Reptar.Kestrel` builds with response compression.
+- `examples/agent-cli` and `examples/ai-gateway` file-based builds pass with the new project references.
+- Native AOT publish of a `Rule<T>` app succeeds and validates correctly (`ok=0 bad=2`).
+- `bun rpc:check` passes after fixing `codegen --check` formatting.
+- `bun run docs:check:snippets` passes (127 C# snippets across 44 docs).
+- `scripts/bench-gate.ts` passes against the existing VPS result and baseline.
+- `scripts/test-scaffold.ts` passes end-to-end (scaffold → build → codegen → tsc → runtime smoke).
+- `make:model Post --feature` verified in a temp app (schema, index, generated JSON context, includes, configure call).
+
+---
+
+## Next priorities
+
+1. Read/write transaction contexts for SQLite/MySQL/D1 (v1 buffers writes only).
+2. JSON context generation via build-time codegen (not a source generator) — implemented in `scripts/json-context.ts`; Wasm host `Program.cs` examples now call `ReptarJson.RegisterContext(...)` + `UseRegisteredContexts()`.
+3. DB/HTTP cancellation + command timeouts.
+4. Migration checksums / dry-run / lock.
+5. Cache single-flight, JSON ETag/304, opt-in compression.
+6. `Rule<T>` generic value path (remove boxing) + benchmark tier.
+7. Move `make:*` into the project-local CLI; add scaffold smoke test.
+8. Update README/llms/docs for `Reptar.AI`, terminal example, preload, and telemetry.

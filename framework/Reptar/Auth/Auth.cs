@@ -95,6 +95,13 @@ public static class Auth
     public sealed record ApiKeyResponse(string Id, string Name, string Key, string Prefix, string? ExpiresAt, string CreatedAt);
     public sealed record ApiKeyInfo(string Id, string Name, string Prefix, string? ExpiresAt, string CreatedAt);
 
+    // Concrete response shapes for the small auth mutations. Anonymous objects
+    // cannot be registered in a JsonSerializerContext and therefore throw
+    // under Native AOT.
+    public sealed record AuthErrorResponse(string Error);
+    public sealed record AuthUrlResponse(string Url);
+    public sealed record AuthSuccessResponse(bool Success);
+
     public static readonly Validator<SignUpInput> SignUpSchema = Rule<SignUpInput>()
         .Prop(x => x.Email, rules => rules.Email())
         .Prop(x => x.Password, rules => rules.Min(8).Max(128))
@@ -190,7 +197,7 @@ public static class Auth
             var clientIp = GetClientIp(ctx);
             if (IsRateLimited(clientIp))
             {
-                return ctx.Json(new { error = "Too many failed login attempts. Please try again later." }, 429);
+                return ctx.Json(new AuthErrorResponse("Too many failed login attempts. Please try again later."), 429);
             }
 
             var email = input.Email.Trim().ToLowerInvariant();
@@ -226,7 +233,7 @@ public static class Auth
                     new { hash = await ctx.Crypto.Sha256(token) });
             }
 
-            ctx.Cookies.Delete(_options.CookieName);
+            ctx.Cookies.Delete(_options.CookieName, _options.CookieDomain, _options.SecureCookies);
             return ctx.Status(204);
         })
             .Produces(204);
@@ -282,10 +289,15 @@ public static class Auth
             var redirectUri = $"{origin}/auth/callback/{provider.ProviderName}";
 
             var expires = ctx.Clock.IsoIn(TimeSpan.FromMinutes(10));
-            ctx.Cookies.Set($"reptar_oauth_pkce_{provider.ProviderName}", $"{verifier}|{input.CallbackUrl}", expires);
+            ctx.Cookies.Set(
+                $"reptar_oauth_pkce_{provider.ProviderName}",
+                $"{verifier}|{input.CallbackUrl}",
+                expires,
+                domain: null,
+                secure: _options.SecureCookies);
 
             var authUrl = provider.BuildAuthorizationUrl(state, challenge, redirectUri);
-            return ctx.Json(new { url = authUrl });
+            return ctx.Json(new AuthUrlResponse(authUrl));
         });
 
         app.Get("/callback/:provider", async ctx =>
@@ -359,7 +371,10 @@ public static class Auth
                     CreatedAt: ctx.Clock.IsoNow()));
             }
 
-            ctx.Cookies.Delete($"reptar_oauth_pkce_{provider.ProviderName}");
+            ctx.Cookies.Delete(
+                $"reptar_oauth_pkce_{provider.ProviderName}",
+                domain: null,
+                secure: _options.SecureCookies);
             await StartSession(ctx, user.Id);
 
             return ctx.Redirect(callbackUrl);
@@ -396,7 +411,7 @@ public static class Auth
                 "id = @id AND user_id = @userId",
                 new { id = input.SessionId, userId = user.Id });
 
-            return ctx.Json(new { success = true });
+            return ctx.Json(new AuthSuccessResponse(true));
         });
 
         app.Post("/sessions/revoke-others", async ctx =>
@@ -413,7 +428,7 @@ public static class Auth
                     new { userId = user.Id, currentHash });
             }
 
-            return ctx.Json(new { success = true });
+            return ctx.Json(new AuthSuccessResponse(true));
         });
 
         // Change Password
@@ -429,7 +444,7 @@ public static class Auth
             if (userRow is null || userRow.PasswordHash is null ||
                 !await ctx.Crypto.VerifyPassword(input.CurrentPassword, userRow.PasswordHash))
             {
-                return ctx.Json(new { error = "Current password is incorrect." }, 400);
+                return ctx.Json(new AuthErrorResponse("Current password is incorrect."), 400);
             }
 
             var newHash = await ctx.Crypto.HashPassword(input.NewPassword);
@@ -437,7 +452,7 @@ public static class Auth
                 "UPDATE users SET password_hash = @newHash WHERE id = @id",
                 new Dictionary<string, object?> { ["newHash"] = newHash, ["id"] = user.Id });
 
-            return ctx.Json(new { success = true });
+            return ctx.Json(new AuthSuccessResponse(true));
         });
 
         // Personal Access Tokens / API Keys
@@ -498,7 +513,7 @@ public static class Auth
                 "id = @id AND user_id = @userId",
                 new { id, userId = user.Id });
 
-            return ctx.Json(new { success = true });
+            return ctx.Json(new AuthSuccessResponse(true));
         });
 
         return app;
@@ -658,6 +673,11 @@ public static class Auth
             ExpiresAt: expiresAt,
             CreatedAt: ctx.Clock.IsoNow()));
 
-        ctx.Cookies.Set(_options.CookieName, token, expiresAt, _options.CookieDomain);
+        ctx.Cookies.Set(
+            _options.CookieName,
+            token,
+            expiresAt,
+            _options.CookieDomain,
+            _options.SecureCookies);
     }
 }

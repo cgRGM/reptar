@@ -4,7 +4,7 @@ using System.Text.Json;
 
 namespace Reptar;
 
-public sealed class PostgresDbClient : IDbClient
+public sealed class PostgresDbClient : IDbClient, IDisposable
 {
     private readonly string _connectionString;
     private readonly IJsonCodec _json;
@@ -16,6 +16,12 @@ public sealed class PostgresDbClient : IDbClient
     }
 
     public string ConnectionString => _connectionString;
+
+    /// <summary>
+    /// Per-command timeout in seconds. Applies to Npgsql commands created by
+    /// this client; 0 means no timeout.
+    /// </summary>
+    public int CommandTimeoutSeconds { get; set; } = 30;
 
     public async Task<List<T>> QueryAsync<T>(string sql, object? param = null)
     {
@@ -657,7 +663,10 @@ public sealed class PostgresDbClient : IDbClient
 
         try
         {
-            var context = new PostgresTransactionContext(conn, tx, _json);
+            var context = new PostgresTransactionContext(conn, tx, _json)
+            {
+                CommandTimeoutSeconds = CommandTimeoutSeconds,
+            };
             await action(context);
             await tx.CommitAsync();
             return 1;
@@ -717,6 +726,7 @@ public sealed class PostgresDbClient : IDbClient
                 try
                 {
                     await using var cmd = ds.CreateCommand(sql);
+                    cmd.CommandTimeout = CommandTimeoutSeconds;
                     for (var i = 0; i < parameters.Length; i++)
                     {
                         cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
@@ -781,6 +791,7 @@ public sealed class PostgresDbClient : IDbClient
                 try
                 {
                     await using var cmd = ds.CreateCommand(sql);
+                    cmd.CommandTimeout = CommandTimeoutSeconds;
                     for (var i = 0; i < parameters.Length; i++)
                     {
                         cmd.Parameters.AddWithValue(parameters[i] ?? DBNull.Value);
@@ -809,6 +820,14 @@ public sealed class PostgresDbClient : IDbClient
     public string? LastExecutedSql { get; private set; }
     public object?[]? LastExecutedParams { get; private set; }
 
+    public void Dispose()
+    {
+#if !NETWASM && !REPTAR_SQLITE_ONLY
+        _dataSource?.Dispose();
+        _dataSource = null;
+#endif
+    }
+
     private sealed record CountRow(int Count);
 }
 
@@ -818,6 +837,8 @@ public sealed class PostgresTransactionContext
     private readonly Npgsql.NpgsqlConnection _connection;
     private readonly Npgsql.NpgsqlTransaction _transaction;
     private readonly IJsonCodec _json;
+
+    public int CommandTimeoutSeconds { get; set; } = 30;
 
     internal PostgresTransactionContext(
         Npgsql.NpgsqlConnection connection,
@@ -833,6 +854,7 @@ public sealed class PostgresTransactionContext
     {
         var (normSql, paramValues) = PostgresDbClient.NormalizeSqlAndParams(sql, param, _json);
         await using var cmd = new Npgsql.NpgsqlCommand(normSql, _connection, _transaction);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         for (var i = 0; i < paramValues.Length; i++)
         {
             cmd.Parameters.AddWithValue(paramValues[i] ?? DBNull.Value);
@@ -844,6 +866,7 @@ public sealed class PostgresTransactionContext
     {
         var (normSql, paramValues) = PostgresDbClient.NormalizeSqlAndParams(sql, param, _json);
         await using var cmd = new Npgsql.NpgsqlCommand(normSql, _connection, _transaction);
+        cmd.CommandTimeout = CommandTimeoutSeconds;
         for (var i = 0; i < paramValues.Length; i++)
         {
             cmd.Parameters.AddWithValue(paramValues[i] ?? DBNull.Value);

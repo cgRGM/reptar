@@ -7,6 +7,7 @@ public sealed class ReptarResponse
     public int Status { get; init; } = 200;
     public string? ContentType { get; init; }
     public byte[]? Body { get; init; }
+    public string BodyText => Body is not null ? Encoding.UTF8.GetString(Body) : "";
     public Func<CancellationToken, IAsyncEnumerable<byte[]>>? BodyStream { get; init; }
     public Dictionary<string, string> Headers { get; } = new();
     public List<string> SetCookies { get; } = new();

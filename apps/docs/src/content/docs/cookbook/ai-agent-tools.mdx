@@ -1,0 +1,151 @@
+---
+title: AI Workspace Agent & In-Process Tools
+description: How to mount in-process workspace tools and stream multi-step agent reasoning loops over SSE.
+---
+
+Reptar includes `Reptar.AI`, a complete agent execution engine that runs tools **in-process** through the same pipeline as HTTP endpoints.
+
+Unlike Python agent frameworks that spawn slow subprocesses or call localhost HTTP tool servers, Reptar tools run with **zero HTTP overhead** and Native AOT type safety.
+
+---
+
+## 1. Mounting In-Process Workspace Tools
+
+Reptar provides built-in sandboxed workspace tools with directory path-traversal protection:
+
+```csharp
+var workspaceRoot = Directory.GetCurrentDirectory();
+
+// Mount read_file, write_file, edit_file, and list_dir.
+// run_command is opt-in because a shell is a full sandbox escape by design.
+app.UseWorkspaceTools(workspaceRoot, options =>
+{
+    options.AllowRunCommand = true;
+    // Optional: restrict to safe command prefixes.
+    // options.AllowedCommandPrefixes = ["bun ", "dotnet ", "git "];
+});
+```
+
+You can also define custom domain tools directly on `ReptarApp`:
+
+```csharp
+app.Post("/api/tools/search-docs", async ctx =>
+{
+    var query = await ctx.BindJsonAsync<SearchQuery>();
+    var results = await DocumentIndex.SearchAsync(query.Query, limit: query.Limit);
+    return ctx.Json(results);
+})
+.WithAiTool("search_docs", "Search technical documentation for keywords")
+.WithParam("query", "Search phrase")
+.WithParam("limit", "Maximum number of results to return (default 5)");
+```
+
+---
+
+## 2. In-Process Dispatch (`app.ExecuteAiToolAsync`)
+
+When the model calls a tool, the agent harness dispatches it in-process without an HTTP socket hop:
+
+```csharp
+var toolResult = await app.ExecuteAiToolAsync(
+    name: "read_file",
+    argumentsJson: """{"path":"src/app.cs","start_line":1,"end_line":40}"""
+);
+
+if (toolResult.Success)
+{
+    Console.WriteLine($"Output: {toolResult.ResultText}");
+}
+```
+
+Every path is validated against the workspace root. Any attempt to traverse (`../../`, absolute paths outside root) returns an immediate sandbox error.
+
+---
+
+## 3. Streaming Agent Loops over SSE
+
+Use `StreamingAgentHarness` and `ctx.StreamLlmAsync()` to stream tokens, tool executions, and reasoning steps directly to the browser:
+
+```csharp
+app.Post("/api/chat", ctx =>
+{
+    var body = await ctx.BindJsonAsync<ChatRequest>();
+    var (session, history) = await store.LoadOrCreateSessionAsync(body.SessionId, body.Message);
+
+    var client = LlmClientFactory.Create(LlmConfig.FromEnvironment(body.Provider, body.Model));
+
+    var events = RunStreamingAsync(app, client, store, session, history, body.Message);
+    return ctx.StreamLlmAsync(events);
+});
+
+private static async IAsyncEnumerable<string> RunStreamingAsync(
+    ReptarApp app,
+    ILlmClient client,
+    AgentSessionStore store,
+    AgentSessionRow session,
+    List<ChatMessage> history,
+    string userPrompt)
+{
+    history.Add(new ChatMessage("user", userPrompt));
+    await store.AppendMessageAsync(session.Id, history[^1]);
+
+    var channel = Channel.CreateUnbounded<string>();
+
+    _ = Task.Run(async () =>
+    {
+        try
+        {
+            var summary = await StreamingAgentHarness.RunAsync(
+                app,
+                client,
+                history,
+                systemPrompt: "You are a concise coding assistant.",
+                maxSteps: 20,
+                onEvent: evt =>
+                {
+                    switch (evt)
+                    {
+                        case AgentEvent.TurnStarted turn:
+                            channel.Writer.TryWrite(Json(new { type = "turn_start", step = turn.Step }));
+                            break;
+                        case AgentEvent.TextDelta delta:
+                            channel.Writer.TryWrite(Json(new { type = "text", text = delta.Text }));
+                            break;
+                        case AgentEvent.ToolCallStarted call:
+                            channel.Writer.TryWrite(Json(new { type = "tool_start", id = call.Id, name = call.Name, args = call.ArgumentsJson }));
+                            break;
+                        case AgentEvent.ToolCallFinished call:
+                            channel.Writer.TryWrite(Json(new { type = "tool_end", id = call.Id, name = call.Name, success = call.Success, elapsedMs = call.ElapsedMs }));
+                            break;
+                    }
+                });
+
+            channel.Writer.TryWrite(Json(new { type = "done", sessionId = session.Id }));
+        }
+        finally
+        {
+            channel.Writer.TryComplete();
+        }
+    });
+
+    while (await channel.Reader.WaitToReadAsync())
+    {
+        while (channel.Reader.TryRead(out var evt))
+            yield return evt;
+    }
+}
+```
+
+---
+
+## 4. Multi-Provider Credential Management
+
+Reptar automatically resolves provider credentials from environment variables or the persistent `~/.reptar/agent/auth.json` file (managed via `bun reptar agent --connect`):
+
+- **OpenAI**: `OPENAI_API_KEY`, `OPENAI_BASE_URL`
+- **Anthropic**: `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL`
+- **Google Gemini**: `GEMINI_API_KEY`, `GOOGLE_API_KEY`
+- **Ollama**: `OLLAMA_HOST` (no key needed, defaults to `http://localhost:11434`)
+- **Cloudflare AI Gateway**: `AI_GATEWAY_API_KEY` or custom gateway URLs
+- **OpenCode Zen**: `OPENCODE_API_KEY`
+- **Offline Echo**: Runs in deterministic offline mode when no credentials are present so offline development and self-tests always pass.

@@ -1,0 +1,204 @@
+---
+title: Built-in Middleware & Pipeline
+description: Zero-reflection security headers, body limits, perimeter SWR caching, sliding-window rate limiting, and custom middleware pipelines.
+---
+
+import { Tabs, TabItem } from "@astrojs/starlight/components";
+
+Reptar features an asynchronous, onion-style middleware pipeline. Middlewares execute in the order they are registered via `app.Use(...)` and can inspect requests, mutate response headers, short-circuit processing, or execute background work.
+
+Because Reptar targets both **Linux Native AOT (`net10.0`)** and **Cloudflare Workers (`netwasm0.1`)**, all built-in middlewares are 100% portable, allocation-conscious, and free of runtime reflection.
+
+---
+
+## The Middleware Signature
+
+A Reptar middleware is a delegate matching `Func<Ctx, Func<Task<ReptarResponse>>, Task<ReptarResponse>>`:
+
+```csharp
+app.Use(async (ctx, next) =>
+{
+    var start = ctx.Clock.IsoNow();
+
+    // Call the downstream handler or next middleware in the pipeline
+    var response = await next();
+
+    // Mutate headers on the way back up
+    response.Headers["X-Executed-At"] = start;
+    return response;
+});
+```
+
+To short-circuit the pipeline early (e.g. for authentication or rate limiting), return a `ReptarResponse` directly without calling `await next()`:
+
+```csharp
+app.Use(async (ctx, next) =>
+{
+    if (ctx.Req.Header("X-Internal-Secret") != "super-secret")
+    {
+        return ctx.Unauthorized("Invalid or missing internal secret.");
+    }
+
+    return await next();
+});
+```
+
+---
+
+## Built-in Middlewares
+
+Reptar includes production-ready perimeter middlewares built directly into the framework.
+
+### 1. Security Headers (`Middlewares.SecurityHeaders`)
+
+Configures browser perimeter security headers including **Content-Security-Policy (CSP)**, **HTTP Strict Transport Security (HSTS)**, **X-Frame-Options**, and **X-Content-Type-Options**.
+
+```csharp
+// Default security posture (HSTS, nosniff, DENY frame options)
+app.UseSecurityHeaders();
+
+// Or customize options fluently
+app.UseSecurityHeaders(options =>
+{
+    options.ContentSecurityPolicy = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'";
+    options.StrictTransportSecurity = "max-age=31536000; includeSubDomains; preload";
+    options.FrameOptions = "SAMEORIGIN";
+    options.ReferrerPolicy = "strict-origin-when-cross-origin";
+});
+```
+
+| Header | Default Value | Description |
+| :-- | :-- | :-- |
+| `Content-Security-Policy` | `null` (opt-in) | Restricts resource loading to approved origins and script sources. |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` | Enforces HTTPS connections in conforming browsers. |
+| `X-Frame-Options` | `DENY` | Prevents clickjacking by disabling embedding inside `<iframe>`. |
+| `X-Content-Type-Options` | `nosniff` | Disables MIME type sniffing by the browser. |
+| `X-XSS-Protection` | `1; mode=block` | Enables legacy browser reflective XSS filters. |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Strips sensitive referrers when navigating cross-origin. |
+
+---
+
+### 2. Request Body Limit (`Middlewares.BodyLimit`)
+
+Protects memory and prevents denial-of-service (DoS) attacks by rejecting oversized incoming request payloads before buffering.
+
+```csharp
+// Globally reject payloads exceeding 10 MB (10 * 1024 * 1024 bytes)
+app.UseBodyLimit(10 * 1024 * 1024);
+```
+
+When a request's `Content-Length` or chunked body exceeds the limit, Reptar short-circuits immediately with `413 Payload Too Large`:
+
+```json
+{
+  "code": "payload_too_large",
+  "message": "Request body exceeds the maximum permitted limit of 10485760 bytes.",
+  "requestId": "req_01J8F91M"
+}
+```
+
+> [!TIP] You can also override the body limit for individual routes using the fluent builder:
+>
+> ```csharp
+> app.Post("/api/uploads", async ctx => { /* ... */ })
+>     .WithMaxBody(50 * 1024 * 1024); // Allow 50 MB for this specific route
+> ```
+
+---
+
+### 3. Cross-Origin Resource Sharing (`Middlewares.Cors`)
+
+Enables cross-origin browser requests, handles `OPTIONS` preflight checks, and echoes approved origins with credentials support.
+
+```csharp
+// Allow specific origins
+app.Use(Middlewares.Cors(
+    origins: "https://my-app.com,https://staging.my-app.com",
+    methods: "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+    headers: "Content-Type,Authorization,X-Request-Id",
+    allowCredentials: true
+));
+```
+
+Preflight `OPTIONS` requests are terminated at the perimeter and return `204 No Content` with appropriate headers without invoking downstream route logic.
+
+---
+
+### 4. Perimeter SWR Caching (`CacheControl.SWR`)
+
+For high-throughput read workloads, `CacheControl.SWR` implements **Stale-While-Revalidate** in-memory caching. Hot anonymous `GET` requests are served from memory in **2.6 ms p50** (up to **39,214 req/s**), while stale cache entries are refreshed in the background.
+
+```csharp
+// Fresh for 15s; serve stale for up to 30s while revalidating
+app.Use(CacheControl.SWR(ttlSeconds: 15, swrSeconds: 30));
+```
+
+- **Mutation Invalidation**: Whenever a mutating request (`POST`, `PUT`, `PATCH`, `DELETE`) succeeds, the cache automatically invalidates affected paths so subsequent reads observe fresh data.
+- **Cache-Control Header**: Automatically emits standard HTTP headers:
+  ```http
+  Cache-Control: public, max-age=15, stale-while-revalidate=30
+  ```
+
+---
+
+### 5. Sliding-Window Rate Limiting (`RateLimit.SlidingWindow`)
+
+An $O(1)$ lock-free weighted sliding-window rate limiter that tracks request velocity per client IP without allocating timestamp lists.
+
+```csharp
+// Allow at most 120 requests per 60-second window per client IP
+app.Use(RateLimit.SlidingWindow(limit: 120, windowSeconds: 60));
+```
+
+The middleware automatically emits standard IETF rate-limit response headers:
+
+```http
+X-RateLimit-Limit: 120
+X-RateLimit-Remaining: 114
+X-RateLimit-Reset: 42
+```
+
+When a client exceeds their allowance, Reptar returns `429 Too Many Requests` with a `Retry-After` header.
+
+---
+
+### 6. W3C Server-Timing Observability (`ctx.ServerTiming`)
+
+Inspect request execution time inside Chrome and Firefox DevTools network waterfalls using the W3C `Server-Timing` header:
+
+```csharp
+app.Get("/api/dashboard", async ctx =>
+{
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    var stats = await ctx.Db.QueryAsync<Stats>("SELECT * FROM stats");
+    sw.Stop();
+
+    // Emits: Server-Timing: db;dur=4.2;desc="Metrics Query"
+    ctx.ServerTiming("db", sw.Elapsed.TotalMilliseconds, "Metrics Query");
+
+    return ctx.Json(stats);
+});
+```
+
+---
+
+## Route-Level vs Global Middleware
+
+- **Global Middleware**: Registered on `app.Use(...)` before routes. Applies to every incoming request.
+- **Group Middleware**: Registered on an `app.Group("/prefix")`. Applies only to routes mounted in that group.
+- **Route-Level Middleware**: You can pass middleware delegates directly into route definitions:
+
+```csharp
+var requireAdmin = async (Ctx ctx, Func<Task<ReptarResponse>> next) =>
+{
+    if (ctx.User?.Role != "admin")
+        return ctx.Forbidden("Administrator privileges required.");
+    return await next();
+};
+
+app.Delete("/api/users/:id", requireAdmin, async ctx =>
+{
+    await ctx.Db.ExecuteAsync("DELETE FROM users WHERE id = @id", ("id", ctx.Req.Param("id")));
+    return ctx.Status(204);
+});
+```

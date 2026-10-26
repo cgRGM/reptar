@@ -3,6 +3,13 @@ title: Authentication Adapters
 description: Integrating Better Auth, pure C# OAuth 2.0 PKCE, Clerk, and custom identity providers.
 ---
 
+:::caution[Roadmap]
+The `Clerk(...)` and `Custom(...)` adapters shown on this page are **not
+implemented yet**. The built-in C# auth slice and the Better Auth wire
+protocol are available today. The examples below document the intended shape
+for the upcoming adapter release.
+:::
+
 ## Better Auth Protocol & C# Server
 
 Reptar includes a first-class C# server implementation of the **Better Auth HTTP specification**. Your React, Vue, Svelte, or Astro frontend can use official `@better-auth/client` and `better-auth/react` hooks to sign in, register, and manage sessions directly against Reptar—with zero Node.js server dependencies.
@@ -44,8 +51,7 @@ var app = ReptarApp.Create(new ReptarConfig
 });
 
 // Mount Better Auth endpoints under /api/auth
-var authGroup = app.Group("/api/auth");
-BetterAuthProtocol.Routes(authGroup, authOptions);
+app.Route("/api/auth", BetterAuthProtocol.Routes(authOptions));
 
 // Use in protected endpoints
 app.Get("/api/dashboard", async ctx =>

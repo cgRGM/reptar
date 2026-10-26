@@ -58,13 +58,13 @@ reptar/
 │   ├── Reptar.Wasm/     # netwasm0.1 target: D1, R2, KV, Queues, AI, DO bridges
 │   ├── Reptar.Kestrel/  # Native ASP.NET Core Kestrel host for Native AOT
 │   ├── Reptar.Lambda/   # AWS Lambda custom runtime host (provided.al2023)
-│   └── Reptar.Tests/    # Framework unit and integration tests (37 tests)
+│   └── Reptar.Tests/    # Framework unit and integration tests (215 tests)
 ├── examples/
 │   └── blog/            # File-based C# reference app (no .csproj)
 ├── packages/
 │   ├── host/            # @reptar/host Worker shim (FFI bridge to Cloudflare env)
-│   ├── client/          # @reptar/client type-safe fetch RPC runtime
-│   ├── rpc/             # Generated contracts (app-type.d.ts, types.ts, openapi.json)
+│   ├── rpc/             # @reptar/client runtime + generated contracts
+│   │                    #   (AppType, types.ts, schemas.ts, openapi.json)
 │   ├── adapter-lambda/  # @reptar/adapter-lambda handler wrapper for Node.js Lambda
 │   ├── infra/           # Alchemy infrastructure (Cloudflare D1, R2, KV, Queues, AI)
 │   └── config/          # Shared TypeScript configuration
@@ -88,9 +88,12 @@ The backend is a file-based C# application (`examples/blog/app.cs`) with **no ap
 
 ```bash
 bun api:dev          # Run portable blog API locally (Kestrel on http://localhost:8787)
+bun reptar make:model Post -f   # Generate TableDef + DTO + CRUD feature slice
+bun reptar check:architecture   # Enforce the core/AI/terminal module boundary
+bun bench:gate --results <json> --baseline bench/perf-baseline.json  # Performance regression gate
 bun rpc:gen          # Generate contracts from C# route tree and sync packages/rpc
 bun rpc:check        # Typecheck the generated client contracts
-bun api:test         # Run all 37 framework unit tests
+bun api:test         # Run all 215 framework unit tests
 bun api:bench        # Run high-concurrency benchmarks (--target, -c, -d)
 bun e2e              # Run end-to-end integration tests
 bun run check        # Run Ultracite linter and formatter check
@@ -120,9 +123,9 @@ bun run fix          # Auto-fix code style issues
   - Constant-time HMAC-SHA256 signature verification for Stripe webhooks (`Stripe.VerifyWebhookSignatureAsync`).
   - Runs identically under both Wasm and Native AOT.
 
-### 4. Built-in Agent Engine (`Reptar.AI`)
+### 4. Optional Agent Engine (`Reptar.AI`)
 
-The framework ships a provider-agnostic AI agent engine — not an example, a core module (`framework/Reptar/AI/`):
+The framework ships a provider-agnostic AI agent engine as an optional project (`framework/Reptar.AI/`), not a dependency of the web core:
 
 - **Streaming LLM clients** for OpenAI-compatible endpoints (incl. OpenRouter and Vercel AI Gateway), Anthropic, Gemini, and local Ollama — plus an offline **Echo** provider so `bun reptar agent` works with zero API keys.
 - **Interactive provider connection** (Pi `/login` + OpenCode `/connect` parity): `bun reptar agent --connect [provider]` or in-session `/connect` — provider picker with live status, hidden API-key entry, live connection test, model catalog picker, saved to `~/.reptar/agent/auth.json` (0600). `/providers` shows every provider's credential source; custom OpenAI-compatible endpoints register through `Other`; env keys always win over saved credentials.
@@ -143,7 +146,7 @@ Showcase app: [`examples/agent-cli`](./examples/agent-cli) — file-based `app.c
 
 Inside the Cloudflare Worker isolate, C# interacts with Cloudflare platform primitives with zero network hops:
 
-- **Storage (`ctx.Storage`)**: R2 object store (`PutAsync`, `GetAsync`, `DeleteAsync`).
+- **Storage (`ctx.Storage`)**: R2 / S3 / local object store with metadata (`HeadAsync`), byte ranges (`GetRangeAsync`), cursor listing (`ListAsync`), presigned uploads and downloads, typed `StorageException` errors, and `ctx.File` / `ctx.Attachment` for `ETag`/`304`, `Range`/`206`, and `HEAD` responses.
 - **Cache (`ctx.Cache`)**: KV key-value store with TTL support.
 - **Queues (`ctx.Queue`)**: Message queue producer.
 - **Workers AI (`ctx.AI`)**: Edge LLM inferences (`@cf/meta/llama-3.2-1b-instruct`).
@@ -172,6 +175,12 @@ VPS Native AOT results with 300 seeded articles and autocannon:
 | `GET /api/articles/feed`      |     755 | 129 ms |
 | `GET /api/articles?tag=bench` |     592 | 164 ms |
 | `POST /api/articles`          |     210 |  42 ms |
+
+> **Cache caveat:** the list, tag-filter, and single-article figures include
+> Kestrel's anonymous SWR cache. On the same 2-core benchmark VPS,
+> cache-busted `/api/tags` measured ~4.2k req/s and cache-busted
+> `/api/articles?limit=20` ~236 req/s (p50 ~211 ms). Treat cached and
+> uncached numbers separately; authenticated/write paths bypass the cache.
 
 List responses now omit the article body and fetch tags, favorite counts, favorite state, and follow state in page-level batches instead of per-row correlated subqueries. The SQLite WAL read pool added in `461be2e` lets those reads run concurrently, and article creation batches the article, tag, and junction writes into one transaction. The image remains **38.3 MB uncompressed / 11.6 MB compressed** after removing the 22 MB `.dbg` symbols.
 

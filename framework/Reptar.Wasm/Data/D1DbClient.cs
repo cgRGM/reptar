@@ -92,18 +92,51 @@ public sealed class D1DbClient : IDbClient
         return QueryAsync<T>(sql.ToString(), param);
     }
 
-    public Task<int> InsertAsync<T>(TableDef table, T values) where T : class
-    {
-        var json = _json.Serialize(values);
-        return InsertFromJsonAsync(table, json);
-    }
+    public Task<int> InsertAsync<T>(TableDef table, T values) where T : class =>
+        InsertAsync(table, (object)values);
 
     public Task<int> InsertAsync(TableDef table, object values)
     {
+        // Dictionaries (and any IDictionary) map straight onto columns:
+        // System.Text.Json source generation under NetWasm has no metadata
+        // for Dictionary<string, object?> and would otherwise throw
+        // NotSupportedException at runtime.
+        if (values is IDictionary dictionary)
+        {
+            var cols = new List<string>();
+            var paramValues = new List<object?>();
+
+            foreach (DictionaryEntry entry in dictionary)
+            {
+                cols.Add($"\"{ResolveColumnName(table, entry.Key?.ToString() ?? "")}\"");
+                paramValues.Add(entry.Value);
+            }
+
+            var placeholders = string.Join(", ", System.Linq.Enumerable.Repeat("?", cols.Count));
+            var sql = $"insert into \"{table.Name}\" ({string.Join(", ", cols)}) values ({placeholders})";
+            return ExecuteAsync(sql, SerializeParams(paramValues));
+        }
+
         var json = values is string s && s.TrimStart().StartsWith("{")
             ? s
-            : _json.Serialize(values);
+            : SerializeForInsert(values);
         return InsertFromJsonAsync(table, json);
+    }
+
+    private string SerializeForInsert(object values)
+    {
+        try
+        {
+            return _json.Serialize(values);
+        }
+        catch (System.NotSupportedException exception)
+        {
+            throw new System.NotSupportedException(
+                $"Serializing {values.GetType()} for a D1 insert requires the type in the app's JsonSerializerContext " +
+                $"(set ReptarJson.Options.TypeInfoResolver in your worker Program.cs and add [JsonSerializable(typeof({values.GetType().Name}))]), " +
+                "or pass an IDictionary / raw JSON string / raw ExecuteAsync parameters instead.",
+                exception);
+        }
     }
 
     private Task<int> InsertFromJsonAsync(TableDef table, string json)

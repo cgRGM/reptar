@@ -1,0 +1,69 @@
+---
+title: Agent & Prompt Evals
+description: Score model and agent behavior in CI — expected outputs, custom predicates, or an LLM judge whose verdict is itself a validated structured output. Free and deterministic against mock providers.
+---
+
+Prompts drift, models get upgraded, agents get new tools — and nothing in CI notices until a user does. Reptar's eval runner turns a list of cases into a scored, persisted report, and against a mock provider it costs nothing and never flakes.
+
+---
+
+## 1. The smallest useful eval
+
+```csharp
+using Reptar.AI;
+
+var client = LlmClientFactory.Create(LlmConfig.Echo("echo")); // or any ILlmClient
+
+var run = await AgentEvalRunner.RunAsync(
+    client,
+    [
+        new EvalCase("What is the capital of France?", "Paris"),
+        new EvalCase("What is 2+2?", "4"),
+    ],
+    [new ExpectedOutputScorer()]);
+
+Console.WriteLine($"{run.Passed}/{run.Total} passed ({run.PassRate:P0})");
+```
+
+`ExpectedOutputScorer` supports three match modes: `"exact"`, `"contains"`, and the default whitespace/case-normalized `"normalized-contains"`. A case passes when **every** scorer passes; `run.Cases[i]` carries each metric's score and notes.
+
+## 2. Custom checks and the LLM judge
+
+```csharp
+var scorers = new List<IEvalScorer>
+{
+    // Host-defined predicate — cheap and deterministic.
+    new PredicateScorer("mentions_rejection_reason",
+        (question, response) => response.Contains("because", StringComparison.OrdinalIgnoreCase)),
+
+    // LLM-as-judge: opt-in, costs a second model call per case.
+    // The verdict returns through GenerateAsync<JudgeVerdict> — schema-validated
+    // and retried, so a malformed judge reply can't silently fail an eval.
+    new LlmJudgeScorer(judgeClient, threshold: 0.7, rubric: """
+        Grade accuracy first, then completeness.
+        Penalize invented facts heavily.
+        """),
+};
+```
+
+The judge is the composition worth noticing: `LlmJudgeScorer` uses the [structured output](/cookbook/structured-llm-outputs/) API for its verdict, so the judge's `{"score": 0.9, "passed": true, "reasoning": ...}` is *validated by `Rule<T>`* before it can decide anything.
+
+## 3. Persist runs for CI reporting
+
+Every case writes a row to a plain `TableDef` — wired for the same SQLite/D1/Postgres as everything else:
+
+```csharp
+var store = new AgentEvalStore(db, AgentEvalSchema.Evals());
+await store.EnsureCreatedAsync();
+
+foreach (var (result, evalCase) in zip)
+{
+    await store.AppendAsync(run.RunId, result, expected: "Paris");
+}
+```
+
+Query `ListRunAsync(runId)` for the report page; alert on `PassRate` dropping below a threshold in your CI script.
+
+## 4. Free CI with mock providers
+
+Point the runner at the [AI Gateway](/ai/ai-gateway/) `mock-*` models (or `LlmConfig.Echo`) and the whole suite is deterministic and zero-cost — a genuine CI gate for *your prompts and agent behavior*, not just your code. Swap in a real `ILlmClient` for nightly regression runs; scorers don't care which client they're grading.

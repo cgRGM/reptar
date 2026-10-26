@@ -133,10 +133,10 @@ public interface IDbClient
         BatchAsync(statements.Select(s => new DbStatement(s.Sql, s.Param)).ToArray());
 
     Task TransactionAsync(Func<IDbClient, Task> action) =>
-        action(this);
+        BufferedTransactionClient.RunAsync(this, action);
 
     Task<T> TransactionAsync<T>(Func<IDbClient, Task<T>> action) =>
-        action(this);
+        BufferedTransactionClient.RunAsync(this, action);
 }
 
 [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors | System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)]
@@ -176,6 +176,12 @@ public interface IAppLogger
     void Info(string message);
     void Warn(string message);
     void Error(string message);
+
+    /// <summary>
+    /// Emits one structured request record. The default keeps custom loggers
+    /// source-compatible by formatting the record as JSON through Info.
+    /// </summary>
+    void Request(in RequestTelemetry telemetry) => Info(telemetry.ToJson());
 }
 
 public sealed class ConsoleAppLogger : IAppLogger
@@ -183,6 +189,8 @@ public sealed class ConsoleAppLogger : IAppLogger
     public void Info(string message) => Console.WriteLine(message);
     public void Warn(string message) => Console.WriteLine($"WARN {message}");
     public void Error(string message) => Console.Error.WriteLine(message);
+    public void Request(in RequestTelemetry telemetry) =>
+        Console.WriteLine(telemetry.ToJson());
 }
 
 public interface IErrorMapper
@@ -490,20 +498,38 @@ public sealed class NoopKvClient : IKvClient
 
 public interface IQueueClient
 {
-    Task SendAsync(string queueName, string messageJson);
+    Task SendAsync(string queueName, string messageJson, QueueSendOptions? options = null);
+
+    /// <summary>
+    /// Providers without a native batch API fall back to sequential sends.
+    /// </summary>
+    Task SendBatchAsync(
+        string queueName,
+        IReadOnlyList<string> messagesJson,
+        QueueSendOptions? options = null)
+    {
+        var tasks = new Task[messagesJson.Count];
+        for (var index = 0; index < messagesJson.Count; index++)
+        {
+            tasks[index] = SendAsync(queueName, messagesJson[index], options);
+        }
+        return Task.WhenAll(tasks);
+    }
 
     Task SendAsync<
         [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors |
             System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)] T>(
         string queueName,
-        T message) =>
-        SendAsync(queueName, System.Text.Json.JsonSerializer.Serialize(message, ReptarJson.Options));
+        T message,
+        QueueSendOptions? options = null) =>
+        SendAsync(queueName, System.Text.Json.JsonSerializer.Serialize(message, ReptarJson.Options), options);
 }
 
 public sealed class NoopQueueClient : IQueueClient
 {
-    public Task SendAsync(string queueName, string messageJson) => Task.CompletedTask;
+    public Task SendAsync(string queueName, string messageJson, QueueSendOptions? options = null) =>
+        Task.CompletedTask;
 }
 
 public interface IDurableBridge
@@ -519,37 +545,152 @@ public sealed class NoopDurableBridge : IDurableBridge
 
 public sealed record HttpResponseData(int Status, Dictionary<string, string> Headers, string Body);
 
+public sealed record HttpBytesResponse(int Status, Dictionary<string, string> Headers, byte[] Body);
+
 public interface IHttpClient
 {
     Task<HttpResponseData> FetchAsync(string url, string method = "GET", Dictionary<string, string>? headers = null, string body = "");
+
+    /// <summary>
+    /// Binary-safe request path used by object storage. Providers that only
+    /// implement <see cref="FetchAsync"/> must override this to support binary
+    /// payloads; the default fails loudly rather than silently corrupting bytes.
+    /// </summary>
+    Task<HttpBytesResponse> FetchBytesAsync(
+        string url,
+        string method = "GET",
+        Dictionary<string, string>? headers = null,
+        byte[]? body = null,
+        string? contentType = null) =>
+        Task.FromException<HttpBytesResponse>(
+            new NotSupportedException(
+                $"{GetType().Name} does not implement binary HTTP requests. Override FetchBytesAsync to use S3/R2 object storage."));
 }
 
 #if !NETWASM
 public sealed class DefaultHttpClient : IHttpClient
 {
+    private static readonly System.Net.Http.HttpClient Client = new()
+    {
+        // Long enough for streaming LLM completions, short enough to avoid
+        // hanging a request forever on a dead upstream. Override per host.
+        Timeout = TimeSpan.FromSeconds(
+            int.TryParse(
+                Environment.GetEnvironmentVariable("REPTAR_HTTP_TIMEOUT_SECONDS"),
+                out var seconds) && seconds > 0
+                ? seconds
+                : 100),
+    };
+
     public async Task<HttpResponseData> FetchAsync(string url, string method = "GET", Dictionary<string, string>? headers = null, string body = "")
     {
-        using var client = new System.Net.Http.HttpClient();
         using var request = new System.Net.Http.HttpRequestMessage(new System.Net.Http.HttpMethod(method), url);
+        var requestContentType = GetHeader(headers, "Content-Type");
         if (headers is not null)
         {
             foreach (var (k, v) in headers)
             {
+                if (IsContentHeader(k))
+                {
+                    continue;
+                }
                 request.Headers.TryAddWithoutValidation(k, v);
             }
         }
         if (!string.IsNullOrEmpty(body) && (method == "POST" || method == "PUT" || method == "PATCH"))
         {
-            request.Content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            var content = new System.Net.Http.StringContent(body, System.Text.Encoding.UTF8);
+            content.Headers.ContentType =
+                System.Net.Http.Headers.MediaTypeHeaderValue.Parse(
+                    string.IsNullOrWhiteSpace(requestContentType)
+                        ? "application/json"
+                        : requestContentType);
+            request.Content = content;
         }
-        using var response = await client.SendAsync(request);
+        using var response = await Client.SendAsync(request);
         var responseBody = await response.Content.ReadAsStringAsync();
-        var respHeaders = new Dictionary<string, string>();
+        var respHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var h in response.Headers)
+        {
+            respHeaders[h.Key] = string.Join(",", h.Value);
+        }
+        foreach (var h in response.Content.Headers)
         {
             respHeaders[h.Key] = string.Join(",", h.Value);
         }
         return new HttpResponseData((int)response.StatusCode, respHeaders, responseBody);
     }
+
+    public async Task<HttpBytesResponse> FetchBytesAsync(
+        string url,
+        string method = "GET",
+        Dictionary<string, string>? headers = null,
+        byte[]? body = null,
+        string? contentType = null)
+    {
+        using var request = new System.Net.Http.HttpRequestMessage(new System.Net.Http.HttpMethod(method), url);
+        var requestContentType = string.IsNullOrWhiteSpace(contentType)
+            ? GetHeader(headers, "Content-Type")
+            : contentType;
+        if (headers is not null)
+        {
+            foreach (var (k, v) in headers)
+            {
+                if (IsContentHeader(k))
+                {
+                    continue;
+                }
+                request.Headers.TryAddWithoutValidation(k, v);
+            }
+        }
+
+        if (body is not null && (method == "POST" || method == "PUT" || method == "PATCH"))
+        {
+            var content = new System.Net.Http.ByteArrayContent(body);
+            if (!string.IsNullOrWhiteSpace(requestContentType))
+            {
+                content.Headers.ContentType =
+                    System.Net.Http.Headers.MediaTypeHeaderValue.Parse(requestContentType);
+            }
+            request.Content = content;
+        }
+
+        using var response = await Client.SendAsync(request);
+        var responseBody = await response.Content.ReadAsByteArrayAsync();
+        var respHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var h in response.Headers)
+        {
+            respHeaders[h.Key] = string.Join(",", h.Value);
+        }
+        foreach (var h in response.Content.Headers)
+        {
+            respHeaders[h.Key] = string.Join(",", h.Value);
+        }
+        return new HttpBytesResponse((int)response.StatusCode, respHeaders, responseBody);
+    }
+
+    private static string? GetHeader(
+        Dictionary<string, string>? headers,
+        string name)
+    {
+        if (headers is null)
+            return null;
+
+        if (headers.TryGetValue(name, out var value))
+            return value;
+
+        foreach (var (key, candidate) in headers)
+        {
+            if (string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                return candidate;
+        }
+
+        return null;
+    }
+
+    private static bool IsContentHeader(string name) =>
+        string.Equals(name, "Content-Type", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(name, "Content-Length", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(name, "Host", StringComparison.OrdinalIgnoreCase);
 }
 #endif
