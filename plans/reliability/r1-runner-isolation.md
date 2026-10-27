@@ -10,7 +10,8 @@ Process cleanup is idempotent and awaits the child lifecycle, allows graceful te
 
 ## Evidence on this branch
 
-- Seven runner tests pass, including an unrelated sentinel remaining available after occupied-port refusal and owned cleanup, duplicate cleanup, already-exited child, missing executable, invalid/conflicting configuration, and a child deliberately ignoring SIGTERM.
+- Ten runner tests pass, including an unrelated sentinel remaining available after occupied-port refusal and owned cleanup, duplicate cleanup, already-exited child, missing executable, invalid/conflicting configuration, and a child deliberately ignoring SIGTERM. Added explicit descendant-tree reaping, independent concurrent groups, and teardown after an injected scope failure.
+- Negative control: temporarily replaced process-group signaling with parent-only signaling. The descendant test failed deterministically because the surviving group did not terminate; its finally block cleaned the known fixture descendant. Restored implementation passes. Disposable state is retained on thrown startup/cleanup failures rather than deleting files beneath a potentially live process.
 - The forced-termination test initially exposed a group-probe/child-reaping race on macOS. Cleanup now awaits the parent's close lifecycle with a bound before probing after either termination signal; the original error is retained in operator-local logs.
 - Combined host/client/CLI/docs/benchmark/runner suite: **38 pass / 103 assertions**, no failures.
 - Native Rooms websocket smoke passes with an isolated SQLite database and loopback bind.
@@ -20,6 +21,6 @@ Process cleanup is idempotent and awaits the child lifecycle, allows graceful te
 
 ## Acceptance still pending
 
-This is the first R1 implementation, not completion of the reliability program. Linux CI must exercise the same tests and full two-host smoke. Extend explicit descendant-process and concurrent-run failure assertions before considering all runner ownership criteria closed. A busy-port bind probe cannot permanently reserve the port while a separate server starts; runtime identity/readiness hardening remains a further boundary to test. Other harnesses still require their own ownership audit.
+This is the first R1 implementation, not completion of the reliability program. Linux CI must exercise the final-head tests and full two-host smoke before this work package is accepted. A busy-port bind probe cannot permanently reserve the port while a separate server starts; runtime identity/readiness hardening remains a further boundary to test. Other harnesses still require their own ownership audit.
 
 No production applications, Cloudflare resources, VPS services, credentials, shared checkout edits, or paid provider calls were modified by this verification.

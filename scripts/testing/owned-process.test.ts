@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { once } from "node:events";
+import path from "node:path";
 
 import { runRealtimeSmoke } from "../test-realtime";
 import { assertPortAvailable, spawnOwnedProcess } from "./owned-process";
@@ -101,6 +102,95 @@ test("owned cleanup escalates when its child ignores graceful termination", asyn
     await owned.stop();
   }
 }, 10_000);
+
+test("cleanup terminates and reaps the owned descendant tree", async () => {
+  const owned = await spawnOwnedProcess(
+    process.execPath,
+    [path.join(import.meta.dir, "owned-tree.fixture.ts")],
+    { stdio: ["ignore", "pipe", "ignore"] }
+  );
+  let descendantPid: number | undefined;
+  try {
+    const output = owned.child.stdout;
+    if (!output) {
+      throw new Error("Owned fixture has no readiness stream.");
+    }
+    const [chunk] = await once(output, "data", {
+      signal: AbortSignal.timeout(5000),
+    });
+    const ready: unknown = JSON.parse(chunk.toString());
+    if (
+      typeof ready !== "object" ||
+      ready === null ||
+      !("childPid" in ready) ||
+      typeof ready.childPid !== "number"
+    ) {
+      throw new Error("Owned fixture did not identify its descendant.");
+    }
+    descendantPid = ready.childPid;
+    expect(process.kill(descendantPid, 0)).toBe(true);
+    await owned.stop();
+    const reapedPid = descendantPid;
+    expect(() => process.kill(reapedPid, 0)).toThrow();
+    descendantPid = undefined;
+  } finally {
+    try {
+      await owned.stop();
+    } finally {
+      if (descendantPid !== undefined) {
+        try {
+          process.kill(descendantPid, "SIGKILL");
+        } catch {
+          // This PID was emitted by our fixture, never discovered by port.
+        }
+      }
+    }
+  }
+}, 10_000);
+
+test("concurrent owned groups cannot terminate one another", async () => {
+  const first = await spawnOwnedProcess(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" }
+  );
+  const second = await spawnOwnedProcess(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" }
+  );
+  try {
+    await first.stop();
+    const secondPid = second.child.pid;
+    if (!secondPid) {
+      throw new Error("Second owned process has no PID.");
+    }
+    expect(process.kill(secondPid, 0)).toBe(true);
+    expect(second.child.exitCode).toBeNull();
+    expect(second.child.signalCode).toBeNull();
+  } finally {
+    await Promise.all([first.stop(), second.stop()]);
+  }
+});
+
+test("a failure inside an owned scope still tears down its process", async () => {
+  const owned = await spawnOwnedProcess(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { stdio: "ignore" }
+  );
+  const failWithinScope = async () => {
+    try {
+      throw new Error("injected smoke failure");
+    } finally {
+      await owned.stop();
+    }
+  };
+  await expect(failWithinScope()).rejects.toThrow("injected smoke failure");
+  expect(owned.child.exitCode !== null || owned.child.signalCode !== null).toBe(
+    true
+  );
+});
 
 test("failed executable startup reports the failure", async () => {
   await expect(

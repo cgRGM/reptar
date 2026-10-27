@@ -214,6 +214,7 @@ export const runRealtimeSmoke = async (options: {
     throw new Error("Realtime smoke hosts must use distinct ports.");
   }
   const stateRoot = mkdtempSync(path.join(tmpdir(), "reptar-realtime-"));
+  let cleanupComplete = false;
   try {
     if (!options.kestrelOnly) {
       workersPassed = await runWorkersSmoke(
@@ -227,8 +228,13 @@ export const runRealtimeSmoke = async (options: {
         path.join(stateRoot, "rooms.db")
       );
     }
+    cleanupComplete = true;
   } finally {
-    rmSync(stateRoot, { force: true, recursive: true });
+    if (cleanupComplete) {
+      rmSync(stateRoot, { force: true, recursive: true });
+    } else {
+      console.error(`Retaining disposable state after failure: ${stateRoot}`);
+    }
   }
 
   console.log("\n──────────────────────────────");
