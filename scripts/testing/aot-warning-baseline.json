@@ -2,7 +2,7 @@
   "schema": 1,
   "sdk": "10.0.401",
   "sourceBaseline": "240f93e02cf1e9ba8d7a53d23e000fa770e637ca plus R4 guard changes",
-  "scope": "Native publish logs for agent, HTTP, sessions, background lifecycle, Rooms and AOT contract fixtures; source spans and ILC member diagnostics remain exact. This is an acknowledged-risk inventory, not suppression or proof that warnings are harmless.",
+  "scope": "Native publish logs for agent, HTTP, sessions, background lifecycle, Rooms, real-SQLite Rooms fault boundaries and AOT contract fixtures; source spans and ILC member diagnostics remain exact. This is an acknowledged-risk inventory, not suppression or proof that warnings are harmless.",
   "instances": [
     {
       "diagnostic": "ILC|IL2026|Reptar.AI.AgentEventJson.MessageNode(ChatMessage): Using member 'System.Text.Json.Nodes.JsonArray.Add<JsonObject>(JsonObject)' which has 'RequiresUnreferencedCodeAttribute' can break functionality when trimming application code. Creating JsonValue instances with non-primitive types is not compatible with trimming. It can result in non-primitive types being serialized, which may have their members trimmed.",

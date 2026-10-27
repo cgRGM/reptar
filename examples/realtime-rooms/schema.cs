@@ -3,7 +3,8 @@ using static Reptar.ReptarApi;
 
 public static partial class Schema
 {
-    // Persisted snapshot of every `broadcast` message fanned out to a room.
+    // Best-effort persisted broadcast snapshots. A relayed frame is not a
+    // durability acknowledgement; queue drops/write failures are explicit stats.
     // Storage schema lives in TableDef (never on the DTO records) per Reptar rules.
     public static readonly TableDef RoomMessages = DefineTable("room_messages",
         Col.Text("id").PrimaryKey(),

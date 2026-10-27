@@ -104,7 +104,7 @@ const assert = (condition: boolean, message: string) => {
   }
 };
 
-const waitForPersistence = async (): Promise<Frame> => {
+const waitForPersistence = async (expected = 1): Promise<Frame> => {
   const deadline = Date.now() + 5000;
   while (true) {
     // eslint-disable-next-line no-await-in-loop -- Native fanout precedes the queued SQLite commit.
@@ -114,12 +114,15 @@ const waitForPersistence = async (): Promise<Frame> => {
     }
     // eslint-disable-next-line no-await-in-loop -- Inspect each persistence attempt before polling again.
     const snapshot = (await response.json()) as Frame;
-    if (Number(snapshot.messagesPersistFailed) > 0) {
+    if (
+      Number(snapshot.messagesPersistFailed) > 0 ||
+      Number(snapshot.messagesPersistDropped) > 0
+    ) {
       throw new Error(
         `message persistence failed: ${JSON.stringify(snapshot)}`
       );
     }
-    if (Number(snapshot.messagesPersisted) >= 1) {
+    if (Number(snapshot.messagesPersisted) >= expected) {
       return snapshot;
     }
     if (Date.now() >= deadline) {
@@ -192,10 +195,42 @@ try {
   );
   const history = (await historyResponse.json()) as Frame[];
   assert(history.length === 1, "one persisted message in history");
+  assert(
+    history[0]?.id === mine.id,
+    "history preserves the relayed message id"
+  );
   // payload is stored as TEXT (raw JSON), so it round-trips as a string.
   const persisted = JSON.parse(String(history[0]?.payload)) as Frame;
   assert(persisted.text === "hi", "persisted payload matches");
   assert(typeof history[0]?.createdAt === "string", "created_at was defaulted");
+
+  const serverResponse = await fetch(`${host}/rooms/${room}/broadcast`, {
+    body: JSON.stringify({
+      payload: { text: "server-note" },
+      senderId: "server",
+    }),
+    headers: { "Content-Type": "application/json" },
+    method: "POST",
+  });
+  assert(
+    serverResponse.status === 202,
+    "server fanout is accepted, not a durability ack"
+  );
+  const serverFrame = await nextFrame(alice, "message");
+  assert(
+    serverFrame.payload.text === "server-note",
+    "REST fanout reaches the live peer"
+  );
+  await waitForPersistence(2);
+  const serverHistoryResponse = await fetch(
+    `${host}/rooms/${room}/messages?limit=10`
+  );
+  const serverHistory = (await serverHistoryResponse.json()) as Frame[];
+  assert(serverHistory.length === 2, "WebSocket and REST snapshots persist");
+  assert(
+    serverHistory.some((message) => message.id === serverFrame.id),
+    "REST frame id survives persistence"
+  );
 
   const peersResponse = await fetch(`${host}/rooms/${room}/peers`);
   const peers = (await peersResponse.json()) as Frame[];
