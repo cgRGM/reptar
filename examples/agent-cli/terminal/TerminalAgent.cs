@@ -1196,10 +1196,10 @@ public sealed class TerminalAgent(
         {
             var saved = _auth.Credentials.Keys
                 .Where(key => !(LlmProviders.IsKnown(key) && LlmProviders.CredentialSource(key, _auth).Source == "env"))
-                .Select(key => new TerminalUi.SelectItem(
-                    key,
+                .Select(key => new TermSelectorItem(
                     LlmProviders.Find(key)?.DisplayName ?? key,
-                    LlmProviders.FormatStatus(key, _auth)))
+                    LlmProviders.FormatStatus(key, _auth),
+                    Value: key))
                 .ToList();
 
             target = saved.Count == 0
@@ -1392,7 +1392,7 @@ public sealed class TerminalAgent(
                 var detail = model is { ContextTokens: > 0 }
                     ? $"{model.ContextTokens / 1000}k ctx"
                     : null;
-                return new TerminalUi.SelectItem(id, label, detail);
+                return new TermSelectorItem(label, detail ?? "", Value: id);
             })
             .ToList();
 
@@ -1409,10 +1409,10 @@ public sealed class TerminalAgent(
             var saved = _auth.Credentials.Keys
                 .Where(key => !(LlmProviders.IsKnown(key) &&
                                 LlmProviders.CredentialSource(key, _auth).Source == "env"))
-                .Select(key => new TerminalUi.SelectItem(
-                    key,
+                .Select(key => new TermSelectorItem(
                     LlmProviders.Find(key)?.DisplayName ?? key,
-                    LlmProviders.FormatStatus(key, _auth)))
+                    LlmProviders.FormatStatus(key, _auth),
+                    Value: key))
                 .ToList();
 
             if (saved.Count == 0)
@@ -1425,14 +1425,14 @@ public sealed class TerminalAgent(
         }
 
         var items = LlmProviders.Known
-            .Select(info => new TerminalUi.SelectItem(
-                info.Key,
+            .Select(info => new TermSelectorItem(
                 info.DisplayName,
                 LlmProviders.FormatStatus(info.Key, _auth) +
-                    (info.Note is { Length: > 0 } ? "  ·  " + info.Note : "")))
+                    (info.Note is { Length: > 0 } ? "  ·  " + info.Note : ""),
+                Value: info.Key))
             .ToList();
 
-        items.Add(new TerminalUi.SelectItem("other", "Other (custom OpenAI-compatible endpoint)"));
+        items.Add(new TermSelectorItem("Other (custom OpenAI-compatible endpoint)", "", Value: "other"));
 
         return TerminalUi.Select("select a provider to configure", items);
     }

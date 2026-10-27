@@ -109,16 +109,31 @@ public sealed class AgentEvalStore(IDbClient db, TableDef evals)
             result.Response,
             result.Score,
             result.Passed ? 1 : 0,
-            JsonSerializer.Serialize(result.Metrics.Select(m => new
-            {
-                name = m.Name,
-                score = m.Score,
-                passed = m.Passed,
-                notes = m.Notes
-            }), ReptarJson.Options),
+            SerializeMetrics(result.Metrics),
             DateTimeOffset.UtcNow.ToString("O"));
 
         return db.InsertAsync(evals, row);
+    }
+
+    /// <summary>
+    /// Renders the metric list without reflection, so an AOT build does not throw here.
+    /// </summary>
+    private static string SerializeMetrics(IReadOnlyList<EvalMetricResult> metrics)
+    {
+        var array = new System.Text.Json.Nodes.JsonArray();
+
+        foreach (var metric in metrics)
+        {
+            array.Add(new System.Text.Json.Nodes.JsonObject
+            {
+                ["name"] = metric.Name,
+                ["score"] = metric.Score,
+                ["passed"] = metric.Passed,
+                ["notes"] = metric.Notes
+            });
+        }
+
+        return array.ToJsonString();
     }
 
     public Task<List<EvalRow>> ListRunAsync(string runId) =>

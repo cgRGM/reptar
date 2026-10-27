@@ -135,16 +135,19 @@ public static class TerminalUi
     // Selection prompt (arrow keys + type-to-search)
     // ------------------------------------------------------------------
 
-    public sealed record SelectItem(string Id, string Label, string? Detail = null);
-
     /// <summary>
-    /// Interactive single selection. Arrow keys navigate, typing filters,
-    /// Enter confirms, Escape cancels. Falls back to a numbered menu when
-    /// stdin is redirected (scripts, CI, pipes).
+    /// Interactive single selection. Arrow keys navigate, typing filters, Enter confirms, Escape
+    /// cancels. Falls back to a numbered menu when stdin is redirected (scripts, CI, pipes).
     /// </summary>
+    /// <remarks>
+    /// Delegates matching and selection to <see cref="TermSelector"/>, which is the one
+    /// implementation of those rules. This method owns only the console framing: erase the
+    /// previous frame, print the new one. Two copies of fuzzy matching and wrap-around selection
+    /// is how the terminal and full-screen clients drift apart.
+    /// </remarks>
     public static string? Select(
         string title,
-        IReadOnlyList<SelectItem> items,
+        IReadOnlyList<TermSelectorItem> items,
         string? hint = null)
     {
         if (items.Count == 0)
@@ -153,18 +156,34 @@ public static class TerminalUi
         if (IsPiped)
             return SelectNumbered(title, items, hint);
 
-        var filter = new StringBuilder();
-        var cursor = 0;
-        var visible = new List<SelectItem>(items);
+        var selector = new TermSelector(title, items)
+        {
+            Hint = hint ?? "type to filter · ↑↓ move · enter select · esc cancel"
+        };
 
-        WriteSelectFrame(title, items, visible, cursor, filter.ToString(), hint, firstPaint: true);
+        var width = Math.Max(40, SafeWidth());
+        var previousRows = 0;
+
+        void Paint()
+        {
+            if (previousRows > 0)
+                EraseSelectFrame(previousRows);
+
+            var lines = selector.RenderLines(width, MaxPageSize);
+            foreach (var line in lines)
+                Console.WriteLine("  " + line);
+
+            previousRows = lines.Count;
+        }
+
+        Paint();
 
         while (true)
         {
             var read = ReadTermKey();
             if (read is null)
             {
-                EraseSelectFrame(lastFrameRows);
+                EraseSelectFrame(previousRows);
                 return null;
             }
 
@@ -173,40 +192,35 @@ public static class TerminalUi
             switch (key.Key)
             {
                 case ConsoleKey.Enter:
-                    if (visible.Count == 0)
+                    if (selector.Selected is { } chosen)
                     {
-                        WriteSelectFrame(title, items, visible, cursor, filter.ToString(), hint);
-                        continue;
+                        EraseSelectFrame(previousRows);
+                        return chosen.Value as string ?? chosen.Label;
                     }
-                    EraseSelectFrame(lastFrameRows);
-                    return visible[cursor].Id;
+                    break;
 
                 case ConsoleKey.Escape:
-                    EraseSelectFrame(lastFrameRows);
+                    EraseSelectFrame(previousRows);
                     return null;
 
                 case ConsoleKey.UpArrow:
-                    if (visible.Count > 0)
-                        cursor = (cursor - 1 + visible.Count) % visible.Count;
+                    selector.Move(-1);
                     break;
 
                 case ConsoleKey.DownArrow:
-                    if (visible.Count > 0)
-                        cursor = (cursor + 1) % visible.Count;
+                    selector.Move(1);
                     break;
 
                 case ConsoleKey.PageUp:
-                    cursor = Math.Max(0, cursor - PageSize(items));
+                    for (var i = 0; i < MaxPageSize; i++) selector.Move(-1);
                     break;
 
                 case ConsoleKey.PageDown:
-                    cursor = Math.Min(visible.Count - 1, cursor + PageSize(items));
+                    for (var i = 0; i < MaxPageSize; i++) selector.Move(1);
                     break;
 
                 case ConsoleKey.Backspace:
-                    if (filter.Length > 0)
-                        filter.Length--;
-                    ApplyFilter(items, filter, ref cursor, ref visible);
+                    selector.Backspace();
                     break;
 
                 case ConsoleKey.LeftArrow or ConsoleKey.RightArrow or ConsoleKey.Tab:
@@ -214,123 +228,51 @@ public static class TerminalUi
 
                 default:
                     if (key.Ch is not '\0' && !char.IsControl(key.Ch))
-                    {
-                        filter.Append(char.ToLowerInvariant(key.Ch));
-                        ApplyFilter(items, filter, ref cursor, ref visible);
-                    }
+                        selector.Type(key.Ch);
                     break;
             }
 
-            WriteSelectFrame(title, items, visible, cursor, filter.ToString(), hint);
+            Paint();
         }
     }
+
+    private static int SafeWidth()
+    {
+        try { return Math.Max(40, Console.WindowWidth); }
+        catch { return 100; }
+    }
+
+    private const int MaxPageSize = 8;
 
     private static bool IsPiped
     {
         get
         {
-            try
-            {
-                return Console.IsInputRedirected;
-            }
-            catch
-            {
-                return true;
-            }
+            try { return Console.IsInputRedirected; }
+            catch { return true; }
         }
     }
 
-    private const int MaxPageSize = 8;
-
-    private static int PageSize(IReadOnlyList<SelectItem> items) =>
-        Math.Min(Math.Max(3, items.Count), MaxPageSize);
-
-    private static void ApplyFilter(
-        IReadOnlyList<SelectItem> items,
-        StringBuilder filter,
-        ref int cursor,
-        ref List<SelectItem> visible)
-    {
-        var needle = filter.ToString();
-
-        visible = needle.Length == 0
-            ? [.. items]
-            : items.Where(i =>
-                    (i.Label + " " + i.Id + " " + (i.Detail ?? ""))
-                        .Contains(needle, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-        cursor = 0;
-    }
-
-    private static void WriteSelectFrame(
-        string title,
-        IReadOnlyList<SelectItem> all,
-        List<SelectItem> visible,
-        int cursor,
-        string filter,
-        string? hint,
-        bool firstPaint = false)
-    {
-        if (!firstPaint)
-        {
-            // Erase exactly the number of rows the previous frame printed.
-            // Under-erasing here leaves stale frames stacking on every key
-            // press (the "keeps printing select a provider" bug).
-            EraseSelectFrame(lastFrameRows);
-        }
-
-        var page = PageSize(all);
-        var windowStart = Math.Max(0, Math.Min(cursor - page / 2, visible.Count - page));
-
-        var lines = new List<string>
-        {
-            Ansi.Color(Ansi.Bold + Ansi.Cyan, "  " + title)
-        };
-
-        if (filter.Length > 0)
-            lines.Add(Ansi.Color(Ansi.Gray, $"  search: {filter} ({visible.Count}/{all.Count})"));
-
-        var printed = 0;
-        for (var i = windowStart; i < visible.Count && printed < page; i++, printed++)
-        {
-            var item = visible[i];
-            var selected = i == cursor;
-            var pointer = selected ? Ansi.Color(Ansi.Cyan, "❯ ") : "  ";
-            var label = selected ? Ansi.Color(Ansi.Bold, item.Label) : item.Label;
-            var detail = item.Detail is { Length: > 0 }
-                ? "  " + Ansi.Color(Ansi.Gray, item.Detail)
-                : "";
-            lines.Add($"  {pointer}{label}{detail}");
-        }
-
-        if (visible.Count > page)
-            lines.Add(Ansi.Color(Ansi.Gray, $"  {'↑'} {windowStart}–{windowStart + printed - 1} of {visible.Count} ↓"));
-
-        if (visible.Count == 0)
-            lines.Add(Ansi.Color(Ansi.Yellow, "  no matches — backspace to clear"));
-
-        lines.Add(Ansi.Color(Ansi.Gray,
-            "  " + (hint ?? "↑↓ move · type to filter · enter select · esc cancel")));
-
-        lastFrameRows = lines.Count;
-        foreach (var line in lines)
-            Console.WriteLine(line);
-    }
-
-    private static int lastFrameRows;
-
+    /// <summary>
+    /// Removes the previously printed frame so the next one can take its place. Console-mode
+    /// rendering moves the cursor up and clears each line, rather than diffing a cell buffer.
+    /// </summary>
     private static void EraseSelectFrame(int rows)
     {
+        if (rows <= 0)
+            return;
+
         for (var i = 0; i < rows; i++)
         {
-            Console.Write("\x1b[1F\x1b[2K");
+            if (Console.CursorTop > 0)
+                Console.SetCursorPosition(0, Console.CursorTop - 1);
+            Console.Write("\x1b[2K");
         }
     }
 
     private static string? SelectNumbered(
         string title,
-        IReadOnlyList<SelectItem> items,
+        IReadOnlyList<TermSelectorItem> items,
         string? hint)
     {
         Console.WriteLine(Ansi.Color(Ansi.Bold + Ansi.Cyan, "  " + title));
@@ -338,24 +280,27 @@ public static class TerminalUi
         for (var i = 0; i < items.Count; i++)
         {
             var detail = items[i].Detail is { Length: > 0 }
-                ? "  " + Ansi.Color(Ansi.Gray, items[i].Detail!)
+                ? "  " + Ansi.Color(Ansi.Gray, items[i].Detail)
                 : "";
             Console.WriteLine(Ansi.Color(Ansi.Cyan, $"    {i + 1,2}. ") + items[i].Label + detail);
         }
 
+        if (hint is { Length: > 0 })
+            Console.WriteLine(Ansi.Color(Ansi.Gray, "  " + hint));
+
         Console.Write(Ansi.Color(Ansi.Cyan, "  choice") +
-            Ansi.Color(Ansi.Gray, $" [number or name, 0 = cancel]: "));
+            Ansi.Color(Ansi.Gray, " [number or name, 0 = cancel]: "));
 
         var answer = Console.In.ReadLine()?.Trim() ?? "";
         if (answer.Length == 0 || answer == "0")
             return null;
 
         if (int.TryParse(answer, out var index) && index >= 1 && index <= items.Count)
-            return items[index - 1].Id;
+            return items[index - 1].Value as string ?? items[index - 1].Label;
 
         return items.FirstOrDefault(i =>
-            string.Equals(i.Id, answer, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(i.Label, answer, StringComparison.OrdinalIgnoreCase))?.Id;
+            string.Equals(i.Value as string, answer, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(i.Label, answer, StringComparison.OrdinalIgnoreCase))?.Value as string;
     }
 
     // ------------------------------------------------------------------

@@ -139,6 +139,53 @@ public sealed class TermSelector
             SelectedIndex = Math.Clamp(previousIndex, 0, Math.Max(0, _visible.Count - 1));
     }
 
+    /// <summary>
+    /// Applies a mouse event: wheel scrolls the selection, a click selects the row under the
+    /// pointer.
+    /// </summary>
+    /// <param name="mouse">The decoded event.</param>
+    /// <param name="listTop">
+    /// Screen row of the first visible item, so a click can be mapped to an index. Pass -1 when
+    /// the caller does not track rows; clicks are then ignored and only the wheel works.
+    /// </param>
+    /// <returns>True when the event was consumed.</returns>
+    public bool ApplyMouse(TermMouseEvent mouse, int listTop = -1)
+    {
+        switch (mouse.Kind)
+        {
+            case TermMouseKind.WheelUp:
+                Move(-3);
+                return true;
+
+            case TermMouseKind.WheelDown:
+                Move(3);
+                return true;
+
+            case TermMouseKind.Press when listTop >= 0:
+                var index = _visibleIndexForRow(mouse.Y, listTop);
+                if (index < 0)
+                    return false;
+
+                SelectedIndex = index;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>Maps a screen row to a filtered-item index, or -1 when it is outside the list.</summary>
+    private int _visibleIndexForRow(int row, int listTop)
+    {
+        var offset = row - listTop;
+        if (offset < 0 || offset >= Math.Min(_visible.Count, MaxVisible))
+            return -1;
+
+        var first = Math.Max(0, Math.Min(SelectedIndex - MaxVisible + 1, _visible.Count - MaxVisible));
+        var index = first + offset;
+        return index >= 0 && index < _visible.Count ? index : -1;
+    }
+
     /// <summary>Clears the search text, for reopening a picker fresh.</summary>
     public void ClearQuery()
     {
@@ -210,6 +257,64 @@ public sealed class TermSelector
             rows++;                             // position counter
             return rows;
         }
+    }
+
+    /// <summary>
+    /// Renders the selector as plain text lines, for a console-mode caller that prints rather
+    /// than painting a buffer.
+    /// </summary>
+    /// <param name="width">Available columns.</param>
+    /// <param name="maxVisible">Rows of items to show.</param>
+    /// <remarks>
+    /// The point of this existing is that the filtering, ranking, and selection rules live in one
+    /// place. A line-oriented client keeps its own frame handling but must not keep its own copy
+    /// of the matching logic — that is how two widget systems drift apart.
+    /// </remarks>
+    public List<string> RenderLines(int width, int maxVisible = 10)
+    {
+        var lines = new List<string>();
+
+        if (Title.Length > 0)
+            lines.Add(Title);
+
+        if (Notice.Length > 0)
+            lines.Add(Notice);
+
+        lines.Add(Query.Length > 0 ? $"filter: {Query}" : "");
+
+        if (_visible.Count == 0)
+        {
+            lines.Add($"  no matches for \"{Query}\"");
+        }
+        else
+        {
+            var first = Math.Max(0, Math.Min(SelectedIndex - maxVisible + 1, _visible.Count - maxVisible));
+
+            for (var i = first; i < _visible.Count && i < first + maxVisible; i++)
+            {
+                var item = _visible[i];
+                var marker = i == SelectedIndex ? "> " : "  ";
+                var current = item.IsCurrent ? "✓ " : "  ";
+
+                var line = $"{marker}{current}{item.Label}";
+                if (item.Detail.Length > 0)
+                    line += $"  {item.Detail}";
+                if (item.Status.Length > 0)
+                    line += $"  {item.Status}";
+
+                lines.Add(line.Length > width ? line[..Math.Max(0, width - 1)] + "…" : line);
+            }
+        }
+
+        lines.Add($"({Math.Min(SelectedIndex + 1, _visible.Count)}/{_visible.Count})");
+
+        if (Selected?.Description is { Length: > 0 } description)
+            lines.Add(description);
+
+        if (Hint.Length > 0)
+            lines.Add(Hint);
+
+        return lines;
     }
 
     /// <summary>

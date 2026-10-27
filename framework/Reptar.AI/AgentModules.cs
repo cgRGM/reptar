@@ -369,7 +369,7 @@ public sealed class TodoModule
     }
 
     private static string Serialize<TValue>(TValue value) =>
-        JsonSerializer.Serialize(value, ReptarJson.Options);
+        LlmHttp.ToNode(value)?.ToJsonString() ?? "null";
 
     private static AiToolDefinition Tool(string name, string description, string parametersJson) => new()
     {
@@ -562,13 +562,15 @@ public sealed class PlanExecuteModule
                 }
 
                 _modes[sessionId] = mode;
-                return AiToolResult.Ok(200, JsonSerializer.Serialize(new { mode }, ReptarJson.Options));
+                return AiToolResult.Ok(200,
+                    new System.Text.Json.Nodes.JsonObject { ["mode"] = mode }.ToJsonString());
             }
 
             case ModeGetToolName:
             {
                 var mode = CurrentMode(sessionId);
-                return AiToolResult.Ok(200, JsonSerializer.Serialize(new { mode }, ReptarJson.Options));
+                return AiToolResult.Ok(200,
+                    new System.Text.Json.Nodes.JsonObject { ["mode"] = mode }.ToJsonString());
             }
 
             default:

@@ -9,13 +9,41 @@ namespace Reptar.Term;
 /// One key event parsed from the terminal's byte stream: a control key, a
 /// printable character, a bracketed paste, or an OSC 52 clipboard image.
 /// </summary>
+/// <summary>One mouse event decoded from an SGR sequence.</summary>
+public readonly record struct TermMouseEvent(
+    TermMouseKind Kind,
+    int X,
+    int Y,
+    bool Ctrl = false,
+    bool Alt = false,
+    bool Shift = false)
+{
+    /// <summary>Wheel direction, or 0 for a click.</summary>
+    public int Wheel => Kind switch
+    {
+        TermMouseKind.WheelUp => -1,
+        TermMouseKind.WheelDown => 1,
+        _ => 0
+    };
+}
+
+public enum TermMouseKind
+{
+    Press,
+    Release,
+    Move,
+    WheelUp,
+    WheelDown
+}
+
 public readonly record struct TermKey(
     ConsoleKey Key = ConsoleKey.None,
     char Ch = '\0',
     bool Ctrl = false,
     string? PastedText = null,
     AgentImage? ClipboardImage = null,
-    bool Shift = false)
+    bool Shift = false,
+    TermMouseEvent? Mouse = null)
 {
     public bool IsKey => PastedText is null && ClipboardImage is null;
 }
@@ -320,12 +348,50 @@ public static class TerminalInput
                     (byte)'~' => ParseTilde(parameters.ToString()),
                     // CSI Z is Shift+Tab (back-tab). pi binds it to the thinking-level cycle.
                     (byte)'Z' => new TermKey(ConsoleKey.Tab, Shift: true),
+                    (byte)'M' or (byte)'m' => ParseSgrMouse(b, parameters.ToString()),
                     _ => new TermKey() // unknown CSI: consumed, ignored
                 };
             }
 
             parameters.Append((char)b);
         }
+    }
+
+    /// <summary>
+    /// Parses an SGR mouse report: <c>CSI &lt; button ; x ; y M</c> for press/move and
+    /// <c>m</c> for release.
+    /// </summary>
+    /// <remarks>
+    /// SGR (mode 1006) rather than the legacy X10 encoding, because X10 cannot express
+    /// coordinates past column 223 and gives no way to distinguish a release from a press.
+    /// </remarks>
+    private static TermKey ParseSgrMouse(byte terminator, string parameters)
+    {
+        var parts = parameters.TrimStart('<').Split(';');
+        if (parts.Length < 3 ||
+            !int.TryParse(parts[0], out var button) ||
+            !int.TryParse(parts[1], out var x) ||
+            !int.TryParse(parts[2], out var y))
+        {
+            return new TermKey();
+        }
+
+        var ctrl = (button & 16) != 0;
+        var shift = (button & 4) != 0;
+        var alt = (button & 8) != 0;
+        var motion = (button & 32) != 0;
+        var baseButton = button & 0b1100_0011;
+
+        var kind = baseButton switch
+        {
+            64 => TermMouseKind.WheelUp,
+            65 => TermMouseKind.WheelDown,
+            _ when motion => TermMouseKind.Move,
+            _ when terminator == (byte)'m' => TermMouseKind.Release,
+            _ => TermMouseKind.Press
+        };
+
+        return new TermKey(Mouse: new TermMouseEvent(kind, x, y, ctrl, alt, shift));
     }
 
     private static TermKey? ParseTilde(string parameters)

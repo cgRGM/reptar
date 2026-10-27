@@ -54,7 +54,9 @@ public sealed class ReptarTerm : IDisposable
     private int _width;
     private int _height;
     private bool _running = true;
-    private bool _inAltScreen;
+
+    /// <summary>Owns the terminal lifecycle: alternate buffer, cursor, bracketed paste.</summary>
+    private readonly TerminalScreen _screen = new();
 
     private TermOverlay _overlay = TermOverlay.None;
     private string _input = "";
@@ -1412,6 +1414,25 @@ public sealed class ReptarTerm : IDisposable
             }
 
             // No overlays open: Tab is autocomplete, handled by the chat key path.
+            return;
+        }
+
+        // Mouse: wheel scrolls the transcript, or moves a selector's selection; a click in a
+        // selector picks the row under the pointer.
+        if (key.Mouse is { } mouse)
+        {
+            if (ActiveSelector is { } hovered)
+            {
+                var listTop = Layout.SelectorBottom - hovered.Height + 1 + SelectorItemOffset(hovered);
+                if (hovered.ApplyMouse(mouse, listTop))
+                    _dirty = true;
+            }
+            else if (mouse.Wheel != 0)
+            {
+                _scrollOffset = Math.Max(0, _scrollOffset - (mouse.Wheel * 3));
+                _dirty = true;
+            }
+
             return;
         }
 
@@ -2894,9 +2915,9 @@ public sealed class ReptarTerm : IDisposable
             caretY = ComposerRow;
         }
 
-        // Emit diff
-        var ansi = _back.RenderDiff(_front, caretX, caretY);
-        Console.Write(ansi);
+        // Emit the diff as one synchronized frame: a repaint is several cursor moves and cell
+        // writes, and a terminal that presents them piecemeal shows the intermediate states.
+        _screen.WriteFrame(_back.RenderDiff(_front, caretX, caretY));
 
         _front = _back.Clone();
     }
@@ -3248,7 +3269,10 @@ public sealed class ReptarTerm : IDisposable
         }
     }
 
-    /// <summary>Strips the inline markers a terminal cannot style per-character.</summary>
+    /// <summary>
+    /// Strips the inline markers a terminal cannot style per-character, and turns bare URLs into
+    /// clickable links.
+    /// </summary>
     private static string StripInlineMarkdown(string line)
     {
         var builder = new StringBuilder(line.Length);
@@ -3261,9 +3285,50 @@ public sealed class ReptarTerm : IDisposable
             }
             if (line[i] == '`')
                 continue;
+
+            // A URL in prose is what a reader most wants to act on, so make it clickable rather
+            // than leaving it as text to copy out of a terminal.
+            if ((line[i] == 'h' || line[i] == 'H') &&
+                LooksLikeUrl(line, i, out var length))
+            {
+                var url = line.Substring(i, length);
+                builder.Append(Ansi.Link(url, url));
+                i += length - 1;
+                continue;
+            }
+
             builder.Append(line[i]);
         }
         return builder.ToString();
+    }
+
+    /// <summary>
+    /// Detects <c>http(s)://…</c> at <paramref name="start"/> and returns its length, stopping at
+    /// whitespace or a character that is almost certainly punctuation rather than part of the URL.
+    /// </summary>
+    private static bool LooksLikeUrl(string line, int start, out int length)
+    {
+        length = 0;
+
+        var scheme = line.AsSpan(start).StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? 8
+            : line.AsSpan(start).StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                ? 7
+                : 0;
+
+        if (scheme == 0)
+            return false;
+
+        var end = start + scheme;
+        while (end < line.Length && !char.IsWhiteSpace(line[end]) && line[end] is not ('<' or '>' or '"' or ')' or ']'))
+            end++;
+
+        // Trailing sentence punctuation belongs to the sentence, not the link.
+        while (end > start + scheme && line[end - 1] is '.' or ',' or ';' or ':')
+            end--;
+
+        length = end - start;
+        return length > scheme;
     }
 
     private static string Clip(string value, int width) =>
@@ -3772,6 +3837,21 @@ public sealed class ReptarTerm : IDisposable
         }
     }
 
+    /// <summary>
+    /// Rows between a selector's first drawn line and its first item, so a click row can be
+    /// mapped back to an index. Mirrors the order the selector renders in.
+    /// </summary>
+    private static int SelectorItemOffset(TermSelector selector)
+    {
+        var rows = 1;                                   // rule
+
+        if (selector.Notice.Length > 0) rows++;
+        if (selector.Title.Length > 0) rows++;
+
+        rows++;                                         // search row
+        return rows;
+    }
+
     private int FooterStatsRow => Layout.FooterStats;
     private int FooterLocationRow => Layout.FooterLocation;
     private int ComposerRow => Layout.Composer;
@@ -4015,19 +4095,9 @@ public sealed class ReptarTerm : IDisposable
         }
     }
 
-    private void EnterAltScreen()
-    {
-        if (_inAltScreen) return;
-        Console.Write("\x1b[?1049h\x1b[?25l");
-        _inAltScreen = true;
-    }
+    private void EnterAltScreen() => _screen.EnterAltScreen();
 
-    private void ExitAltScreen()
-    {
-        if (!_inAltScreen) return;
-        Console.Write("\x1b[?25h\x1b[?1049l");
-        _inAltScreen = false;
-    }
+    private void ExitAltScreen() => _screen.Dispose();
 
     private void LoadHistory()
     {

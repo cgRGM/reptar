@@ -42,6 +42,52 @@ public static class Ansi
         }
     }
 
+    /// <summary>
+    /// Begins a synchronized-output block (DEC private mode 2026).
+    /// </summary>
+    /// <remarks>
+    /// Terminals that support it buffer everything until the matching
+    /// <see cref="SyncEnd"/>, then present the frame in one paint. Without it a multi-part
+    /// repaint can be observed half-applied — the tearing and flicker that makes a fast TUI feel
+    /// unsteady. Unsupported terminals ignore both sequences, so it is always safe to emit.
+    /// </remarks>
+    public const string SyncStart = "\x1b[?2026h";
+
+    /// <summary>Ends a synchronized-output block and presents the frame.</summary>
+    public const string SyncEnd = "\x1b[?2026l";
+
+    /// <summary>
+    /// Wraps text in an OSC 8 hyperlink so a supporting terminal makes it clickable.
+    /// </summary>
+    /// <remarks>
+    /// The URL is percent-encoded for control characters and the label is plain text: a
+    /// hyperlink whose label contained an escape sequence could terminate the link early and
+    /// inject its own styling. Terminals without OSC 8 support print the label, so this degrades
+    /// to ordinary text rather than to garbage.
+    /// </remarks>
+    public static string Link(string text, string url)
+    {
+        if (!Enabled || url.Length == 0)
+            return text;
+
+        var safe = new StringBuilder(url.Length);
+        foreach (var ch in url)
+        {
+            // Control characters and the OSC terminator would end the sequence early.
+            if (ch < 0x20 || ch == 0x7F || ch == '\x1b')
+                safe.Append('%').Append(((int)ch).ToString("X2"));
+            else
+                safe.Append(ch);
+        }
+
+        var label = Strip(text);
+        return $"\x1b]8;;{safe}\x1b\\{label}\x1b]8;;\x1b\\";
+    }
+
+    /// <summary>Wraps a frame so it is presented atomically where the terminal supports it.</summary>
+    public static string Frame(string content) =>
+        Enabled ? SyncStart + content + SyncEnd : content;
+
     public static string Color(string code, string text) =>
         Enabled ? code + text + Reset : text;
 
@@ -57,6 +103,12 @@ public static class Ansi
         }
         Enabled = Detect();
     }
+
+    /// <summary>
+    /// Overrides detection. For a <c>--color=always/never</c> flag, and for tests, which run with
+    /// redirected output and would otherwise never exercise the coloured paths.
+    /// </summary>
+    public static void ForceEnable(bool enabled) => Enabled = enabled;
 
     public static void Write(string text) => Console.Write(text);
 

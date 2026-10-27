@@ -85,6 +85,16 @@ height-3   composer, or the selector's last row
 
 `Composer` moves up by exactly `DropdownRows`; a selector takes the composer's slot entirely; `TranscriptBottom` stops above whichever is present. `Fits` reports when a band cannot be placed, and it is unit-tested, because layout bugs are invisible until someone looks at a screenshot.
 
+## Terminal capabilities
+
+**Synchronized output.** `TerminalScreen.WriteFrame` wraps every frame in DEC mode 2026 where the terminal supports it, so a multi-part repaint is presented in one paint instead of being observed half-applied. Unsupported terminals ignore the sequences.
+
+**Hyperlinks.** `Ansi.Link(text, url)` emits an OSC 8 link. The URL is percent-encoded for control characters — a raw `ESC` inside a URL would terminate the link early and let the remainder act as styling — and terminals without OSC 8 print the label.
+
+**Mouse.** `TerminalScreen.EnterAltScreen(mouse: true)` enables SGR reporting (mode 1006). Motion reporting is deliberately off: it floods the queue with a report per cell crossed and nothing here needs hover. `TermSelector.ApplyMouse` maps wheel and click events onto the selection.
+
+**Images.** `TerminalImage.Detect()` picks the kitty or iTerm2 protocol from the environment, and `TerminalImage.Render` builds the escape sequence — chunked for kitty, a single OSC 1337 payload for iTerm2. There is no sixel path, because it needs palette quantization and a terminal with no inline image support should get `TerminalImage.Placeholder`, not mojibake.
+
 ## Piped input
 
 Every widget falls back to plain numbered input when stdin is not a terminal, so the same binary works in a script or CI:
