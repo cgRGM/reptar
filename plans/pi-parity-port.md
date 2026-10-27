@@ -1407,7 +1407,7 @@ Two packages and one reference client.
 
 ### What is verified
 
-- 892 unit tests, including contract tests for the loop's guarantees, compaction arithmetic, layout non-overlap, selector state preservation, and reflection-free settings.
+- 906 unit tests, including contract tests for the loop's guarantees, compaction arithmetic, layout non-overlap, selector state preservation, and reflection-free settings.
 - End-to-end against a live local model (Ollama, `llama3.1:8b`): tool calls, error recovery, file mutation, streaming, and the full event stream.
 - RPC round trip from both a C# client and a raw JSONL script.
 - Web API endpoints against a running server.
