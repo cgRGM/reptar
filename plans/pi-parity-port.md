@@ -1407,7 +1407,7 @@ Two packages and one reference client.
 
 ### What is verified
 
-- 831 unit tests, including contract tests for the loop's guarantees, compaction arithmetic, layout non-overlap, selector state preservation, and reflection-free settings.
+- 877 unit tests, including contract tests for the loop's guarantees, compaction arithmetic, layout non-overlap, selector state preservation, and reflection-free settings.
 - End-to-end against a live local model (Ollama, `llama3.1:8b`): tool calls, error recovery, file mutation, streaming, and the full event stream.
 - RPC round trip from both a C# client and a raw JSONL script.
 - Web API endpoints against a running server.
@@ -1418,13 +1418,14 @@ Two packages and one reference client.
 2. **Provider attribution headers.** Names come from pi's source; whether OpenRouter credits the app is only visible in their dashboard.
 3. **Thinking budgets against a real reasoning model.** The arithmetic is tested; acceptance is not.
 4. **The TUI at scale.** Every layout round was fixed from a screenshot, never from watching it work.
+5. **The ChatGPT subscription end to end.** The authorize URL, PKCE, callback, and token storage are tested; a token has never actually been used to make a request. The Responses client is likewise exercised only against recorded event shapes.
 
 ### What pi has that this does not
 
 | pi | Status |
 | --- | --- |
 | Extensions (TypeScript modules in-process) | Not ported — a different architecture, and the largest remaining gap |
-| OAuth / subscription sign-in | Structure exists (`ProviderAuth.Account`), flow does not |
+| OAuth / subscription sign-in | ChatGPT subscriptions work (`OAuthPkce` + `LlmOpenAiResponses`); no other provider has a flow |
 | Session tree in the web client | Store and RPC support it; the SPA does not expose it |
 | `context_edit` entries | Compaction rewrites the projection instead, which covers the common case |
 | Provider breadth (~40 providers) | 9 registered, all OpenAI-wire-compatible |
