@@ -72,6 +72,9 @@ public static class LlmProviders
     public const string OpenCode = "opencode";
     public const string CloudflareGateway = "cloudflare-gateway";
     public const string CloudflareWorkersAi = "cloudflare-workers-ai";
+
+    /// <summary>A ChatGPT Plus/Pro subscription, signed in through the browser.</summary>
+    public const string OpenAiChatGpt = "openai-chatgpt";
     public const string Echo = "echo";
 
     public static readonly ProviderInfo[] Known =
@@ -109,6 +112,14 @@ public static class LlmProviders
             "https://opencode.ai/zen/v1", "anthropic/claude-sonnet-5-5",
             KeyUrl: "opencode.ai/zen",
             Auth: ProviderAuth.Both),
+        new(OpenAiChatGpt, "OpenAI (ChatGPT subscription)",
+            [], null,
+            "https://api.openai.com/v1",
+            "gpt-5.1-codex",
+            RequiresApiKey: false,
+            KeyUrl: "chatgpt.com",
+            Note: "Sign in with your ChatGPT account — no API key needed",
+            Auth: ProviderAuth.Account),
         new(CloudflareWorkersAi, "Cloudflare Workers AI",
             ["CLOUDFLARE_API_KEY"], null,
             "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
@@ -380,7 +391,13 @@ public sealed class LlmAuthFile
                 _credentials[key] = new ProviderCredential(
                     ApiKey: value["apiKey"]?.GetValue<string>(),
                     BaseUrl: value["baseUrl"]?.GetValue<string>(),
-                    DefaultModel: value["defaultModel"]?.GetValue<string>());
+                    DefaultModel: value["defaultModel"]?.GetValue<string>(),
+                    Extra: value["extra"] is JsonObject extra
+                        ? extra.ToDictionary(
+                            entry => entry.Key,
+                            entry => entry.Value?.GetValue<string>() ?? "",
+                            StringComparer.Ordinal)
+                        : null);
             }
         }
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
@@ -401,12 +418,23 @@ public sealed class LlmAuthFile
 
             foreach (var (key, credential) in _credentials)
             {
-                root[key] = new JsonObject
+                var entry = new JsonObject
                 {
                     ["apiKey"] = credential.ApiKey,
                     ["baseUrl"] = credential.BaseUrl,
                     ["defaultModel"] = credential.DefaultModel
                 };
+
+                // OAuth tokens and provider-specific ids (account id, client id) ride here.
+                if (credential.Fields.Count > 0)
+                {
+                    var extra = new JsonObject();
+                    foreach (var (field, fieldValue) in credential.Fields)
+                        extra[field] = fieldValue;
+                    entry["extra"] = extra;
+                }
+
+                root[key] = entry;
             }
 
             if (_default is not null)

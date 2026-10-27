@@ -1019,6 +1019,47 @@ public sealed class ReptarTerm : IDisposable
         _dirty = true;
     }
 
+    /// <summary>
+    /// Runs the ChatGPT sign-in: prints the URL, opens the browser, waits for the loopback
+    /// callback, then switches to the subscription as the active provider.
+    /// </summary>
+    private async Task SignInWithChatGptAsync()
+    {
+        _providerSelector!.Status = "waiting for the browser…";
+        _dirty = true;
+        Render();
+
+        try
+        {
+            var credential = await ChatGptSubscription.SignInAsync(
+                _auth,
+                onUrl: url =>
+                {
+                    // Always print it: a headless session has no browser to open.
+                    _providerSelector.Status = "If the browser did not open, visit: " + url;
+                    _dirty = true;
+                },
+                onStatus: status =>
+                {
+                    _providerSelector.Status = status;
+                    _dirty = true;
+                }).ConfigureAwait(false);
+
+            var model = credential.DefaultModel ?? "gpt-5.1-codex";
+            ActivateProvider(LlmProviders.OpenAiChatGpt, model);
+        }
+        catch (OAuthException ex)
+        {
+            _providerSelector!.Status = "Sign-in failed: " + ex.Message;
+            _dirty = true;
+        }
+        catch (Exception ex)
+        {
+            _providerSelector!.Status = "Sign-in failed: " + ex.Message;
+            _dirty = true;
+        }
+    }
+
     private void OpenSettingsMenu()
     {
         var alreadyOpen = _overlay == TermOverlay.Settings;
@@ -1400,8 +1441,10 @@ public sealed class ReptarTerm : IDisposable
 
         _thinking = thinking;
 
-        _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(
-            _options with { Provider = providerKey, Model = modelId }) with { Thinking = thinking });
+        _client = providerKey == LlmProviders.OpenAiChatGpt
+            ? LlmClientFactory.CreateForChatGptAsync(_auth, modelId).GetAwaiter().GetResult()
+            : LlmClientFactory.Create(AgentConfigResolver.Resolve(
+                _options with { Provider = providerKey, Model = modelId }) with { Thinking = thinking });
 
         _auth.SetDefault(providerKey);
         _ = _settings.SaveModelAsync(providerKey, modelId);
@@ -2169,13 +2212,17 @@ public sealed class ReptarTerm : IDisposable
 
         if (selector == _providerSelector && item.Value is ProviderInfo provider)
         {
-            // Account sign-in is not implemented; say so instead of dropping into a key prompt
-            // that would look like the same flow under a different name.
             if (_authMethod == ProviderAuth.Account)
             {
+                if (provider.Key == LlmProviders.OpenAiChatGpt)
+                {
+                    await SignInWithChatGptAsync().ConfigureAwait(false);
+                    return;
+                }
+
                 _providerSelector.Status =
-                    $"{provider.DisplayName}: account sign-in is not implemented yet. " +
-                    "Go back and choose an API key.";
+                    $"{provider.DisplayName} has no account sign-in flow yet. "
+                    + "ChatGPT subscriptions are supported; use an API key otherwise.";
                 _dirty = true;
                 return;
             }
