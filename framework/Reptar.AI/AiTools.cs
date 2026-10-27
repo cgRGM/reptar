@@ -224,6 +224,86 @@ public static class AgentHarness
 public static class AiToolExtensions
 {
     /// <summary>
+    /// Coerces string-encoded primitives to the types the tool's parameter schema declares.
+    /// </summary>
+    /// <remarks>
+    /// Only touches properties the schema marks as <c>integer</c>, <c>number</c>, or
+    /// <c>boolean</c>. Everything else is left exactly as sent, because rewriting a string field
+    /// that happens to contain digits would silently change user data.
+    /// </remarks>
+    private static void CoerceToSchema(JsonObject body, Dictionary<string, object?> schema)
+    {
+        if (schema.TryGetValue("properties", out var props) &&
+            props is Dictionary<string, object?> properties)
+        {
+            foreach (var (name, propertySchema) in properties)
+            {
+                if (!body.TryGetPropertyValue(name, out var value) || value is null)
+                    continue;
+
+                if (propertySchema is Dictionary<string, object?> definition &&
+                    Coerce(value, definition) is { } coerced)
+                {
+                    body[name] = coerced;
+                }
+            }
+        }
+    }
+
+    private static JsonNode? Coerce(JsonNode value, Dictionary<string, object?> definition)
+    {
+        var type = definition.TryGetValue("type", out var declared) ? declared as string : null;
+
+        switch (type)
+        {
+            case "integer" when value is JsonValue integerValue &&
+                                integerValue.TryGetValue<string>(out var integerText):
+                return long.TryParse(integerText, out var integer) ? JsonValue.Create(integer) : null;
+
+            case "number" when value is JsonValue numberValue &&
+                              numberValue.TryGetValue<string>(out var numberText):
+                return double.TryParse(
+                    numberText,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var number)
+                    ? JsonValue.Create(number)
+                    : null;
+
+            case "boolean" when value is JsonValue booleanValue &&
+                               booleanValue.TryGetValue<string>(out var booleanText):
+                return bool.TryParse(booleanText, out var flag) ? JsonValue.Create(flag) : null;
+
+            case "object" when value is JsonObject nested &&
+                              definition.TryGetValue("properties", out var nestedProperties) &&
+                              nestedProperties is Dictionary<string, object?> nestedSchema:
+                foreach (var (name, propertySchema) in nestedSchema)
+                {
+                    if (nested.TryGetPropertyValue(name, out var child) && child is not null &&
+                        propertySchema is Dictionary<string, object?> childDefinition &&
+                        Coerce(child, childDefinition) is { } coercedChild)
+                    {
+                        nested[name] = coercedChild;
+                    }
+                }
+                return null;
+
+            case "array" when value is JsonArray array &&
+                             definition.TryGetValue("items", out var itemSchema) &&
+                             itemSchema is Dictionary<string, object?> itemDefinition:
+                for (var i = 0; i < array.Count; i++)
+                {
+                    if (array[i] is { } element && Coerce(element, itemDefinition) is { } coercedElement)
+                        array[i] = coercedElement;
+                }
+                return null;
+
+            default:
+                return null;
+        }
+    }
+
+    /// <summary>
     /// Exports registered API routes as AI agent tool definitions compatible with OpenAI, Claude, or Gemini.
     /// </summary>
     public static List<AiToolDefinition> GetAiTools(
@@ -357,6 +437,13 @@ public static class AiToolExtensions
         var resolvedPath = tool.Path;
         var queryParams = new List<string>();
         var rootObj = rootNode as JsonObject;
+
+        // Models routinely send numbers and booleans as strings ("wait_ms": "10000"). Coerce them
+        // against the tool's own schema before dispatch, so a route that binds an int does not
+        // fail on a value the model meant perfectly well. Schema-guided, not blanket: a string
+        // field whose value happens to be numeric must stay a string.
+        if (rootObj is not null)
+            CoerceToSchema(rootObj, tool.Parameters);
 
         // Replace route path parameters with values from arguments
         foreach (var param in pathParams)
@@ -567,6 +654,34 @@ public static class AiToolExtensions
         {
             ["type"] = "object"
         };
+
+        // An explicitly declared schema wins: the route parses its own body, so there is no
+        // input type to derive properties from.
+        if (route.AiToolParameters is { } declared)
+        {
+            var merged = new Dictionary<string, object?>(declared, StringComparer.Ordinal);
+
+            if (pathParams.Count > 0)
+            {
+                var declaredProps = declared.TryGetValue("properties", out var existing) &&
+                                    existing is Dictionary<string, object?> map
+                    ? new Dictionary<string, object?>(map, StringComparer.Ordinal)
+                    : new Dictionary<string, object?>(StringComparer.Ordinal);
+
+                foreach (var p in pathParams)
+                {
+                    declaredProps[p] = new Dictionary<string, object?>
+                    {
+                        ["type"] = "string",
+                        ["description"] = $"Route parameter {p}"
+                    };
+                }
+
+                merged["properties"] = declaredProps;
+            }
+
+            return merged;
+        }
 
         var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
         var required = new List<string>();

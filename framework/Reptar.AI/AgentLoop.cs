@@ -507,7 +507,15 @@ public static class AgentLoop
         // raw history stays intact for display and export while the model sees a shorter view.
         IReadOnlyList<ChatMessage>? contextOverride = null;
 
-        void Emit(AgentEvent evt) => onEvent?.Invoke(evt);
+        // Tap the event stream for the diagnostic log here rather than in each client, so every
+        // client gets it without repeating the wiring.
+        void Emit(AgentEvent evt)
+        {
+            if (AgentLog.Enabled)
+                AgentLog.Event(evt);
+
+            onEvent?.Invoke(evt);
+        }
 
         Emit(new AgentEvent.AgentStart(config.MaxSteps));
 

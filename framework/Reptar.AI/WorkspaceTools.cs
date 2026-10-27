@@ -280,7 +280,11 @@ public static class WorkspaceTools
             Read a file from the workspace. Params: path (relative to workspace root, required),
             start_line (optional 1-based), end_line (optional inclusive). Returns numbered content.
             For directories use list_dir instead.
-            """);
+            """)
+        .WithAiToolSchema(Schema(
+                ("path", "string", "Path relative to the workspace root", true),
+                ("start_line", "integer", "First line to return, 1-based", false),
+                ("end_line", "integer", "Last line to return, inclusive", false)));
 
         if (o.AllowWrite)
         {
@@ -330,7 +334,10 @@ public static class WorkspaceTools
             Recursively list files and folders under a workspace path, ignoring .git, bin, obj,
             node_modules, and build output. Params: path (optional, defaults to workspace root),
             depth (optional, 1..6, default 3). Use this to discover project structure.
-            """);
+            """)
+        .WithAiToolSchema(Schema(
+                ("path", "string", "Directory relative to the workspace root; omit for the root", false),
+                ("depth", "integer", "How deep to recurse, 1-6, default 3", false)));
 
         if (o.AllowRunCommand)
         {
@@ -375,7 +382,10 @@ public static class WorkspaceTools
         .AsAiTool("write_file", """
             Create or overwrite a file in the workspace. Params: path (required), content (required, full file text).
             Parent directories are created automatically. A unified diff of the change is returned.
-            """);
+            """)
+        .WithAiToolSchema(Schema(
+                ("path", "string", "Path relative to the workspace root", true),
+                ("content", "string", "Full file text", true)));
 
         app.Post("/workspace/edit_file", async ctx =>
         {
@@ -414,7 +424,12 @@ public static class WorkspaceTools
             Perform an exact string replacement inside a workspace file. Params: path (required),
             target (required, exact text to replace), replacement (required), all (optional, replace every
             occurrence, default false). Returns a unified diff of the applied change.
-            """);
+            """)
+        .WithAiToolSchema(Schema(
+                ("path", "string", "Path relative to the workspace root", true),
+                ("target", "string", "Exact text to replace", true),
+                ("replacement", "string", "Replacement text", true),
+                ("all", "boolean", "Replace every occurrence, default false", false)));
     }
 
     private static void MountRunCommand(ReptarApp app, WorkspaceRoot workspace)
@@ -476,7 +491,57 @@ public static class WorkspaceTools
             Execute a shell command in the workspace root with a timeout. Params: command (required),
             wait_ms (optional, default 15000). Use it for builds, tests, git, and inspection commands.
             Prefer reading/writing files with the file tools instead of shell heredocs.
-            """);
+            """)
+        .WithAiToolSchema(Schema(
+                ("command", "string", "Shell command to run in the workspace root", true),
+                ("wait_ms", "integer", "Timeout in milliseconds, default 15000", false)));
+    }
+
+    /// <summary>
+    /// Builds a JSON Schema object for a tool's arguments.
+    /// </summary>
+    /// <remarks>
+    /// The workspace tools read the raw request body, so there is no input type for the framework
+    /// to derive a schema from. Without an explicit one the model receives an empty property list
+    /// and has to guess every name and type — which is how it ends up sending
+    /// <c>"wait_ms": "10000"</c> or inventing <c>waitMs</c>.
+    /// </remarks>
+    private static Dictionary<string, object?> Schema(
+        params (string Name, string Type, string Description, bool Required)[] fields)
+    {
+        var properties = new Dictionary<string, object?>(StringComparer.Ordinal);
+        var required = new List<object?>();
+
+        foreach (var (name, type, description, isRequired) in fields)
+        {
+            properties[name] = new Dictionary<string, object?>
+            {
+                ["type"] = type,
+                ["description"] = description
+            };
+
+            if (isRequired)
+                required.Add(name);
+        }
+
+        return Finish(properties, required);
+    }
+
+    private static Dictionary<string, object?> Finish(
+        Dictionary<string, object?> properties,
+        List<object?> required)
+    {
+
+        var schema = new Dictionary<string, object?>
+        {
+            ["type"] = "object",
+            ["properties"] = properties
+        };
+
+        if (required.Count > 0)
+            schema["required"] = required;
+
+        return schema;
     }
 
     // ---------- tool bodies (shared by HTTP routes, self-test, and unit tests) ----------
@@ -754,8 +819,24 @@ public static class WorkspaceTools
                 ? node.GetValue<string>()
                 : node.ToString();
 
-    internal static int? Int(JsonNode? node) =>
-        node is null ? null : node.GetValue<int>();
+    /// <summary>
+    /// Reads an integer from a JSON value, accepting a numeric string.
+    /// </summary>
+    /// <remarks>
+    /// Schema-guided coercion handles this for values the schema declares, but a model can also
+    /// send an alias the schema does not list (<c>waitMs</c> for <c>wait_ms</c>). Reading
+    /// tolerantly here means an off-schema spelling degrades to a working call instead of a
+    /// conversion exception.
+    /// </remarks>
+    internal static int? Int(JsonNode? node) => node switch
+    {
+        null => null,
+        JsonValue value when value.TryGetValue<int>(out var direct) => direct,
+        JsonValue value when value.TryGetValue<long>(out var wide) => (int)Math.Clamp(wide, int.MinValue, int.MaxValue),
+        JsonValue value when value.TryGetValue<double>(out var real) => (int)Math.Clamp(real, int.MinValue, int.MaxValue),
+        JsonValue value when value.TryGetValue<string>(out var text) && int.TryParse(text, out var parsed) => parsed,
+        _ => null
+    };
 
     internal static int ParseInt(string? value, int defaultValue) =>
         int.TryParse(value, out var parsed) && parsed > 0 ? parsed : defaultValue;

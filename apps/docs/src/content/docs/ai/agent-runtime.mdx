@@ -55,6 +55,27 @@ The event names match pi's JSONL protocol, so one client implementation can cons
 
 `evt.ToJson()` produces one JSONL record; `AgentEventJson.TryParse` reads it back. Client and server share one definition, so the protocol cannot drift.
 
+### Declaring a tool's arguments
+
+A route that binds a typed body gets its schema generated from the type. A route that reads the raw body — which is how the workspace tools parse JSON — has no type information, so it must declare one:
+
+```csharp
+app.Post("/workspace/run_command", handler)
+    .AsAiTool("run_command", "Execute a shell command in the workspace root")
+    .WithAiToolSchema(new Dictionary<string, object?>
+    {
+        ["type"] = "object",
+        ["properties"] = new Dictionary<string, object?>
+        {
+            ["command"] = new() { ["type"] = "string", ["description"] = "Shell command" },
+            ["wait_ms"] = new() { ["type"] = "integer", ["description"] = "Timeout in ms" }
+        },
+        ["required"] = new List<object?> { "command" }
+    });
+```
+
+Without it the model receives `{"type":"object","properties":{}}` and guesses: it invents `waitMs`, or sends `"wait_ms": "10000"` as a string. With it, arguments are also **coerced against the declared types** before dispatch — a string-typed integer becomes an integer — while string fields are never rewritten, so a value like `"12345"` stays a string.
+
 ## 2. Sessions and queues
 
 `AgentSession` owns the mutable state a client talks to: the transcript, the steering and follow-up queues, and the in-flight run.
@@ -239,6 +260,23 @@ Writes always go to the user file: the agent should not modify a repository's co
 | OpenCode   | `x-opencode-client`, `x-opencode-session`                       |
 
 OpenRouter only credits an application in its rankings when the first two are present.
+
+## 15. Diagnostics
+
+Set `REPTAR_AGENT_LOG` to write a line per event and a record per tool call, including the exact arguments the model sent and the exact result:
+
+```bash
+REPTAR_AGENT_LOG=/tmp/agent.log bun reptar agent
+REPTAR_AGENT_LOG=1 bun reptar agent        # defaults to ~/.reptar/agent/agent.log
+```
+
+```
+tool.start  run_command  {"command":"echo hello","wait_ms":15000}
+tool.end    run_command  ok  57ms  {"exitCode":0,"stdout":"hello\n",...}
+agent.end   Completed  2 steps  1 tool calls  5127ms
+```
+
+The terminal shows the outcome; the log shows why. A model that invented a parameter name, a tool that rejected an argument the model thought was fine, a run that retried twice — all invisible in the transcript, all obvious here. The log never writes to stdout, so it cannot corrupt a protocol stream.
 
 ## See also
 

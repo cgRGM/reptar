@@ -450,6 +450,10 @@ public sealed class ReptarTerm : IDisposable
             _settings,
             _templates);
 
+        if (AgentLog.Enabled)
+            _messages.Add(new ChatMessage("assistant",
+                $"Logging this session to `{AgentLog.FilePath}`."));
+
         UpdateStatusRibbon();
         Render();
         _ = RefreshPricingAsync();
@@ -2331,6 +2335,8 @@ public sealed class ReptarTerm : IDisposable
     /// </summary>
     private void StartAgentRun(ChatMessage userMessage)
     {
+        AgentLog.Message(AgentRoles.User, userMessage.Content);
+
         _isStreaming = true;
         _runStartedAt = DateTimeOffset.UtcNow;
         _dirty = true;
