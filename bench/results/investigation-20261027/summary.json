@@ -1,99 +1,197 @@
 {
   "baseCommit": "ba06d8cb218be721644566514505f3bb4873ddfa",
   "historicalCommit": "223ac88",
-  "protocol": {
-    "connections": 64,
-    "warmupSeconds": 4,
-    "measurementSeconds": 12,
-    "samplesPerVariant": 3,
-    "encoding": "br",
-    "order": [
-      "current",
-      "optimized",
-      "optimized",
-      "current",
-      "current(identity)",
-      "optimized(identity)",
-      "optimized",
-      "current"
+  "initialCandidate": {
+    "protocol": {
+      "connections": 64,
+      "warmupSeconds": 4,
+      "measurementSeconds": 12,
+      "samplesPerVariant": 3,
+      "encoding": "br",
+      "order": [
+        "current",
+        "optimized",
+        "optimized",
+        "current",
+        "current(identity)",
+        "optimized(identity)",
+        "optimized",
+        "current"
+      ],
+      "cpuPlacement": "server CPU0 / generator CPU1, SMT siblings on shared VPS",
+      "note": "Brotli requested for both; optimized known bodies below 1024 bytes correctly remain identity. Identity-encoding comparisons are recorded separately."
+    },
+    "sourceSha256": {
+      "framework/Reptar/Core/Ctx.cs": "1b9de602566cfde502fe1eb20a20173398fc14ebbff44caa8e5b3dd9ca6b0a5e",
+      "framework/Reptar/Core/Telemetry.cs": "9b4919e9e7b54054ed018ca78f208b3aaa27ed1daf0a67d6aa6d72cf26a92d64",
+      "framework/Reptar/Core/ReptarApp.cs": "6d76cc10cbd90af5a43f6285c81001b88c3ac9295d15c96d7d2cfa4db555b2c8",
+      "framework/Reptar.Kestrel/KestrelHost.cs": "76d57ed8ccda7ad2903a6d6b8276b88e8fedd1d08da24a68ba65a4c3933a5810",
+      "framework/Reptar.Kestrel/ReptarResponseCompressionProvider.cs": "e550cc83fa034e6ca07987f133cdffff5af9f71d9323eab19616bf1a37f77c30"
+    },
+    "optimizedBinarySha256": "814f26f27b526acfc3ead0103da5b3837471f98192bdeeab05d433219cc59e8d",
+    "comparison": [
+      {
+        "tier": "T0",
+        "current": {
+          "rps": 23921.11343149762,
+          "p95Ms": 3.2589580000000002,
+          "samples": [
+            23921.11343149762, 23917.760070825636, 24217.055265032373
+          ],
+          "errors": 0
+        },
+        "optimized": {
+          "rps": 40951.246792128346,
+          "p95Ms": 1.8960380000000001,
+          "samples": [
+            41411.86472009337, 40951.246792128346, 38264.375024630746
+          ],
+          "errors": 0
+        },
+        "changePercent": 71.19289580478582
+      },
+      {
+        "tier": "T1",
+        "current": {
+          "rps": 21964.873504974774,
+          "p95Ms": 3.510562,
+          "samples": [
+            21964.873504974774, 21934.654465989952, 22174.78624199194
+          ],
+          "errors": 0
+        },
+        "optimized": {
+          "rps": 38717.802242032354,
+          "p95Ms": 2.0484280000000004,
+          "samples": [38908.4930383488, 38627.91195055867, 38717.802242032354],
+          "errors": 0
+        },
+        "changePercent": 76.27145557320532
+      },
+      {
+        "tier": "T4",
+        "current": {
+          "rps": 8601.801064699219,
+          "p95Ms": 9.663724,
+          "samples": [8573.592515385706, 8734.767758131917, 8601.801064699219],
+          "errors": 0
+        },
+        "optimized": {
+          "rps": 12867.916700924203,
+          "p95Ms": 6.944037,
+          "samples": [
+            12877.430756891968, 12846.524852901286, 12867.916700924203
+          ],
+          "errors": 0
+        },
+        "changePercent": 49.59560915367622
+      },
+      {
+        "tier": "T10",
+        "current": {
+          "rps": 4039.210394854742,
+          "p95Ms": 27.033665,
+          "samples": [4105.37402790383, 3455.6097803583684, 4039.210394854742],
+          "errors": 0
+        },
+        "optimized": {
+          "rps": 4770.415716979189,
+          "p95Ms": 21.821508,
+          "samples": [4770.415716979189, 4926.630319379371, 4755.60823518661],
+          "errors": 0
+        },
+        "changePercent": 18.10267974790014
+      }
     ],
-    "cpuPlacement": "server CPU0 / generator CPU1, SMT siblings on shared VPS",
-    "note": "Brotli requested for both; optimized known bodies below 1024 bytes correctly remain identity. Identity-encoding comparisons are recorded separately."
+    "commit": "94a5080edab0842296e08e338c6f7dbf66530b71"
   },
-  "sourceSha256": {
-    "framework/Reptar/Core/Ctx.cs": "1b9de602566cfde502fe1eb20a20173398fc14ebbff44caa8e5b3dd9ca6b0a5e",
-    "framework/Reptar/Core/Telemetry.cs": "9b4919e9e7b54054ed018ca78f208b3aaa27ed1daf0a67d6aa6d72cf26a92d64",
-    "framework/Reptar/Core/ReptarApp.cs": "6d76cc10cbd90af5a43f6285c81001b88c3ac9295d15c96d7d2cfa4db555b2c8",
-    "framework/Reptar.Kestrel/KestrelHost.cs": "76d57ed8ccda7ad2903a6d6b8276b88e8fedd1d08da24a68ba65a4c3933a5810",
-    "framework/Reptar.Kestrel/ReptarResponseCompressionProvider.cs": "e550cc83fa034e6ca07987f133cdffff5af9f71d9323eab19616bf1a37f77c30"
+  "finalCandidate": {
+    "protocol": {
+      "connections": 64,
+      "warmupSeconds": 4,
+      "measurementSeconds": 12,
+      "samplesPerVariant": 2,
+      "encoding": "br",
+      "order": ["current", "optimized-safe", "optimized-safe", "current"],
+      "cpuPlacement": "server CPU0 / generator CPU1, SMT siblings on shared VPS",
+      "note": "Brotli requested for both; optimized known bodies below 1024 bytes correctly remain identity. Identity-encoding comparisons are recorded separately."
+    },
+    "sourceSha256": {
+      "framework/Reptar/Core/Ctx.cs": "69201be6196329948a126df00aab5f3dc980ff8065b124372658723f07c63b22",
+      "framework/Reptar/Core/Telemetry.cs": "8b304b36781ed55f97d51fc4585bfb6ce361b7197abbd20c3df9305571eb8d39",
+      "framework/Reptar/Core/ReptarApp.cs": "6d76cc10cbd90af5a43f6285c81001b88c3ac9295d15c96d7d2cfa4db555b2c8",
+      "framework/Reptar.Kestrel/KestrelHost.cs": "76d57ed8ccda7ad2903a6d6b8276b88e8fedd1d08da24a68ba65a4c3933a5810",
+      "framework/Reptar.Kestrel/ReptarResponseCompressionProvider.cs": "e550cc83fa034e6ca07987f133cdffff5af9f71d9323eab19616bf1a37f77c30"
+    },
+    "optimizedBinarySha256": "8633e4af3950fe77927b55fd30e8296164c9e99236ee76e4a12de537972532b0",
+    "comparison": [
+      {
+        "tier": "T0",
+        "current": {
+          "rps": 24013.63225225616,
+          "p95Ms": 3.2604565,
+          "samples": [24295.230678486096, 23732.03382602622],
+          "errors": 0
+        },
+        "optimized-safe": {
+          "rps": 38849.33589988858,
+          "p95Ms": 2.049645,
+          "samples": [36745.81844982621, 40952.85334995096],
+          "errors": 0
+        },
+        "changePercent": 61.78033998267196
+      },
+      {
+        "tier": "T1",
+        "current": {
+          "rps": 21295.215125910967,
+          "p95Ms": 3.9032875000000002,
+          "samples": [20762.602232798603, 21827.828019023327],
+          "errors": 0
+        },
+        "optimized-safe": {
+          "rps": 38615.828756463045,
+          "p95Ms": 2.0528305,
+          "samples": [38520.721119405614, 38710.93639352047],
+          "errors": 0
+        },
+        "changePercent": 81.33570629900429
+      },
+      {
+        "tier": "T4",
+        "current": {
+          "rps": 8917.836827280742,
+          "p95Ms": 9.406595,
+          "samples": [8844.748356448248, 8990.925298113238],
+          "errors": 0
+        },
+        "optimized-safe": {
+          "rps": 12378.830880979709,
+          "p95Ms": 7.2894855,
+          "samples": [12593.21111095348, 12164.450651005936],
+          "errors": 0
+        },
+        "changePercent": 38.80979345923181
+      },
+      {
+        "tier": "T10",
+        "current": {
+          "rps": 4051.6430543656825,
+          "p95Ms": 26.252556500000004,
+          "samples": [3898.4555534021924, 4204.830555329172],
+          "errors": 0
+        },
+        "optimized-safe": {
+          "rps": 4694.112244277325,
+          "p95Ms": 23.634454,
+          "samples": [4462.668478003488, 4925.556010551162],
+          "errors": 0
+        },
+        "changePercent": 15.857003721474827
+      }
+    ],
+    "note": "Trace state contains no Ctx/request/body/service references; lifecycle regression test added."
   },
-  "optimizedBinarySha256": "814f26f27b526acfc3ead0103da5b3837471f98192bdeeab05d433219cc59e8d",
-  "comparison": [
-    {
-      "tier": "T0",
-      "current": {
-        "rps": 23921.11343149762,
-        "p95Ms": 3.2589580000000002,
-        "samples": [23921.11343149762, 23917.760070825636, 24217.055265032373],
-        "errors": 0
-      },
-      "optimized": {
-        "rps": 40951.246792128346,
-        "p95Ms": 1.8960380000000001,
-        "samples": [41411.86472009337, 40951.246792128346, 38264.375024630746],
-        "errors": 0
-      },
-      "changePercent": 71.19289580478582
-    },
-    {
-      "tier": "T1",
-      "current": {
-        "rps": 21964.873504974774,
-        "p95Ms": 3.510562,
-        "samples": [21964.873504974774, 21934.654465989952, 22174.78624199194],
-        "errors": 0
-      },
-      "optimized": {
-        "rps": 38717.802242032354,
-        "p95Ms": 2.0484280000000004,
-        "samples": [38908.4930383488, 38627.91195055867, 38717.802242032354],
-        "errors": 0
-      },
-      "changePercent": 76.27145557320532
-    },
-    {
-      "tier": "T4",
-      "current": {
-        "rps": 8601.801064699219,
-        "p95Ms": 9.663724,
-        "samples": [8573.592515385706, 8734.767758131917, 8601.801064699219],
-        "errors": 0
-      },
-      "optimized": {
-        "rps": 12867.916700924203,
-        "p95Ms": 6.944037,
-        "samples": [12877.430756891968, 12846.524852901286, 12867.916700924203],
-        "errors": 0
-      },
-      "changePercent": 49.59560915367622
-    },
-    {
-      "tier": "T10",
-      "current": {
-        "rps": 4039.210394854742,
-        "p95Ms": 27.033665,
-        "samples": [4105.37402790383, 3455.6097803583684, 4039.210394854742],
-        "errors": 0
-      },
-      "optimized": {
-        "rps": 4770.415716979189,
-        "p95Ms": 21.821508,
-        "samples": [4770.415716979189, 4926.630319379371, 4755.60823518661],
-        "errors": 0
-      },
-      "changePercent": 18.10267974790014
-    }
-  ],
   "runs": [
     {
       "label": "vps-20261027-ablation-0-current",
@@ -1195,6 +1293,182 @@
           "rps": 4039.210394854742,
           "p95Ms": 27.033665,
           "cpuMsPerRequest": 0.24658722455133103,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "label": "vps-20261027-safe-0-current-br",
+      "config": {
+        "connections": 64,
+        "cooldown": 2,
+        "duration": 12,
+        "reps": 1,
+        "warmup": 4
+      },
+      "scenarios": [
+        {
+          "tier": "T0",
+          "name": "plaintext",
+          "rps": 24295.230678486096,
+          "p95Ms": 3.1540969999999997,
+          "cpuMsPerRequest": 0.04112445721890284,
+          "errors": 0
+        },
+        {
+          "tier": "T1",
+          "name": "json",
+          "rps": 20762.602232798603,
+          "p95Ms": 4.230284,
+          "cpuMsPerRequest": 0.04812381346102132,
+          "errors": 0
+        },
+        {
+          "tier": "T4",
+          "name": "task-detail",
+          "rps": 8844.748356448248,
+          "p95Ms": 9.495365,
+          "cpuMsPerRequest": 0.11309551859007587,
+          "errors": 0
+        },
+        {
+          "tier": "T10",
+          "name": "update-task",
+          "rps": 3898.4555534021924,
+          "p95Ms": 26.889024000000003,
+          "cpuMsPerRequest": 0.252514444682217,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "label": "vps-20261027-safe-1-optimized-safe-br",
+      "config": {
+        "connections": 64,
+        "cooldown": 2,
+        "duration": 12,
+        "reps": 1,
+        "warmup": 4
+      },
+      "scenarios": [
+        {
+          "tier": "T0",
+          "name": "plaintext",
+          "rps": 36745.81844982621,
+          "p95Ms": 2.2096270000000002,
+          "cpuMsPerRequest": 0.02714513462580761,
+          "errors": 0
+        },
+        {
+          "tier": "T1",
+          "name": "json",
+          "rps": 38520.721119405614,
+          "p95Ms": 2.05893,
+          "cpuMsPerRequest": 0.025868688288794923,
+          "errors": 0
+        },
+        {
+          "tier": "T4",
+          "name": "task-detail",
+          "rps": 12593.21111095348,
+          "p95Ms": 7.212787,
+          "cpuMsPerRequest": 0.07942128358031146,
+          "errors": 0
+        },
+        {
+          "tier": "T10",
+          "name": "update-task",
+          "rps": 4462.668478003488,
+          "p95Ms": 25.051111000000002,
+          "cpuMsPerRequest": 0.2222305291292077,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "label": "vps-20261027-safe-2-optimized-safe-br",
+      "config": {
+        "connections": 64,
+        "cooldown": 2,
+        "duration": 12,
+        "reps": 1,
+        "warmup": 4
+      },
+      "scenarios": [
+        {
+          "tier": "T0",
+          "name": "plaintext",
+          "rps": 40952.85334995096,
+          "p95Ms": 1.8896629999999999,
+          "cpuMsPerRequest": 0.024375703243107963,
+          "errors": 0
+        },
+        {
+          "tier": "T1",
+          "name": "json",
+          "rps": 38710.93639352047,
+          "p95Ms": 2.046731,
+          "cpuMsPerRequest": 0.025785844045148904,
+          "errors": 0
+        },
+        {
+          "tier": "T4",
+          "name": "task-detail",
+          "rps": 12164.450651005936,
+          "p95Ms": 7.366184,
+          "cpuMsPerRequest": 0.08228845495032545,
+          "errors": 0
+        },
+        {
+          "tier": "T10",
+          "name": "update-task",
+          "rps": 4925.556010551162,
+          "p95Ms": 22.217797,
+          "cpuMsPerRequest": 0.2016627440356254,
+          "errors": 0
+        }
+      ]
+    },
+    {
+      "label": "vps-20261027-safe-3-current-br",
+      "config": {
+        "connections": 64,
+        "cooldown": 2,
+        "duration": 12,
+        "reps": 1,
+        "warmup": 4
+      },
+      "scenarios": [
+        {
+          "tier": "T0",
+          "name": "plaintext",
+          "rps": 23732.03382602622,
+          "p95Ms": 3.366816,
+          "cpuMsPerRequest": 0.0418902216354392,
+          "errors": 0
+        },
+        {
+          "tier": "T1",
+          "name": "json",
+          "rps": 21827.828019023327,
+          "p95Ms": 3.576291,
+          "cpuMsPerRequest": 0.04581026913533117,
+          "errors": 0
+        },
+        {
+          "tier": "T4",
+          "name": "task-detail",
+          "rps": 8990.925298113238,
+          "p95Ms": 9.317825000000001,
+          "cpuMsPerRequest": 0.11144592276667749,
+          "errors": 0
+        },
+        {
+          "tier": "T10",
+          "name": "update-task",
+          "rps": 4204.830555329172,
+          "p95Ms": 25.616089000000002,
+          "cpuMsPerRequest": 0.23706554515156325,
           "errors": 0
         }
       ]

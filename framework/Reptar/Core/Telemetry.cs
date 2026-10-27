@@ -156,6 +156,62 @@ public readonly record struct TraceParent(
     }
 }
 
+// This state deliberately contains no Ctx/request/body reference: an execution
+// context captured by background work must not keep the whole request alive.
+internal sealed class RequestTraceState
+{
+    private string? _traceId;
+    private string? _spanId;
+    private readonly bool _generateIdentifiers;
+
+    internal RequestTraceState() { }
+
+    internal RequestTraceState(TraceParent? parent)
+    {
+        _generateIdentifiers = true;
+        _traceId = parent?.TraceId;
+        ParentSpanId = parent?.SpanId;
+        Sampled = parent?.Sampled ?? true;
+    }
+
+    internal RequestTraceState(TraceContext context)
+    {
+        _traceId = context.TraceId;
+        _spanId = context.SpanId;
+        ParentSpanId = context.ParentSpanId;
+        Sampled = context.Sampled;
+    }
+
+    internal string? TraceId
+    {
+        get => _generateIdentifiers ? GetIdentifier(ref _traceId, trace: true) : _traceId;
+        set => Volatile.Write(ref _traceId, value);
+    }
+
+    internal string? SpanId
+    {
+        get => _generateIdentifiers ? GetIdentifier(ref _spanId, trace: false) : _spanId;
+        set => Volatile.Write(ref _spanId, value);
+    }
+
+    internal string? ParentSpanId { get; set; }
+    internal bool Sampled { get; }
+    internal bool HasIdentifiers => _traceId is not null && _spanId is not null;
+
+    internal TraceContext Capture() => new(TraceId!, SpanId!, ParentSpanId, Sampled);
+
+    private static string GetIdentifier(ref string? slot, bool trace)
+    {
+        var existing = Volatile.Read(ref slot);
+        if (existing is not null)
+            return existing;
+
+        var created = trace ? TraceContext.NewTraceId() : TraceContext.NewSpanId();
+        // Parallel outbound calls must all observe one request identity.
+        return Interlocked.CompareExchange(ref slot, created, null) ?? created;
+    }
+}
+
 /// <summary>
 /// Ambient trace context for the current request. Used by outbound HTTP and
 /// other integrations that need to propagate <c>traceparent</c>.
@@ -166,28 +222,21 @@ public readonly record struct TraceContext(
     string? ParentSpanId,
     bool Sampled)
 {
-    private static readonly AsyncLocal<Source?> CurrentSlot = new();
+    private static readonly AsyncLocal<RequestTraceState?> CurrentSlot = new();
 
     public static TraceContext? Current => CurrentSlot.Value?.Capture();
 
     public static IDisposable Begin(TraceContext context) =>
-        Begin(new Source(context, null));
+        Begin(new RequestTraceState(context));
 
     internal static IDisposable BeginDeferred(Ctx context) =>
-        Begin(new Source(null, context));
+        Begin(context.TraceState);
 
-    private static IDisposable Begin(Source source)
+    private static IDisposable Begin(RequestTraceState source)
     {
         var previous = CurrentSlot.Value;
         CurrentSlot.Value = source;
         return new Scope(previous);
-    }
-
-    // Keep ambient propagation available, but avoid random IDs and string
-    // allocations when no logger, exporter, handler or outbound call uses it.
-    private sealed class Source(TraceContext? context, Ctx? request)
-    {
-        public TraceContext Capture() => context ?? request!.CaptureTraceContext();
     }
 
     public string ToTraceParent() =>
@@ -212,7 +261,7 @@ public readonly record struct TraceContext(
         return new string(chars);
     }
 
-    private sealed class Scope(Source? previous) : IDisposable
+    private sealed class Scope(RequestTraceState? previous) : IDisposable
     {
         public void Dispose() => CurrentSlot.Value = previous;
     }

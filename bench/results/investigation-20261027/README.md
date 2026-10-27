@@ -13,18 +13,18 @@ A third, smaller issue was unnecessary repeated routing: the native host separat
 
 ## Verified candidate versus merged implementation
 
-Median of three separate samples for each variant, alternating order. Both clients explicitly requested Brotli; the candidate skips compressor setup for known bodies below 1 KiB. Larger bodies still negotiate compression, unknown-length streams retain ASP.NET Core policy, and SSE remains excluded. This is an end-user request-policy improvement, **not** a comparison of two implementations performing identical compression work.
+Median of two separate samples for each final variant, in current/candidate/candidate/current order. This final build also isolates ambient trace state from `Ctx`, so background execution-context captures cannot retain request bodies or services. Both clients explicitly requested Brotli; the candidate skips compressor setup for known bodies below 1 KiB. Larger bodies still negotiate compression, unknown-length streams retain ASP.NET Core policy, and SSE remains excluded. This is an end-user request-policy improvement, **not** a comparison of two implementations performing identical compression work.
 
 | Scenario | Merged req/s | Candidate req/s | Change | Candidate p95 |
 | --- | --: | --: | --: | --: |
-| Plaintext | 23,921 | 40,951 | +71.2% | 1.9 ms |
-| JSON | 21,965 | 38,718 | +76.3% | 2.0 ms |
-| Task detail | 8,602 | 12,868 | +49.6% | 6.9 ms |
-| Authenticated update | 4,039 | 4,770 | +18.1% | 21.8 ms |
+| Plaintext | 24,014 | 38,849 | +61.8% | 2.05 ms |
+| JSON | 21,295 | 38,616 | +81.3% | 2.05 ms |
+| Task detail | 8,918 | 12,379 | +38.8% | 7.29 ms |
+| Authenticated update | 4,052 | 4,694 | +15.9% | 23.63 ms |
 
-All requests in these six comparison blocks completed with **zero errors**. Individual rates, latencies, CPU/request samples and diagnostic ablations are retained in [`summary.json`](./summary.json); no less-favorable sample is discarded.
+All requests in these four final comparison blocks completed with **zero errors**. The earlier three-sample candidate measured 40,951/38,718/12,868/4,770 req/s; it too was error-free. Both versions and every sample are preserved, but the headline uses the final memory-retention-safe implementation rather than the more favorable earlier result. Individual rates, latencies, CPU/request samples and diagnostic ablations are retained in [`summary.json`](./summary.json); no less-favorable sample is discarded.
 
-With `Accept-Encoding: identity` on both sides, a separate single-sample comparison measured:
+With `Accept-Encoding: identity` on both sides, a separate single-sample comparison of the initial candidate measured:
 
 | Scenario             | Merged req/s | Candidate req/s |
 | -------------------- | -----------: | --------------: |
@@ -44,7 +44,7 @@ The identity comparison demonstrates improvement beyond merely changing compress
 
 ## Correctness and boundaries
 
-The local framework suite passes **418 tests**, including deferred/parallel trace identity, incoming unsampled parents, scope restoration, body-policy limits/HEAD/catch-all behavior, and actual Brotli/gzip middleware round trips. Host/client/CLI/docs/benchmark-header checks pass **31 Bun tests / 91 assertions**. The blog Worker was rebuilt and its E2E passed, including trace propagation, with NetWasm checks clean. Full CI remains a separate merge prerequisite.
+The local framework suite passes **419 tests**, including deferred/parallel trace identity, incoming unsampled parents, scope restoration, request-context collection while trace state remains alive, body-policy limits/HEAD/catch-all behavior, and actual Brotli/gzip middleware round trips. Host/client/CLI/docs/benchmark-header checks pass **31 Bun tests / 91 assertions**. The blog Worker was rebuilt and its E2E passed, including trace propagation, with NetWasm checks clean. Full CI remains a separate merge prerequisite.
 
 No authentication, validation, body-size limits, database writes, tracing consumers or large-response compression were disabled in the candidate. All feature-disabling ablations are private experimental artifacts, never deployment candidates.
 
@@ -57,4 +57,4 @@ No authentication, validation, body-size limits, database writes, tracing consum
 
 Both upstream repositories are MIT-licensed. The implementation uses framework extension points and original code rather than importing routing/DI/runtime-code-generation machinery into NetWasm.
 
-Raw per-run distributions and native profiles are retained under the operator's `/tmp/reptar-20261026-release/perf-investigation/` and VPS `~/reptar-release-20261026/logs/profile-20261027/`. The summary pins source-file hashes and the actual candidate executable hash; subsequent test/documentation-only edits do not change that executable's framework source.
+Raw per-run distributions and native profiles are retained under the operator's `/tmp/reptar-20261026-release/perf-investigation/` and VPS `~/reptar-release-20261026/logs/profile-20261027/`. The summary separately pins initial/final source-file hashes and executable hashes; subsequent test/documentation-only edits do not change either executable's framework source.

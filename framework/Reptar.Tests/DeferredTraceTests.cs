@@ -3,6 +3,36 @@ namespace Reptar.Tests;
 public sealed class DeferredTraceTests
 {
     [Fact]
+    public async Task AmbientStateDoesNotRetainTheRequestContext()
+    {
+        var (state, request) = await CaptureStateWithoutRequest();
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        Assert.False(request.TryGetTarget(out _));
+        Assert.False(state.HasIdentifiers);
+        using var scope = TraceContext.Begin(state.Capture());
+        GC.KeepAlive(state);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static async Task<(RequestTraceState State, WeakReference<Ctx> Request)> CaptureStateWithoutRequest()
+    {
+        RequestTraceState? state = null;
+        WeakReference<Ctx>? request = null;
+        var app = ReptarApp.Create();
+        app.Get("/state", ctx =>
+        {
+            state = ctx.TraceState;
+            request = new WeakReference<Ctx>(ctx);
+            return ctx.Text("ok");
+        });
+        await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/state" });
+        return (state!, request!);
+    }
+
+    [Fact]
     public async Task UnobservedRequestDoesNotGenerateTraceIdentifiers()
     {
         Ctx? captured = null;

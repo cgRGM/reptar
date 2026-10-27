@@ -8,9 +8,7 @@ public sealed partial class Ctx
 {
     private readonly ServiceSet _services;
     private string? _requestId;
-    private string? _traceId;
-    private string? _spanId;
-    private bool _traceActive;
+    private RequestTraceState? _traceState;
 
     internal Ctx(ReptarRequest request, ServiceSet services)
     {
@@ -70,45 +68,29 @@ public sealed partial class Ctx
     /// <summary>W3C trace id parsed from traceparent, or generated on first use.</summary>
     public string? TraceId
     {
-        get => _traceActive ? GetTraceIdentifier(ref _traceId, trace: true) : _traceId;
-        internal set => Volatile.Write(ref _traceId, value);
+        get => _traceState?.TraceId;
+        internal set => (_traceState ??= new RequestTraceState()).TraceId = value;
     }
 
     /// <summary>W3C span id, generated on first use within an HTTP request.</summary>
     public string? SpanId
     {
-        get => _traceActive ? GetTraceIdentifier(ref _spanId, trace: false) : _spanId;
-        internal set => Volatile.Write(ref _spanId, value);
+        get => _traceState?.SpanId;
+        internal set => (_traceState ??= new RequestTraceState()).SpanId = value;
     }
 
     /// <summary>W3C parent span id parsed from the incoming traceparent.</summary>
-    public string? ParentSpanId { get; internal set; }
-
-    internal bool HasTraceIdentifiers => _traceId is not null && _spanId is not null;
-    internal bool TraceSampled { get; private set; }
-
-    internal void InitializeTrace(TraceParent? parent)
+    public string? ParentSpanId
     {
-        _traceActive = true;
-        _traceId = parent?.TraceId;
-        _spanId = null;
-        ParentSpanId = parent?.SpanId;
-        TraceSampled = parent?.Sampled ?? true;
+        get => _traceState?.ParentSpanId;
+        internal set => (_traceState ??= new RequestTraceState()).ParentSpanId = value;
     }
 
-    internal TraceContext CaptureTraceContext() =>
-        new(TraceId!, SpanId!, ParentSpanId, TraceSampled);
+    internal bool HasTraceIdentifiers => _traceState?.HasIdentifiers ?? false;
+    internal RequestTraceState TraceState => _traceState
+        ?? throw new InvalidOperationException("HTTP trace state has not been initialized.");
 
-    private static string GetTraceIdentifier(ref string? slot, bool trace)
-    {
-        var existing = Volatile.Read(ref slot);
-        if (existing is not null)
-            return existing;
-
-        var created = trace ? TraceContext.NewTraceId() : TraceContext.NewSpanId();
-        // Parallel outbound calls must all observe one request identity.
-        return Interlocked.CompareExchange(ref slot, created, null) ?? created;
-    }
+    internal void InitializeTrace(TraceParent? parent) => _traceState = new RequestTraceState(parent);
 
     public async Task<SessionUser?> UserAsync()
     {
