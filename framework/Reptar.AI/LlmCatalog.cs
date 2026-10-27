@@ -51,7 +51,7 @@ public static class LlmCatalog
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
 
-            models.Sort(StringComparer.OrdinalIgnoreCase);
+            models.Sort(CompareByRecency);
             return new CatalogResult(true, models);
         }
         catch (HttpRequestException ex)
@@ -67,6 +67,66 @@ public static class LlmCatalog
             // Invalid base URLs surface as request-building failures, not crashes.
             return CatalogResult.Failure(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Orders model ids newest first.
+    /// </summary>
+    /// <remarks>
+    /// Provider catalogs are in no useful order, and sorting them alphabetically is worse than
+    /// leaving them alone: it puts <c>gpt-4o</c> above <c>gpt-5.6</c>, so the model someone just
+    /// heard about is buried under the whole back catalogue.
+    ///
+    /// The rule is a heuristic, not a version scheme: compare the numeric runs in the id
+    /// left-to-right, descending, so <c>gpt-6-sol</c> beats <c>gpt-5.6</c> and a dated snapshot
+    /// beats the alias it snapshots. Ties fall back to the id itself, descending, which keeps the
+    /// order stable. Models whose families are not comparable (<c>o3</c> versus <c>gpt-4</c>) are
+    /// ordered by the same numbers; there is no correct answer for that case, only a stable one.
+    /// </remarks>
+    public static int CompareByRecency(string a, string b)
+    {
+        var left = VersionParts(a);
+        var right = VersionParts(b);
+
+        for (var i = 0; i < Math.Min(left.Length, right.Length); i++)
+        {
+            if (left[i] != right[i])
+                return right[i].CompareTo(left[i]);
+        }
+
+        // More parts means more specific, and a dated snapshot is newer than its alias.
+        if (left.Length != right.Length)
+            return right.Length.CompareTo(left.Length);
+
+        return string.CompareOrdinal(b, a);
+    }
+
+    private static int[] VersionParts(string id)
+    {
+        var parts = new List<int>(4);
+        var current = 0;
+        var inNumber = false;
+
+        foreach (var character in id)
+        {
+            if (character is >= '0' and <= '9')
+            {
+                // Clamp rather than overflow on a long date-like run.
+                current = current > 9_999_999 ? 9_999_999 : (current * 10) + (character - '0');
+                inNumber = true;
+            }
+            else if (inNumber)
+            {
+                parts.Add(current);
+                current = 0;
+                inNumber = false;
+            }
+        }
+
+        if (inNumber)
+            parts.Add(current);
+
+        return [.. parts];
     }
 
     // ------------------------------------------------------------------
@@ -117,6 +177,9 @@ public static class LlmCatalog
     private static readonly Dictionary<string, string> ModelsDevProviderIds = new(StringComparer.OrdinalIgnoreCase)
     {
         [LlmProviders.OpenAi] = "openai",
+        // A ChatGPT subscription serves the same model family as the API, so it browses the same
+        // catalog. Without this the provider lists only its default and looks broken.
+        [LlmProviders.OpenAiChatGpt] = "openai",
         [LlmProviders.Anthropic] = "anthropic",
         [LlmProviders.Gemini] = "google",
         [LlmProviders.Ollama] = "ollama",
@@ -178,7 +241,10 @@ public static class LlmCatalog
                     (int)Math.Min(int.MaxValue, maxOutput)));
             }
 
-            return result.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            // Newest first, matching the live listing. Sorting by display name put "GPT-4o"
+            // above "GPT-5.6" for the same reason alphabetical sorting did.
+            result.Sort((a, b) => CompareByRecency(a.Id, b.Id));
+            return result;
         }
         catch
         {
