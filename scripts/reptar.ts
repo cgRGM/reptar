@@ -301,21 +301,25 @@ const run = (args: string[], cwd = repoRoot): void => {
  * diagnostics go to stderr" contract.
  */
 const runWithCleanStdout = (args: string[], cwd = repoRoot): void => {
-  const build = spawnSync(dotnetPath(), ["build", args[0], "-v", "q", "--nologo"], {
-    cwd,
-    env: dotnetEnv(),
-    stdio: ["ignore", "ignore", "inherit"],
-  });
+  const build = spawnSync(
+    dotnetPath(),
+    ["build", args[0], "-v", "q", "--nologo"],
+    {
+      cwd,
+      env: dotnetEnv(),
+      stdio: ["ignore", "ignore", "inherit"],
+    }
+  );
 
   if (build.status !== 0) {
     process.exit(build.status ?? 1);
   }
 
-  const result = spawnSync(
-    dotnetPath(),
-    ["run", ...args, "--no-build"],
-    { cwd, env: dotnetEnv(), stdio: "inherit" }
-  );
+  const result = spawnSync(dotnetPath(), ["run", ...args, "--no-build"], {
+    cwd,
+    env: dotnetEnv(),
+    stdio: "inherit",
+  });
 
   if (result.status !== 0) {
     process.exit(result.status ?? 1);

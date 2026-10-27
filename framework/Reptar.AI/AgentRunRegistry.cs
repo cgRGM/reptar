@@ -1,92 +1,147 @@
 #if !NETWASM
 using System.Collections.Concurrent;
+using System.Diagnostics.CodeAnalysis;
 
 namespace Reptar.AI;
 
-/// <summary>
-/// Tracks in-flight agent runs by key so a second request can steer or abort the first.
-/// </summary>
-/// <remarks>
-/// An HTTP handler is stateless: without a registry, a request that arrives while the agent is
-/// working has no way to reach the run started by an earlier request. That is the whole difference
-/// between a web client that feels like the terminal and one where you can only wait.
-///
-/// The key is whatever the host already has — a session id, a conversation id, a job id. This
-/// class knows nothing about HTTP or sessions; it is a map of cancellable runs with a message
-/// queue each.
-/// </remarks>
+/// <summary>Tracks cancellable, steerable agent runs by host-defined session or job key.</summary>
 public static class AgentRunRegistry
 {
-    private sealed class ActiveRun
+    internal sealed class ActiveRun
     {
-        public CancellationTokenSource Cancellation { get; } = new();
-        public ConcurrentQueue<ChatMessage> Steering { get; } = new();
-        public DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
+        private readonly object _gate = new();
+        private bool _ended;
+        private int _cancellations;
+        internal CancellationTokenSource Cancellation { get; } = new();
+        internal ConcurrentQueue<ChatMessage> Steering { get; } = new();
+        internal DateTimeOffset StartedAt { get; } = DateTimeOffset.UtcNow;
+
+        internal bool Steer(string message)
+        {
+            lock (_gate)
+            {
+                if (_ended)
+                    return false;
+                Steering.Enqueue(new ChatMessage(AgentRoles.User, message));
+                return true;
+            }
+        }
+
+        internal bool Abort()
+        {
+            lock (_gate)
+            {
+                if (_ended)
+                    return false;
+                _cancellations++;
+            }
+            // User cancellation callbacks must never execute under our lifetime lock.
+            try
+            {
+                Cancellation.Cancel();
+                return true;
+            }
+            finally
+            {
+                lock (_gate)
+                {
+                    _cancellations--;
+                    if (_ended && _cancellations == 0)
+                        Cancellation.Dispose();
+                }
+            }
+        }
+
+        internal void End()
+        {
+            lock (_gate)
+            {
+                if (_ended)
+                    return;
+                _ended = true;
+                if (_cancellations == 0)
+                    Cancellation.Dispose();
+            }
+        }
+
+        internal IReadOnlyList<ChatMessage> Drain()
+        {
+            var drained = new List<ChatMessage>();
+            while (Steering.TryDequeue(out var message))
+                drained.Add(message);
+            return drained;
+        }
+    }
+
+    /// <summary>Owns one particular run, so late cleanup cannot remove a newer run.</summary>
+    public sealed class RunLease : IDisposable
+    {
+        private readonly string _key;
+        private readonly ActiveRun _run;
+        public CancellationToken Token { get; }
+
+        internal RunLease(string key, ActiveRun run)
+        {
+            _key = key;
+            _run = run;
+            Token = run.Cancellation.Token;
+        }
+
+        public IReadOnlyList<ChatMessage> DrainSteering() => _run.Drain();
+
+        public void Dispose()
+        {
+            Runs.TryRemove(new KeyValuePair<string, ActiveRun>(_key, _run));
+            _run.End();
+        }
     }
 
     private static readonly ConcurrentDictionary<string, ActiveRun> Runs = new(StringComparer.Ordinal);
 
-    /// <summary>
-    /// Registers a run and hands back its cancellation token. Replaces any previous run for the
-    /// same key, so a restarted run does not leak the old token.
-    /// </summary>
-    public static void Begin(string key, out CancellationToken token)
+    /// <summary>Reserves an idle key; never overwrites an active run.</summary>
+    public static bool TryBegin(string key, [NotNullWhen(true)] out RunLease? lease)
     {
         var run = new ActiveRun();
-        Runs[key] = run;
-        token = run.Cancellation.Token;
+        // Capture the token before publishing: End may race immediately after publication.
+        var candidate = new RunLease(key, run);
+        if (Runs.TryAdd(key, run))
+        {
+            lease = candidate;
+            return true;
+        }
+        run.End();
+        lease = null;
+        return false;
     }
 
-    /// <summary>Removes the run. Call from a finally block.</summary>
+    /// <summary>Starts an idle key, throwing if it already has an active run. Prefer a lease for cleanup.</summary>
+    public static void Begin(string key, out CancellationToken token)
+    {
+        if (!TryBegin(key, out var lease))
+            throw new InvalidOperationException($"An agent run is already active for '{key}'.");
+        token = lease.Token;
+    }
+
+    /// <summary>Explicitly removes the current run. Running producers should dispose their own lease instead.</summary>
     public static void End(string key)
     {
         if (Runs.TryRemove(key, out var run))
-            run.Cancellation.Dispose();
+            run.End();
     }
 
-    /// <summary>Queues a message for the running agent. False when nothing is running.</summary>
-    public static bool Steer(string key, string message)
-    {
-        if (!Runs.TryGetValue(key, out var run))
-            return false;
+    public static bool Steer(string key, string message) =>
+        Runs.TryGetValue(key, out var run) && run.Steer(message);
 
-        run.Steering.Enqueue(new ChatMessage(AgentRoles.User, message));
-        return true;
-    }
+    public static bool Abort(string key) => Runs.TryGetValue(key, out var run) && run.Abort();
 
-    /// <summary>Aborts the running agent. False when nothing is running.</summary>
-    public static bool Abort(string key)
-    {
-        if (!Runs.TryGetValue(key, out var run))
-            return false;
-
-        run.Cancellation.Cancel();
-        return true;
-    }
-
-    /// <summary>Whether a run is active for the key, and how long it has been going.</summary>
     public static (bool Running, double ElapsedMs) Status(string key) =>
         Runs.TryGetValue(key, out var run)
             ? (true, (DateTimeOffset.UtcNow - run.StartedAt).TotalMilliseconds)
             : (false, 0);
 
-    /// <summary>
-    /// Takes every queued steering message. Consumed, not replayed, so a client that steers twice
-    /// does not get its message delivered on every subsequent turn.
-    /// </summary>
-    public static IReadOnlyList<ChatMessage> DrainSteering(string key)
-    {
-        if (!Runs.TryGetValue(key, out var run))
-            return [];
+    public static IReadOnlyList<ChatMessage> DrainSteering(string key) =>
+        Runs.TryGetValue(key, out var run) ? run.Drain() : [];
 
-        var drained = new List<ChatMessage>();
-        while (run.Steering.TryDequeue(out var message))
-            drained.Add(message);
-
-        return drained;
-    }
-
-    /// <summary>Number of runs currently registered, for a health endpoint.</summary>
     public static int ActiveCount => Runs.Count;
 }
 #endif

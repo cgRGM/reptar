@@ -82,23 +82,73 @@ public sealed class AgentRunRegistryTests
     }
 
     [Fact]
-    public void beginning_twice_replaces_the_previous_run()
+    public void beginning_twice_rejects_the_duplicate_without_orphaning_the_first()
     {
         AgentRunRegistry.Begin("s5", out var first);
-        AgentRunRegistry.Begin("s5", out var second);
         try
         {
-            Assert.NotEqual(first, second);
-
-            // Aborting hits the current run, not the replaced one.
-            AgentRunRegistry.Abort("s5");
-            Assert.True(second.IsCancellationRequested);
-            Assert.False(first.IsCancellationRequested);
+            Assert.False(AgentRunRegistry.TryBegin("s5", out var duplicate));
+            Assert.Null(duplicate);
+            Assert.Throws<InvalidOperationException>(() => AgentRunRegistry.Begin("s5", out _));
+            Assert.True(AgentRunRegistry.Abort("s5"));
+            Assert.True(first.IsCancellationRequested);
         }
         finally
         {
             AgentRunRegistry.End("s5");
         }
+    }
+
+    [Fact]
+    public void late_lease_cleanup_cannot_remove_or_drain_a_new_run()
+    {
+        const string key = "lease-replacement";
+        Assert.True(AgentRunRegistry.TryBegin(key, out var first));
+        first.Dispose();
+        Assert.True(AgentRunRegistry.TryBegin(key, out var second));
+        using (second)
+        {
+            Assert.True(AgentRunRegistry.Steer(key, "new run"));
+            first.Dispose();
+            Assert.True(AgentRunRegistry.Status(key).Running);
+            Assert.Empty(first.DrainSteering());
+            Assert.Equal("new run", Assert.Single(second.DrainSteering()).Content);
+            Assert.True(AgentRunRegistry.Abort(key));
+            Assert.True(second.Token.IsCancellationRequested);
+        }
+    }
+
+    [Fact]
+    public async Task abort_and_cleanup_can_race_without_disposing_an_inflight_cancellation()
+    {
+        for (var iteration = 0; iteration < 100; iteration++)
+        {
+            var key = $"abort-race-{iteration}";
+            Assert.True(AgentRunRegistry.TryBegin(key, out var run));
+            await Task.WhenAll(Task.Run(() => AgentRunRegistry.Abort(key)), Task.Run(run.Dispose));
+            Assert.False(AgentRunRegistry.Status(key).Running);
+        }
+    }
+
+    [Fact]
+    public async Task cancellation_callback_can_end_its_own_run_without_a_lock_deadlock()
+    {
+        const string key = "callback-cleanup";
+        Assert.True(AgentRunRegistry.TryBegin(key, out var run));
+        using var callback = run.Token.Register(run.Dispose);
+        Assert.True(await Task.Run(() => AgentRunRegistry.Abort(key)).WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.False(AgentRunRegistry.Status(key).Running);
+    }
+
+    [Fact]
+    public async Task parallel_starts_reserve_only_one_run()
+    {
+        const string key = "parallel-reservation";
+        var leases = await Task.WhenAll(Enumerable.Range(0, 32)
+            .Select(_ => Task.Run(() => AgentRunRegistry.TryBegin(key, out var run) ? run : null)));
+        var winner = Assert.Single(leases.Where(run => run is not null));
+        winner!.Dispose();
+        Assert.False(AgentRunRegistry.Status(key).Running);
     }
 
     [Fact]

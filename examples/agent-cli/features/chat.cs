@@ -27,9 +27,10 @@ public static class Chat
             var model = root?["model"]?.GetValue<string>();
             var client = LlmClientFactory.Create(LlmConfig.FromEnvironment(provider, model));
 
-            AgentRunRegistry.Begin(session.Id, out var runToken);
+            if (!AgentRunRegistry.TryBegin(session.Id, out var run))
+                return ctx.Error(409, "run_active", "A run is already streaming for that session; steer or abort it first.");
             var events = RunStreaming(
-                app, client, store, session, history, message, workspaceRoot, runToken);
+                app, client, store, session, history, message, workspaceRoot, run);
             return ctx.StreamLlmAsync(events);
         }).WithSummary("Stream an agent reply over SSE");
 
@@ -425,11 +426,8 @@ public static class Chat
         List<ChatMessage> history,
         string message,
         string workspaceRoot,
-        CancellationToken runToken)
+        AgentRunRegistry.RunLease run)
     {
-        history.Add(new ChatMessage("user", message));
-        await store.AppendMessageAsync(session.Id, history[^1]);
-
         var channel = Channel.CreateUnbounded<string>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -441,6 +439,8 @@ public static class Chat
             var step = 0;
             try
             {
+                history.Add(new ChatMessage("user", message));
+                await store.AppendMessageAsync(session.Id, history[^1]);
                 var summary = await StreamingAgentHarness.RunAsync(
                     app,
                     client,
@@ -449,9 +449,9 @@ public static class Chat
                     maxSteps: 24,
                     configure: config => config with
                     {
-                        GetSteeringMessages = () => AgentRunRegistry.DrainSteering(session.Id)
+                        GetSteeringMessages = run.DrainSteering
                     },
-                    cancellationToken: runToken,
+                    cancellationToken: run.Token,
                     onEvent: evt =>
                     {
                         // Event names follow pi's JSON/RPC stream so a single client
@@ -576,7 +576,7 @@ public static class Chat
             }
             finally
             {
-                AgentRunRegistry.End(session.Id);
+                run.Dispose();
                 channel.Writer.TryComplete();
             }
         });
