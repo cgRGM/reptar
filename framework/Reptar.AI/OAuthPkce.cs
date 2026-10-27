@@ -96,6 +96,7 @@ public static class OAuthPkce
         int port,
         string path,
         string expectedState,
+        Action<string>? onListening = null,
         CancellationToken cancellationToken = default)
     {
         var listener = new TcpListener(IPAddress.Loopback, port);
@@ -115,6 +116,13 @@ public static class OAuthPkce
         {
             var actualPort = ((IPEndPoint)listener.LocalEndpoint).Port;
             var redirectUri = $"http://127.0.0.1:{actualPort}{path}";
+
+            // Announce only once the socket is accepting. Opening the browser first races the
+            // bind: on a session that needs no interaction the redirect can arrive before the
+            // listener exists, and the browser reports a connection failure.
+            onListening?.Invoke(redirectUri);
+
+            var mismatches = 0;
 
             while (true)
             {
@@ -150,10 +158,25 @@ public static class OAuthPkce
 
                 if (!string.Equals(query["state"], expectedState, StringComparison.Ordinal))
                 {
-                    // A mismatched state means the redirect did not come from the request we made.
-                    await RespondAsync(stream, 400, "State mismatch", cancellationToken).ConfigureAwait(false);
-                    throw new OAuthException(
-                        "The sign-in callback did not match this request (state mismatch). Try again.");
+                    // A stale tab, a cached redirect, or another client's callback can land here
+                    // while a legitimate sign-in is still pending. Answer it and keep listening
+                    // rather than aborting a flow that is about to succeed.
+                    mismatches++;
+                    await RespondAsync(
+                        stream,
+                        400,
+                        "This sign-in link is no longer valid. Return to the terminal and start again.",
+                        cancellationToken).ConfigureAwait(false);
+
+                    if (mismatches >= MaxMismatches)
+                    {
+                        throw new OAuthException(
+                            $"The sign-in callback did not match this request after {mismatches} attempts. "
+                            + "Another sign-in may be holding port "
+                            + $"{actualPort}; cancel it and try again.");
+                    }
+
+                    continue;
                 }
 
                 if (query["code"] is not { Length: > 0 } code)
@@ -291,6 +314,8 @@ public static class OAuthPkce
 
         return builder.ToString();
     }
+
+    private const int MaxMismatches = 5;
 
     private static async Task RespondAsync(
         Stream stream, int status, string message, CancellationToken cancellationToken)

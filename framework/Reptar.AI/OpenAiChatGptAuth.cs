@@ -86,17 +86,21 @@ public static class OpenAiChatGptAuth
         var state = OAuthPkce.CreateState();
 
         var nonce = OAuthPkce.CreateState();
-        var url = BuildAuthorizeUrl(state, pkce.Challenge, nonce);
 
-        onUrl?.Invoke(url);
-
-        if (openBrowser && !OAuthPkce.TryOpenBrowser(url))
-        {
-            // Printing the URL is the fallback; the caller already got it through onUrl.
-        }
-
+        // The listener is bound before the browser opens. Opening first races the bind: on a
+        // session that needs no interaction the redirect can arrive before the socket exists.
         var callback = await OAuthPkce
-            .WaitForCallbackAsync(CallbackPort, CallbackPath, state, cancellationToken)
+            .WaitForCallbackAsync(
+                CallbackPort,
+                CallbackPath,
+                state,
+                onListening: _ =>
+                {
+                    var authorizeUrl = BuildAuthorizeUrl(state, pkce.Challenge, nonce);
+                    onUrl?.Invoke(authorizeUrl);
+                    OAuthPkce.TryOpenBrowser(authorizeUrl);
+                },
+                cancellationToken)
             .ConfigureAwait(false);
 
         // OpenAI returns the client id it registered for this request.

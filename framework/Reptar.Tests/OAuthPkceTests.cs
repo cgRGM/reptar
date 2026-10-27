@@ -100,8 +100,13 @@ public sealed class OAuthPkceTests
         await Task.Delay(150);
         _ = RequestAsync(port, "/auth/callback?code=abc123&state=wrong");
 
-        var error = await Assert.ThrowsAsync<OAuthException>(() => waiting);
-        Assert.Contains("state mismatch", error.Message);
+        // A stale tab or another client's callback must not abort a sign-in that is still pending.
+        // A real code arriving afterwards has to complete the flow.
+        await Task.Delay(150);
+        _ = RequestAsync(port, "/auth/callback?code=good&state=expected");
+
+        var result = await waiting;
+        Assert.Equal("good", result.Code);
     }
 
     [Fact]
@@ -115,6 +120,39 @@ public sealed class OAuthPkceTests
 
         var error = await Assert.ThrowsAsync<OAuthException>(() => waiting);
         Assert.Contains("access_denied", error.Message);
+    }
+
+    [Fact]
+    public async Task repeated_state_mismatches_give_up_instead_of_hanging()
+    {
+        var port = FreePort();
+        var waiting = OAuthPkce.WaitForCallbackAsync(port, "/auth/callback", "expected");
+
+        await Task.Delay(150);
+        for (var i = 0; i < 6; i++)
+            _ = RequestAsync(port, $"/auth/callback?code=c{i}&state=wrong");
+
+        var error = await Assert.ThrowsAsync<OAuthException>(() => waiting);
+        Assert.Contains("did not match", error.Message);
+    }
+
+    [Fact]
+    public async Task the_listener_is_announced_only_after_it_is_accepting()
+    {
+        var port = FreePort();
+        var announced = new TaskCompletionSource<string>();
+
+        var waiting = OAuthPkce.WaitForCallbackAsync(
+            port, "/auth/callback", "s", onListening: uri => announced.TrySetResult(uri));
+
+        // The announcement must already have happened by the time it is awaited, and the socket
+        // must be live when it does — that is the whole point of announcing late.
+        var uri = await announced.Task;
+        var response = await RequestAsync(port, "/auth/callback?code=c&state=s");
+
+        Assert.Contains($"127.0.0.1:{port}", uri);
+        Assert.Contains("200", response);
+        Assert.Equal("c", (await waiting).Code);
     }
 
     [Fact]
