@@ -56,7 +56,7 @@ public sealed class RoomHub
                $",\"joins\":{Interlocked.Read(ref _joins)},\"leaves\":{Interlocked.Read(ref _leaves)}" +
                $",\"messagesRelayed\":{Interlocked.Read(ref _messagesRelayed)}" +
                $",\"presenceUpdatesRelayed\":{Interlocked.Read(ref _presenceUpdatesRelayed)}" +
-               $",\"messagesPersisted\":{_persister.PersistedCount},\"messagesPersistFailed\":{_persister.FailedCount},\"lastPersistError\":{_persister.LastErrorJson},\"persisterQueueDepth\":{_persister.QueueDepth}" +
+               $",\"messagesPersisted\":{_persister.PersistedCount},\"messagesPersistFailed\":{_persister.FailedCount},\"messagesPersistDropped\":{_persister.DroppedCount},\"lastPersistError\":{_persister.LastErrorJson},\"persisterQueueDepth\":{_persister.QueueDepth},\"persisterActiveWrites\":{_persister.ActiveWrites}" +
                $",\"fanoutFailures\":{Interlocked.Read(ref _fanoutFailures)}" +
                $",\"fanoutAttempts\":{Interlocked.Read(ref _fanoutAttempts)}" +
                $",\"fanoutDelivered\":{Interlocked.Read(ref _fanoutDelivered)}" +
@@ -108,15 +108,16 @@ public sealed class RoomHub
     }
 
     /// <summary>Fanout a message into a room without a live socket (REST trigger).</summary>
-    public int BroadcastFromServer(string roomId, string senderId, string payloadJson)
+    public async Task<int> BroadcastFromServerAsync(string roomId, string senderId, string payloadJson)
     {
         if (!_rooms.TryGetValue(roomId, out var room))
         {
             return 0;
         }
 
+        var messageId = Ids.New("msg");
         var frame = RoomProtocol.Message(
-            messageId: Ids.New("msg"),
+            messageId: messageId,
             roomId: roomId,
             connectionId: null,
             senderId: senderId,
@@ -125,7 +126,7 @@ public sealed class RoomHub
 
         var delivered = Fanout(room, frame, exceptConnectionId: null);
         Interlocked.Increment(ref _messagesRelayed);
-        _ = _persister.PersistAsync(roomId, senderId, payloadJson);
+        await _persister.PersistAsync(roomId, senderId, payloadJson, messageId);
         return delivered;
     }
 
@@ -297,22 +298,23 @@ public sealed class RoomHub
         }
 
         var payloadJson = payloadElement.GetRawText(); // no re-serialization of arbitrary payloads
+        var messageId = Ids.New("msg");
         var frame = RoomProtocol.Message(
-            messageId: Ids.New("msg"),
+            messageId: messageId,
             roomId: peer.RoomId,
             connectionId: peer.Connection.Id,
             senderId: peer.UserId,
             sentAt: DateTimeOffset.UtcNow.ToString("O"),
             payloadJson: payloadJson);
 
-        // Fan out first (including the sender, so it gets a durable id/ack);
+        // Fan out first (including a sender echo, NOT a durable-write ack);
         // persistence is write-behind locally (SQLite group-commit) and
         // inline via the D1 binding under NetWasm, where the isolate freezes
         // between events.
         _ = Fanout(room, frame, exceptConnectionId: null);
         Interlocked.Increment(ref _messagesRelayed);
 
-        await _persister.PersistAsync(peer.RoomId, peer.UserId, payloadJson);
+        await _persister.PersistAsync(peer.RoomId, peer.UserId, payloadJson, messageId);
     }
 
     private async Task HandleLeaveAsync(Peer peer)
@@ -505,7 +507,7 @@ public static class RoomsRoutes
                 return ctx.BadRequest("Body must be valid JSON.");
             }
 
-            var delivered = hub.BroadcastFromServer(roomId, senderId, payloadJson);
+            var delivered = await hub.BroadcastFromServerAsync(roomId, senderId, payloadJson);
             return ctx.JsonRaw($"{{\"delivered\":{delivered}}}", status: 202);
         });
 
@@ -544,11 +546,12 @@ public sealed class Peer
 /// the fsync path. Under NetWasm the same enqueue path batches into D1
 /// statements over the binding.
 /// </summary>
-public sealed class RoomMessagePersister
+public sealed class RoomMessagePersister : IReptarModule
 {
     private readonly IDbClient _db;
     private long _persisted;
     private long _persistFailed;
+    private long _activeWrites;
     private string? _lastPersistError;
 #if !NETWASM
     private long _dropped;
@@ -558,6 +561,7 @@ public sealed class RoomMessagePersister
 
     public RoomMessagePersister(IDbClient db, int workerCount, int queueCapacity)
     {
+        ValidateLimits(workerCount, queueCapacity);
         _db = db;
         _queue = Channel.CreateBounded<RoomMessageRow>(new BoundedChannelOptions(queueCapacity)
         {
@@ -573,44 +577,68 @@ public sealed class RoomMessagePersister
     }
 
     public long QueueDepth => _queue.Reader.Count;
+    public long DroppedCount => Interlocked.Read(ref _dropped);
 #else
     // Cloudflare Workers freeze the isolate between events, so background
     // drain workers would never run — persistence is awaited inline through
     // the D1 binding instead (concurrent events still batch at the binding).
     public RoomMessagePersister(IDbClient db, int workerCount, int queueCapacity)
     {
+        ValidateLimits(workerCount, queueCapacity);
         _db = db;
     }
 
     public long QueueDepth => 0;
+    public long DroppedCount => 0;
 #endif
 
     public long PersistedCount => Interlocked.Read(ref _persisted);
 
     public long FailedCount => Interlocked.Read(ref _persistFailed);
+    public long ActiveWrites => Interlocked.Read(ref _activeWrites);
 
-    public string LastErrorJson => RoomProtocol.Escape(Volatile.Read(ref _lastPersistError) ?? "null");
+    public string LastErrorJson => Volatile.Read(ref _lastPersistError) is { } message
+        ? RoomProtocol.Escape(message)
+        : "null";
+
+    private static void ValidateLimits(int workerCount, int queueCapacity)
+    {
+        if (workerCount < 1)
+            throw new ArgumentOutOfRangeException(nameof(workerCount));
+        if (queueCapacity < 1)
+            throw new ArgumentOutOfRangeException(nameof(queueCapacity));
+    }
+
+    public Task StopAsync(ReptarApp app, CancellationToken cancellationToken)
+    {
+#if NETWASM
+        return Task.CompletedTask;
+#else
+        _queue.Writer.TryComplete();
+        return Task.WhenAll(_workers).WaitAsync(cancellationToken);
+#endif
+    }
 
     /// <summary>
-    /// Persist a broadcast snapshot. Locally this enqueues into the
+    /// Attempt to persist a broadcast snapshot; completion is not a durability acknowledgement. Locally this enqueues into the
     /// write-behind queue (group-commit coalescing); under NetWasm it awaits
     /// the D1 binding inline so the write lands before the event ends.
     /// </summary>
-    public ValueTask PersistAsync(string roomId, string senderId, string payloadJson)
+    public ValueTask PersistAsync(string roomId, string senderId, string payloadJson, string? messageId = null)
     {
 #if NETWASM
-        return PersistInlineAsync(roomId, senderId, payloadJson);
+        return PersistInlineAsync(roomId, senderId, payloadJson, messageId);
 #else
-        TryEnqueue(roomId, senderId, payloadJson);
+        TryEnqueue(roomId, senderId, payloadJson, messageId);
         return ValueTask.CompletedTask;
 #endif
     }
 
 #if !NETWASM
-    public bool TryEnqueue(string roomId, string senderId, string payloadJson)
+    public bool TryEnqueue(string roomId, string senderId, string payloadJson, string? messageId = null)
     {
         var row = new RoomMessageRow(
-            Ids.New("msg"),
+            messageId ?? Ids.New("msg"),
             roomId,
             senderId,
             payloadJson,
@@ -636,12 +664,12 @@ public sealed class RoomMessagePersister
 
     private sealed record RoomMessageRow(string Id, string RoomId, string SenderId, string PayloadJson, string CreatedAt);
 
-    private async ValueTask PersistInlineAsync(string roomId, string senderId, string payloadJson)
+    private async ValueTask PersistInlineAsync(string roomId, string senderId, string payloadJson, string? messageId)
     {
         try
         {
             await InsertRowAsync(new RoomMessageRow(
-                Ids.New("msg"),
+                messageId ?? Ids.New("msg"),
                 roomId,
                 senderId,
                 payloadJson,
@@ -668,6 +696,7 @@ public sealed class RoomMessagePersister
 
     private async Task InsertRowAsync(RoomMessageRow row)
     {
+        Interlocked.Increment(ref _activeWrites);
         try
         {
             // InsertAsync(TableDef, IDictionary) maps dictionaries straight
@@ -698,6 +727,10 @@ public sealed class RoomMessagePersister
             }
 
             Volatile.Write(ref _lastPersistError, message);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeWrites);
         }
     }
 }

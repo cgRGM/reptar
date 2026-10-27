@@ -40,6 +40,7 @@ await app.EnsureCreatedAsync();
 // contended-writer case where Reptar's SqliteDbClient coalesces up to 64
 // pending statements into one group-commit transaction (MaxBatchSize = 64).
 var persister = new RoomMessagePersister(database, workerCount: 4, queueCapacity: 50_000);
+app.AddModule(persister); // Drain accepted write-behind work before disposing SQLite.
 var hub = new RoomHub(persister);
 RoomsRoutes.Configure(app, hub);
 

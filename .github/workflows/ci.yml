@@ -188,6 +188,14 @@ jobs:
             -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
             -o "$RUNNER_TEMP/reptar-rooms-native" 2>&1 | tee "$RUNNER_TEMP/reptar-rooms-publish.log"
 
+      - name: Published Native AOT Rooms persistence fault boundaries
+        run: |
+          set -o pipefail
+          dotnet publish scripts/fixtures/realtime-faults/app.cs -c Release -r linux-x64 --self-contained \
+            -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+            -o "$RUNNER_TEMP/reptar-rooms-faults-native" 2>&1 | tee "$RUNNER_TEMP/reptar-rooms-faults-publish.log"
+          python3 scripts/test-realtime-faults.py "$RUNNER_TEMP/reptar-rooms-faults-native/app"
+
       - name: Reviewed Native AOT diagnostic instances
         run: |
           python3 scripts/check-aot-warnings.py \
@@ -196,7 +204,8 @@ jobs:
             "$RUNNER_TEMP/reptar-http-publish.log" \
             "$RUNNER_TEMP/reptar-session-publish.log" \
             "$RUNNER_TEMP/reptar-background-publish.log" \
-            "$RUNNER_TEMP/reptar-rooms-publish.log"
+            "$RUNNER_TEMP/reptar-rooms-publish.log" \
+            "$RUNNER_TEMP/reptar-rooms-faults-publish.log"
 
       - name: Doctor (strict)
         run: bun reptar doctor --strict
