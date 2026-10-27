@@ -210,7 +210,10 @@ export default defineConfig({
         {
           items: [
             { label: "AI Tools & Agent Harness", slug: "ai/agent-harness" },
-            { label: "Agent Runtime (loop, sessions, SDK)", slug: "ai/agent-runtime" },
+            {
+              label: "Agent Runtime (loop, sessions, SDK)",
+              slug: "ai/agent-runtime",
+            },
             { label: "AI Gateway (Proxy & Failover)", slug: "ai/ai-gateway" },
           ],
           label: "AI & Agents",
