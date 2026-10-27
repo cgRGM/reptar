@@ -131,7 +131,7 @@ public sealed record AgentMessageRow(
         return new ChatMessage(Role, Content, ToolCalls: toolCalls);
     }
 
-    internal static string? SerializeToolCalls(IReadOnlyList<AiToolCall>? calls)
+    public static string? SerializeToolCalls(IReadOnlyList<AiToolCall>? calls)
     {
         if (calls is null || calls.Count == 0)
             return null;
@@ -150,8 +150,11 @@ public sealed record AgentMessageRow(
         return array.ToJsonString();
     }
 
-    private static IReadOnlyList<AiToolCall>? DeserializeToolCalls(string json)
+    public static IReadOnlyList<AiToolCall>? DeserializeToolCalls(string? json)
     {
+        if (string.IsNullOrEmpty(json))
+            return null;
+
         try
         {
             if (JsonNode.Parse(json) is not JsonArray array)
@@ -184,6 +187,15 @@ public sealed record AgentMessageRow(
 /// </summary>
 public sealed class AgentSessionStore(IDbClient db, TableDef sessions, TableDef messages)
 {
+    static AgentSessionStore()
+    {
+        // Resuming can query before any row constructor has run in this process.
+        EntityMapper<AgentSessionRow>.DirectMap = AgentSessionRow.Map;
+        EntityMapper<AgentSessionRow>.Factory = _ => AgentSessionRow.Map;
+        EntityMapper<AgentMessageRow>.DirectMap = AgentMessageRow.Map;
+        EntityMapper<AgentMessageRow>.Factory = _ => AgentMessageRow.Map;
+    }
+
     public TableDef Sessions => sessions;
     public TableDef Messages => messages;
 

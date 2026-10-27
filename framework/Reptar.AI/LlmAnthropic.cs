@@ -9,7 +9,7 @@ namespace Reptar.AI;
 /// <summary>
 /// Streaming client for the Anthropic Messages API (content block deltas + tool_use).
 /// </summary>
-internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
+public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
 {
     public LlmConfig Config { get; } = config;
 
@@ -21,20 +21,62 @@ internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
         var baseUrl = (Config.BaseUrl ?? "https://api.anthropic.com").TrimEnd('/');
 
         var (systemText, turns) = SplitSystem(messages);
+        var cache = Config.PromptCache;
+
+        // Thinking shares the response ceiling with the answer, so the ceiling is raised to fit
+        // the budget and the budget is capped to leave room to actually reply.
+        var (maxTokens, thinkingBudget) = ThinkingLevels.AdjustMaxTokens(
+            Config.MaxTokens > 0 ? Config.MaxTokens : null,
+            Config.MaxOutputTokens > 0 ? Config.MaxOutputTokens : DefaultMaxTokens,
+            Config.Thinking);
+
+        // A ceiling larger than the remaining context is rejected outright, so fit it to what is
+        // actually left. The thinking budget is re-derived from the clamped ceiling.
+        var contextTokens = ContextCompaction.EstimateContextTokens(messages);
+        maxTokens = ThinkingLevels.ClampToContext(maxTokens, contextTokens, Config.ContextWindow);
+
+        if (thinkingBudget > 0 && maxTokens <= thinkingBudget)
+        {
+            thinkingBudget = Math.Min(
+                thinkingBudget,
+                Math.Max(0, maxTokens - ThinkingLevels.MinAnswerTokens));
+        }
         var body = new JsonObject
         {
             ["model"] = Config.Model,
             ["stream"] = true,
             ["temperature"] = Config.Temperature,
-            ["max_tokens"] = Config.MaxTokens > 0 ? Config.MaxTokens : 4096,
-            ["messages"] = BuildMessages(turns)
+            ["max_tokens"] = maxTokens,
+            ["messages"] = BuildMessages(turns, cache)
         };
 
+        // Three breakpoints, which is what Anthropic's cache is designed around:
+        //   1. the system prompt (static for the session)
+        //   2. the last tool definition (static for the session)
+        //   3. the last content block of the last message (the conversation so far)
+        // Without (3) every turn re-bills the entire history at full input price; with it, a
+        // long session pays 0.1x for everything it already sent.
+        if (thinkingBudget > 0)
+        {
+            body["thinking"] = new JsonObject
+            {
+                ["type"] = "enabled",
+                ["budget_tokens"] = thinkingBudget
+            };
+
+            // Temperature is incompatible with extended thinking.
+            body.Remove("temperature");
+        }
+
         if (systemText is { Length: > 0 })
-            body["system"] = systemText;
+            body["system"] = LlmHttp.BuildAnthropicSystem(systemText, cache);
 
         if (tools.Count > 0)
-            body["tools"] = LlmHttp.BuildAnthropicTools(tools);
+        {
+            body["tools"] = cache
+                ? LlmHttp.BuildAnthropicToolsCached(tools)
+                : LlmHttp.BuildAnthropicTools(tools);
+        }
 
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -42,6 +84,8 @@ internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
         };
         if (!string.IsNullOrEmpty(Config.ApiKey))
             headers["x-api-key"] = Config.ApiKey;
+
+        ClientIdentity.Apply(headers, Config.ProviderKey, baseUrl, Config.Attribution, Config.SessionId);
 
         using var response = await LlmHttp.PostJsonAsync(
             $"{baseUrl}/v1/messages", body, headers, Config.Timeout, cancellationToken).ConfigureAwait(false);
@@ -52,6 +96,8 @@ internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
         string? finishReason = null;
         var inputTokens = 0;
         var outputTokens = 0;
+        var cacheReadTokens = 0;
+        var cacheWriteTokens = 0;
         var toolBuilders = new SortedDictionary<int, (string? Id, string? Name, StringBuilder Args)>();
 
         await foreach (var frame in SseParser.ReadAsync(stream, cancellationToken).ConfigureAwait(false))
@@ -74,8 +120,15 @@ internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
             switch (type)
             {
                 case "message_start":
-                    if (chunk["message"]?["usage"]?["input_tokens"] is { } inputUsage)
-                        inputTokens = inputUsage.GetValue<int>();
+                    if (chunk["message"]?["usage"] is JsonObject startUsage)
+                    {
+                        if (startUsage["input_tokens"] is { } inputUsage)
+                            inputTokens = inputUsage.GetValue<int>();
+                        if (startUsage["cache_read_input_tokens"] is { } cacheRead)
+                            cacheReadTokens = cacheRead.GetValue<int>();
+                        if (startUsage["cache_creation_input_tokens"] is { } cacheWrite)
+                            cacheWriteTokens = cacheWrite.GetValue<int>();
+                    }
                     break;
 
                 case "message_delta":
@@ -131,7 +184,7 @@ internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
         }
 
         if (inputTokens + outputTokens > 0)
-            yield return new LlmStreamEvent.Usage(inputTokens, outputTokens);
+            yield return new LlmStreamEvent.Usage(inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens);
 
         foreach (var (_, value) in toolBuilders)
         {
@@ -161,7 +214,13 @@ internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
         return (systemText, turns);
     }
 
-    private static JsonArray BuildMessages(List<ChatMessage> turns)
+    /// <summary>
+    /// Ceiling used when the model's real one is unknown. Deliberately small: an over-large
+    /// ceiling is a provider 400, while an under-large one only caps the answer.
+    /// </summary>
+    private const int DefaultMaxTokens = 8_192;
+
+    private static JsonArray BuildMessages(List<ChatMessage> turns, bool cache)
     {
         // Anthropic requires strictly alternating user/assistant turns and
         // tool results to be grouped into the following user turn.
@@ -262,7 +321,48 @@ internal sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
         }
 
         FlushToolResults(array, ref pendingToolResults);
+
+        if (cache)
+            MarkLastBlockCacheable(array);
+
         return array;
+    }
+
+    /// <summary>
+    /// Puts a cache breakpoint on the last content block of the last message, so the whole
+    /// conversation prefix is cached. Anthropic allows four breakpoints per request; the system
+    /// prompt and the tool block use two, leaving this one for history.
+    /// </summary>
+    public static void MarkLastBlockCacheable(JsonArray messages)
+    {
+        if (messages.Count == 0)
+            return;
+
+        if (messages[^1] is not JsonObject last)
+            return;
+
+        var role = last["role"]?.GetValue<string>();
+        if (role is not ("user" or "assistant"))
+            return;
+
+        switch (last["content"])
+        {
+            case JsonArray blocks when blocks.Count > 0 && blocks[^1] is JsonObject block:
+                // Only block kinds Anthropic accepts cache_control on.
+                var type = block["type"]?.GetValue<string>();
+                if (type is "text" or "image" or "tool_result" or "tool_use")
+                    block["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
+                break;
+
+            case JsonValue value when value.TryGetValue<string>(out var text) && text.Length > 0:
+                last["content"] = new JsonArray(new JsonObject
+                {
+                    ["type"] = "text",
+                    ["text"] = text,
+                    ["cache_control"] = new JsonObject { ["type"] = "ephemeral" }
+                });
+                break;
+        }
     }
 
     private static void FlushToolResults(JsonArray target, ref JsonArray? pending)

@@ -155,9 +155,9 @@ public static class AgentObservers
         {
             get
             {
-                var finished = Events.OfType<AgentEvent.ToolCallFinished>();
+                var finished = Events.OfType<AgentEvent.ToolExecutionEnd>();
                 return finished.Select(finishedEvent =>
-                    (finishedEvent.Name, finishedEvent.Success, finishedEvent.ElapsedMs)).ToList();
+                    (finishedEvent.ToolName, !finishedEvent.IsError, finishedEvent.DurationMs)).ToList();
             }
         }
 

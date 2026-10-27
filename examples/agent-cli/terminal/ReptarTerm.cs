@@ -1,18 +1,29 @@
 #if !NETWASM
 using System.Diagnostics;
 using System.Text;
+using System.Threading.Channels;
 
 namespace Reptar.AI;
 
 /// <summary>
-/// Active tab in the ReptarTerm workspace.
+/// A modal view drawn over the chat transcript. There are no tabs: pi's shape is one scrolling
+/// conversation plus pickers that appear when you ask for them, and that is what this mirrors.
 /// </summary>
-public enum TermTab
+public enum TermOverlay
 {
-    Chat = 0,
+    None = 0,
+
+    /// <summary>Saved session picker (<c>/sessions</c>).</summary>
     Sessions = 1,
-    Tools = 2,
-    Providers = 3
+
+    /// <summary>Model catalog and provider connection (<c>/model</c>, <c>/connect</c>).</summary>
+    Providers = 2,
+
+    /// <summary>The settings menu (<c>/settings</c>).</summary>
+    Settings = 3,
+
+    /// <summary>The session tree, for moving the leaf between branches (<c>/tree</c>).</summary>
+    Tree = 4
 }
 
 /// <summary>
@@ -25,8 +36,11 @@ public enum TermTab
 public sealed class ReptarTerm : IDisposable
 {
     private readonly ReptarApp _app;
-    private readonly TerminalAgentOptions _options;
+    private TerminalAgentOptions _options;
     private readonly AgentSessionStore? _store;
+
+    /// <summary>Tree-backed persistence. Preferred over the flat store when present.</summary>
+    private readonly SessionTreeStore? _tree;
     private readonly LlmAuthFile _auth = LlmAuthFile.LoadActive();
     private readonly string _workspaceName;
     private readonly List<string> _workspaceFiles = [];
@@ -39,7 +53,7 @@ public sealed class ReptarTerm : IDisposable
     private bool _running = true;
     private bool _inAltScreen;
 
-    private TermTab _activeTab = TermTab.Chat;
+    private TermOverlay _overlay = TermOverlay.None;
     private string _input = "";
     private int _inputCursor = 0;
     private int _historyIndex = -1;
@@ -53,11 +67,52 @@ public sealed class ReptarTerm : IDisposable
     private int _selectedSessionIdx = 0;
     private int _selectedToolIdx = 0;
 
-    // Execution / Streaming state
-    private bool _isStreaming = false;
-    private string _streamingDelta = "";
+    // Execution / streaming state.
+    //
+    // The run executes on a background task and publishes AgentEvent values into
+    // _agentEvents. Only the render loop (this thread) mutates the display fields below
+    // and _messages, so nothing here needs a lock: the background side owns its own
+    // history list and the channel, and the UI side owns everything else. That split is
+    // what lets the prompt stay live while the agent works.
+    private readonly Channel<AgentEvent> _agentEvents = Channel.CreateUnbounded<AgentEvent>(
+        new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    private readonly Queue<ChatMessage> _steeringQueue = new();
+    private readonly object _steeringGate = new();
+    private CancellationTokenSource? _runCts;
+    private Task? _runTask;
+    private bool _isStreaming;
+    private bool _dirty = true;
+    private string _streamingText = "";
+    private string _thinkingText = "";
+    private string? _runError;
+    private int _scrollOffset;
+    private int _persistedCount;
+    private double _inputCostPerMillion;
+    private double _outputCostPerMillion;
+    private int _contextLimit;
+    private string _statusNote = "";
     private readonly List<string> _activePlanSteps = [];
-    private readonly List<(string Name, string Args, string Status, int Ms)> _activeTools = [];
+    private readonly List<ToolCard> _toolCards = [];
+
+    /// <summary>
+    /// Direct shell commands (<c>!cmd</c>). Kept beside the display transcript because the UI
+    /// renders them as a styled block while the model needs the structured record.
+    /// </summary>
+    private readonly List<ChatMessage> _bashHistory = [];
+
+    /// <summary>Prompt templates discovered under .reptar/prompts/.</summary>
+    private readonly List<PromptTemplate> _templates = [];
+
+    /// <summary>One rendered tool call: name, arguments, live output, terminal status.</summary>
+    private sealed class ToolCard
+    {
+        public required string Id { get; init; }
+        public required string Name { get; init; }
+        public required string Args { get; init; }
+        public StringBuilder Output { get; } = new();
+        public string Status { get; set; } = "running";
+        public int DurationMs { get; set; }
+    }
 
     // Autocomplete dropdowns
     private bool _slashDropdownOpen = false;
@@ -73,16 +128,75 @@ public sealed class ReptarTerm : IDisposable
     private int _paletteSelectedIdx = 0;
 
     // Models & Providers Catalog state (fx style)
-    private static readonly string[] ProviderCategories = ["All", "Google", "Anthropic", "OpenAI", "OpenRouter", "Local"];
     private int _providerCategoryIdx = 0;
     private string _providerFilterText = "";
     private int _selectedCatalogIdx = 0;
 
-    // Fast inline credential input (no modal popups)
+    /// <summary>What the provider overlay is currently showing.</summary>
+    private enum ProviderStage
+    {
+        /// <summary>The model list, scoped to configured providers.</summary>
+        Models,
+
+        /// <summary>Choose how to sign in: with an account, or with an API key.</summary>
+        PickAuthMethod,
+
+        /// <summary>The provider list, filtered to the chosen auth method.</summary>
+        PickProvider,
+
+        /// <summary>The API-key prompt for one provider.</summary>
+        EnterKey
+    }
+
+    private ProviderStage _providerStage = ProviderStage.Models;
+
+    /// <summary>Which auth method the provider list is filtered by.</summary>
+    private ProviderAuth _authMethod = ProviderAuth.ApiKey;
+
+    /// <summary>Auth-method selector shown first by <c>/connect</c>.</summary>
+    private TermSelector? _authSelector;
+    private int _selectedProviderIdx;
+
+    /// <summary>Searchable model list, built from configured providers only.</summary>
+    private TermSelector? _modelSelector;
+
+    /// <summary>Searchable provider list for <c>/connect</c>.</summary>
+    private TermSelector? _providerSelector;
+
+    /// <summary>Searchable settings list for <c>/settings</c>.</summary>
+    private TermSelector? _settingsSelector;
+
+    /// <summary>The session tree, one row per entry.</summary>
+    private TermSelector? _treeSelector;
+
+    /// <summary>Which selector currently owns the composer slot, if any.</summary>
+    private TermSelector? ActiveSelector => _overlay switch
+    {
+        TermOverlay.Providers => _providerStage switch
+        {
+            ProviderStage.PickAuthMethod => _authSelector,
+            ProviderStage.PickProvider => _providerSelector,
+            ProviderStage.Models => _modelSelector,
+            _ => null
+        },
+        TermOverlay.Settings => _settingsSelector,
+        TermOverlay.Tree => _treeSelector,
+        _ => null
+    };
+
     private bool _keyInputActive = false;
     private string _keyInputProvider = "";
     private string? _keyInputModel = null;
     private string _keyInputBuffer = "";
+
+    /// <summary>Which provider field is being collected, or -1 while collecting the key.</summary>
+    private int _keyFieldIndex = -1;
+
+    /// <summary>Values collected so far for the provider being connected.</summary>
+    private readonly Dictionary<string, string> _keyFieldValues = new(StringComparer.Ordinal);
+
+    /// <summary>True when Enter was pressed on an empty required field.</summary>
+    private bool _keyFieldRequired;
 
     public sealed record CatalogModelItem(
         string ModelId,
@@ -90,34 +204,54 @@ public sealed class ReptarTerm : IDisposable
         string ProviderDisplayName,
         string Category,
         string Specs,
-        string Tag);
+        string Tag,
+        IReadOnlyList<ThinkingLevel>? Thinking = null,
+        string DisplayName = "")
+    {
+        public IReadOnlyList<ThinkingLevel> SupportedThinking =>
+            Thinking ?? (Tag == "reasoning" ? ThinkingLevels.Supported(true) : [ThinkingLevel.Off]);
+    }
 
-    private static readonly CatalogModelItem[] CuratedCatalog =
-    [
-        new("gemini-2.5-flash", LlmProviders.Gemini, "Google Gemini", "Google", "1M context · 65K output · Fast · Multimodal", "fast"),
-        new("gemini-2.5-pro", LlmProviders.Gemini, "Google Gemini", "Google", "2M context · 65K output · Deep Reasoning · Code", "reasoning"),
-        new("gemini-2.0-flash", LlmProviders.Gemini, "Google Gemini", "Google", "1M context · 65K output · Next-Gen Workhorse", "fast"),
-        new("claude-sonnet-4-5", LlmProviders.Anthropic, "Anthropic", "Anthropic", "200K context · 128K output · Flagship Coding", "flagship"),
-        new("claude-3-7-sonnet", LlmProviders.Anthropic, "Anthropic", "Anthropic", "200K context · 128K output · Hybrid Reasoning", "flagship"),
-        new("claude-3-5-haiku", LlmProviders.Anthropic, "Anthropic", "Anthropic", "200K context · 8K output · Lightning Fast", "fast"),
-        new("claude-opus-5-5", LlmProviders.Anthropic, "Anthropic", "Anthropic", "200K context · 128K output · Deep Nuance", "flagship"),
-        new("gpt-4o", LlmProviders.OpenAi, "OpenAI", "OpenAI", "128K context · 16K output · Flagship Multimodal", "flagship"),
-        new("gpt-4o-mini", LlmProviders.OpenAi, "OpenAI", "OpenAI", "128K context · 16K output · Fast · Low Cost", "fast"),
-        new("o3-mini", LlmProviders.OpenAi, "OpenAI", "OpenAI", "200K context · 100K output · STEM & Code Reasoning", "reasoning"),
-        new("gpt-4.5-preview", LlmProviders.OpenAi, "OpenAI", "OpenAI", "128K context · 16K output · Creative Synthesis", "flagship"),
-        new("deepseek/deepseek-chat", LlmProviders.OpenRouter, "OpenRouter", "OpenRouter", "64K context · 8K output · DeepSeek V3 671B MoE", "open-weights"),
-        new("deepseek/deepseek-r1", LlmProviders.OpenRouter, "OpenRouter", "OpenRouter", "64K context · 8K output · DeepSeek R1 Reasoning", "reasoning"),
-        new("meta-llama/llama-3.3-70b-instruct", LlmProviders.OpenRouter, "OpenRouter", "OpenRouter", "128K context · 8K output · Open Weights", "open"),
-        new("qwen/qwen-2.5-coder-32b-instruct", LlmProviders.OpenRouter, "OpenRouter", "OpenRouter", "128K context · 8K output · Code MoE", "coding"),
-        new("llama3.2", LlmProviders.Ollama, "Ollama (local)", "Local", "128K context · 4K output · Local Offline 3B", "local"),
-        new("qwen2.5-coder:7b", LlmProviders.Ollama, "Ollama (local)", "Local", "128K context · 8K output · Offline Coding", "local"),
-        new("deepseek-r1:8b", LlmProviders.Ollama, "Ollama (local)", "Local", "128K context · 8K output · Local Distilled Reasoning", "local"),
-    ];
+    /// <summary>
+    /// Models from providers that actually have credentials. Populated by
+    /// <see cref="RefreshCatalogAsync"/>; empty until the first refresh completes.
+    /// </summary>
+    private readonly List<CatalogModelItem> _catalog = [];
 
-    // Telemetry
-    private int _totalTokensIn = 0;
-    private int _totalTokensOut = 0;
-    private double _totalCost = 0.0;
+    /// <summary>
+    /// Provider scope row. Derived from the catalog, so it only ever offers providers you can
+    /// actually use.
+    /// </summary>
+    private List<string> _providerCategories = ["All"];
+
+    private int _totalTokensIn;
+    private int _totalTokensOut;
+    private int _totalCacheRead;
+    private int _totalCacheWrite;
+    private double _totalCost;
+
+    /// <summary>
+    /// Cache hit rate of the most recent response: cacheRead / (input + cacheRead + cacheWrite).
+    /// The session total would drift toward 100% and stop telling you anything about the turn
+    /// you just paid for, which is the number that matters.
+    /// </summary>
+    private double _lastCacheHitRate = -1;
+    private bool _autoCompact = true;
+
+    /// <summary>Reasoning effort for the active model. Shift+Tab cycles it.</summary>
+    private ThinkingLevel _thinking = ThinkingLevel.Off;
+
+    /// <summary>When the current run started, for the working indicator's timer.</summary>
+    private DateTimeOffset _runStartedAt;
+
+    /// <summary>User and project settings in effect for this session.</summary>
+    private AgentSettingsStore _settings = AgentSettingsStore.Load(".");
+
+    /// <summary>What was loaded before the first turn, and what was rejected.</summary>
+    private AgentResourcesReport? _resources;
+
+    /// <summary>True while the <c>ctrl+o</c> resources panel is expanded.</summary>
+    private bool _showResources;
     private string _statusRibbon = "";
 
     // Official Reptar pixel dinosaur (matching the website header SVG: apps/web/src/components/header.astro)
@@ -143,13 +277,23 @@ public sealed class ReptarTerm : IDisposable
         "  ████████                                "
     ];
 
-    private record PaletteCommand(string Id, string Name, string Desc, Action Execute);
+    private record PaletteCommand(
+        string Id,
+        string Name,
+        string Desc,
+        Action Execute,
+        string Hint = "");
 
-    public ReptarTerm(ReptarApp app, TerminalAgentOptions options, AgentSessionStore? store)
+    public ReptarTerm(
+        ReptarApp app,
+        TerminalAgentOptions options,
+        AgentSessionStore? store,
+        SessionTreeStore? tree = null)
     {
         _app = app;
         _options = options;
         _store = store;
+        _tree = tree;
         _workspaceName = Path.GetFileName(Path.GetFullPath(options.WorkspaceRoot));
 
         _width = Math.Max(40, Console.WindowWidth);
@@ -160,8 +304,7 @@ public sealed class ReptarTerm : IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
             ".reptar", "agent", "history");
 
-        _client = LlmClientFactory.Create(LlmConfig.FromEnvironment(
-            options.Provider, options.Model, options.BaseUrl));
+        _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(options));
 
         LoadHistory();
         RefreshWorkspaceFiles();
@@ -217,8 +360,8 @@ public sealed class ReptarTerm : IDisposable
 
     private List<CatalogModelItem> GetFilteredCatalog()
     {
-        var category = ProviderCategories[_providerCategoryIdx];
-        IEnumerable<CatalogModelItem> list = CuratedCatalog;
+        var category = _providerCategories[Math.Clamp(_providerCategoryIdx, 0, _providerCategories.Count - 1)];
+        IEnumerable<CatalogModelItem> list = _catalog;
 
         if (category != "All")
         {
@@ -252,7 +395,7 @@ public sealed class ReptarTerm : IDisposable
                 if (found is not null)
                 {
                     _session = found;
-                    _messages.AddRange(await _store.LoadMessagesAsync(found.Id).ConfigureAwait(false));
+                    ReplaceTranscript(await LoadBranchAsync(found.Id).ConfigureAwait(false));
                 }
             }
             if (_session is null)
@@ -262,52 +405,125 @@ public sealed class ReptarTerm : IDisposable
             await RefreshSessionsListAsync().ConfigureAwait(false);
         }
 
+        // Settings load first: they decide the model and thinking level the session starts with.
+        // Project-local configuration only applies when the workspace is trusted.
+        var trust = ProjectTrustStore.Load();
+        var trusted = await trust.ResolveAsync(_options.WorkspaceRoot).ConfigureAwait(false);
+        _settings = AgentSettingsStore.Load(_options.WorkspaceRoot, trusted);
+
+        // Templates are project-local content too, so they ride on the same decision.
+        if (trusted)
+            _templates.AddRange(PromptTemplates.Load(_options.WorkspaceRoot));
+
+        if (_settings.Settings.Thinking is { Length: > 0 } savedThinking &&
+            ThinkingLevels.Parse(savedThinking) is { } level)
+        {
+            _thinking = level;
+        }
+
+        _autoCompact = _settings.Settings.EffectiveCompaction.Enabled;
+
+        if (_settings.Settings.Model is { Length: > 0 } savedModel && _options.Model is null)
+        {
+            _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(
+                _options with { Provider = _settings.Settings.Provider, Model = savedModel }));
+
+            UpdateStatusRibbon();
+        }
+
+        // The model list is scoped to configured providers, so build it from real credentials
+        // before the first frame rather than showing a static table.
+        await RefreshCatalogAsync().ConfigureAwait(false);
+
+        _resources = AgentResourcesReport.Gather(
+            _options.WorkspaceRoot,
+            trusted,
+            _settings,
+            _templates);
+
         UpdateStatusRibbon();
         Render();
+        _ = RefreshPricingAsync();
 
         while (_running && !cancellationToken.IsCancellationRequested)
         {
             CheckResize();
 
+            // 1. Apply anything the background agent produced.
+            DrainAgentEvents();
+
+            // 2. Retire the run when it has settled.
+            if (_runTask is { IsCompleted: true })
+                await FinishAgentRunAsync().ConfigureAwait(false);
+
+            // 3. Handle one keystroke, if any. Never blocks the loop.
             var keyRead = TerminalInput.ReadKey();
-            if (keyRead is null)
+            if (keyRead is { } key)
             {
-                await Task.Delay(20, cancellationToken).ConfigureAwait(false);
-                continue;
-            }
+                _dirty = true;
 
-            var key = keyRead.Value;
-
-            if (key.Ctrl && key.Key == ConsoleKey.C)
-            {
-                if (_isStreaming)
+                if (key.Ctrl && key.Key == ConsoleKey.C)
                 {
-                    _isStreaming = false;
+                    if (_isStreaming)
+                    {
+                        AbortAgent();
+                    }
+                    else
+                    {
+                        _running = false;
+                        break;
+                    }
+                }
+                else if (key.Key == ConsoleKey.Escape && _isStreaming)
+                {
+                    AbortAgent();
+                }
+                else if (key.Ctrl && key.Key == ConsoleKey.P)
+                {
+                    _showPalette = !_showPalette;
+                    _paletteFilter = "";
+                    _paletteSelectedIdx = 0;
+                    _dirty = true;
+                }
+                else if (key.Ctrl && key.Key == ConsoleKey.O)
+                {
+                    // pi's ctrl+o: expand or collapse the startup resource panel.
+                    _showResources = !_showResources;
+                    if (_showResources)
+                        _resources = AgentResourcesReport.Gather(
+                            _options.WorkspaceRoot,
+                            _settings.Settings.DefaultProjectTrust != TrustDefault.Never,
+                            _settings,
+                            _templates);
+                    _dirty = true;
+                }
+                else if (_showPalette)
+                {
+                    HandlePaletteKey(key);
                 }
                 else
                 {
-                    _running = false;
-                    break;
+                    await HandleMainKeyAsync(key).ConfigureAwait(false);
                 }
             }
-            else if (key.Ctrl && key.Key == ConsoleKey.P)
+
+            // 4. Repaint only when something changed. Streaming deltas arrive in bursts,
+            //    so this collapses N token events into one frame.
+            if (_dirty)
             {
-                _showPalette = !_showPalette;
-                _paletteFilter = "";
-                _paletteSelectedIdx = 0;
-            }
-            else if (_showPalette)
-            {
-                HandlePaletteKey(key);
-            }
-            else
-            {
-                await HandleMainKeyAsync(key).ConfigureAwait(false);
+                _dirty = false;
+                Render();
             }
 
-            Render();
+            if (_isStreaming)
+                _dirty = true;   // the working indicator animates
+
+            if (keyRead is null)
+                await Task.Delay(16, cancellationToken).ConfigureAwait(false);
         }
 
+        AbortAgent();
+        await FinishAgentRunAsync().ConfigureAwait(false);
         ExitAltScreen();
     }
 
@@ -372,55 +588,573 @@ public sealed class ReptarTerm : IDisposable
             new("connect", "/connect", "Connect provider API credentials (fast setup)", () => { OpenConnectInline(); }),
             new("clear", "/clear", "Clear chat in current session", () => { _messages.Clear(); }),
             new("new", "/new", "Start a fresh new session", () => { _ = StartNewSessionAsync(); }),
-            new("sessions", "/sessions", "View and switch saved sessions", () => { _activeTab = TermTab.Sessions; _input = ""; _inputCursor = 0; }),
-            new("tools", "/tools", "Inspect mounted workspace tools", () => { _activeTab = TermTab.Tools; _input = ""; _inputCursor = 0; }),
-            new("providers", "/providers", "Inspect provider connectivity & models", () => { OpenModelCatalog(); }),
+            new("sessions", "/sessions", "View and switch saved sessions", () => { _overlay = TermOverlay.Sessions; _input = ""; _inputCursor = 0; }),
+            new("tools", "/tools", "List the mounted workspace tools", ShowToolsTable),
+            new("providers", "/providers", "Show provider connection status", ShowProvidersTable),
+            new("compact", "/compact", "Summarize context into a checkpoint now",
+                () => { _ = CompactNowAsync(""); }, "[focus]"),
+            new("templates", "/templates", "List prompt templates from .reptar/prompts", () =>
+            {
+                _messages.Add(new ChatMessage("assistant", PromptTemplates.Describe(_templates)));
+                _dirty = true;
+            }),
+            new("tree", "/tree", "Browse the session tree and switch branches", () =>
+            {
+                _ = OpenTreeAsync();
+            }),
+            new("fork", "/fork", "Copy the current branch into a new session", () =>
+            {
+                _ = ForkSessionAsync();
+            }),
+            new("settings", "/settings", "Open the settings menu", OpenSettingsMenu),
             new("help", "/help", "Show tips and shortcuts", () => { ShowHelpMessage(); }),
             new("exit", "/exit", "Quit ReptarTerm", () => { _running = false; }),
         };
+
+        // Prompt templates appear in the same dropdown as built-ins, so a project command is as
+        // discoverable as /help.
+        foreach (var template in _templates)
+        {
+            var captured = template;
+            all.Add(new PaletteCommand(
+                captured.Name,
+                "/" + captured.Name,
+                captured.Description,
+                () => _ = SendChatMessageAsync(PromptTemplates.Expand(captured, "")),
+                captured.ArgumentHint ?? ""));
+        }
 
         var filter = _paletteFilter?.Trim().TrimStart('/') ?? "";
         if (string.IsNullOrWhiteSpace(filter))
             return all;
 
-        return all.Where(c => c.Id.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                              c.Name.Contains(filter, StringComparison.OrdinalIgnoreCase) ||
-                              c.Desc.Contains(filter, StringComparison.OrdinalIgnoreCase)).ToList();
+        // pi's ranking: match on the name or the description, best score first. Typing
+        // "summarize" finds /compact, which substring matching on the name would never do.
+        return Fuzzy.Rank(
+            filter,
+            all,
+            command => [command.Id, command.Name, command.Desc, command.Hint]);
     }
+
+    /// <summary>
+    /// The commands the slash dropdown should show right now, ranked by name.
+    /// </summary>
+    /// <remarks>
+    /// An empty result means the query matched no command name. The caller keeps the list open
+    /// and shows "no matches" rather than closing it, because a menu that disappears on a typo is
+    /// indistinguishable from a menu that is broken.
+    /// </remarks>
+    private List<PaletteCommand> SlashMatches()
+    {
+        if (!SlashCommands.IsCompleting(_input))
+            return [];
+
+        var all = GetPaletteCommands();
+        var ranked = SlashCommands.Match(
+            _input,
+            [.. all.Select(command => new SlashCommand(command.Name, command.Hint, command.Desc))]);
+
+        // Map back in the ranked order.
+        var byName = all.ToDictionary(command => command.Name, StringComparer.Ordinal);
+        return [.. ranked.Select(command => byName[command.Name])];
+    }
+
+    /// <summary>True when the dropdown is open, even if nothing matches.</summary>
+    private bool SlashListOpen => SlashCommands.IsCompleting(_input);
 
     private void ShowHelpMessage()
     {
         _messages.Add(new ChatMessage("assistant",
-            "**Reptar Agent Keyboard Shortcuts & Commands:**\n\n" +
-            "• `Tab` — Switch workspace views (Chat, Sessions, Tools, Providers) or autocomplete\n" +
-            "• `Esc` / `q` — Return to Chat from any tab or cancel active prompt\n" +
-            "• `/model` — Open model catalog to browse and switch models across providers\n" +
-            "• `/connect` — Connect provider API key (frictionless inline setup with 'o' browser portal)\n" +
-            "• `/` — Opens inline command palette (`/model`, `/connect`, `/clear`, `/new`, `/tools`, `/providers`)\n" +
-            "• `@` — Mentions files from workspace to attach directly as prompt context\n" +
-            "• `Ctrl+P` — Opens global floating command palette with search\n" +
-            "• `Ctrl+C` — Cancel current streaming turn (or exit on second press)\n" +
-            "• `↑ / ↓` — Recall previous prompt history"));
+            "**Reptar Agent**\n\n" +
+            "**Prompt**\n" +
+            "• `Enter` — send · while the agent runs, this queues a *steering* message\n" +
+            "• `Esc` / `Ctrl+C` — abort the current turn; `Ctrl+C` again quits\n" +
+            "• `↑` / `↓` — prompt history · `PgUp` / `PgDn` — scroll the transcript\n" +
+            "• `!cmd` — run a shell command and add it to context · `!!cmd` — run it, keep it out of context\n\n" +
+            "**Completion**\n" +
+            "• `/` — command list; `Tab` or `Enter` completes the name, then `Enter` submits\n" +
+            "• `@` — attach a workspace file (text inlines, images attach as vision)\n" +
+            "• `Ctrl+P` — searchable command palette\n" +
+            "• `Ctrl+O` — show or hide loaded resources (skills, context, conflicts)\n" +
+            "• `Shift+Tab` — cycle reasoning effort (off → minimal → low → medium → high)\n\n" +
+            "**Commands**\n" +
+            "• `/model` — pick a model (tab filters by provider)\n" +
+            "• `/connect` — add a provider key (enter saves, `o` opens the portal)\n" +
+            "• `/providers` — credential status table\n" +
+            "• `/sessions` — switch session · `/new` — start one · `/clear` — clear this one\n" +
+            "• `/tools` — mounted tool list · `/templates` — prompt templates\n" +
+            "• `/compact [focus]` — checkpoint the context now\n" +
+            "• `/help` — this · `/exit` — quit"));
     }
 
     private void OpenModelCatalog()
     {
-        _activeTab = TermTab.Providers;
+        var alreadyOpen = _overlay == TermOverlay.Providers && _providerStage == ProviderStage.Models;
+
+        _overlay = TermOverlay.Providers;
+        _providerStage = ProviderStage.Models;
         _keyInputActive = false;
-        _providerFilterText = "";
         _input = "";
         _inputCursor = 0;
+
+        if (_modelSelector is null || _catalog.Count == 0)
+            RebuildModelSelector();
+        else if (!alreadyOpen)
+            _modelSelector.ClearQuery();   // a fresh open starts from the full list
     }
 
-    private void OpenConnectInline(string? providerKey = null, string? targetModel = null)
+    /// <summary>
+    /// <c>/fork</c>: copies the active branch into a new session and switches to it. The original
+    /// is untouched, so this is "explore this alternative without losing where I was".
+    /// </summary>
+    private async Task ForkSessionAsync()
     {
-        _activeTab = TermTab.Providers;
-        _keyInputActive = true;
-        _keyInputProvider = providerKey ?? _client.Config.ProviderKey;
-        _keyInputModel = targetModel ?? _client.Config.Model;
-        _keyInputBuffer = "";
+        if (_tree is null || _session is null || _store is null)
+        {
+            _messages.Add(new ChatMessage("assistant", "Forking is not available."));
+            _dirty = true;
+            return;
+        }
+
+        var title = (_session.Title ?? "session") + " (fork)";
+        var fork = await _store.CreateSessionAsync(title).ConfigureAwait(false);
+
+        if (!await _tree.ForkAsync(_session.Id, fork.Id).ConfigureAwait(false))
+        {
+            await _store.DeleteSessionAsync(fork.Id).ConfigureAwait(false);
+            _messages.Add(new ChatMessage("assistant", "Nothing to fork yet."));
+            _dirty = true;
+            return;
+        }
+
+        _session = fork;
+        ReplaceTranscript(await _tree.LoadBranchAsync(fork.Id).ConfigureAwait(false));
+
+        await RefreshSessionsListAsync().ConfigureAwait(false);
+
+        _messages.Add(new ChatMessage("assistant",
+            $"Forked into **{fork.Id}** ({_messages.Count} messages carried over). " +
+            "The original session is untouched."));
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// Builds the tree selector. Each row is one entry, indented by depth, with the active leaf
+    /// marked — so the shape of the conversation is visible and a different branch is one Enter
+    /// away.
+    /// </summary>
+    private async Task OpenTreeAsync()
+    {
+        if (_tree is null || _session is null)
+        {
+            _messages.Add(new ChatMessage("assistant", "Session tree is not available."));
+            _dirty = true;
+            return;
+        }
+
+        var tree = await _tree.TreeAsync(_session.Id).ConfigureAwait(false);
+        var leafId = await _tree.LeafAsync(_session.Id).ConfigureAwait(false);
+
+        if (tree.Count == 0)
+        {
+            _messages.Add(new ChatMessage("assistant", "This session has no entries yet."));
+            _dirty = true;
+            return;
+        }
+
+        var items = new List<TermSelectorItem>();
+        Flatten(tree, 0, "", leafId, items);
+
+        _treeSelector = new TermSelector("Session tree", items, Math.Max(6, ComposerRow - 10))
+        {
+            Notice = "Enter moves the active leaf — the conversation continues from there.",
+            Hint = "Type to search · Enter switch branch · Esc cancel"
+        };
+
+        _overlay = TermOverlay.Tree;
         _input = "";
         _inputCursor = 0;
+        _dirty = true;
+    }
+
+    private static void Flatten(
+        IReadOnlyList<SessionTreeNode> nodes,
+        int depth,
+        string prefix,
+        string? leafId,
+        List<TermSelectorItem> items)
+    {
+        for (var i = 0; i < nodes.Count; i++)
+        {
+            var node = nodes[i];
+            var last = i == nodes.Count - 1;
+            var glyph = depth == 0 ? "●" : last ? "└─" : "├─";
+
+            items.Add(new TermSelectorItem(
+                $"{prefix}{glyph} {SummarizeEntry(node.Entry)}",
+                node.Entry.Role,
+                node.Entry.Id == leafId ? "◀ leaf" : "",
+                node.Entry.Id == leafId,
+                node.Entry.Id,
+                node.Entry.Id));
+
+            Flatten(node.Children, depth + 1, depth == 0 ? "" : prefix + (last ? "   " : "│  "), leafId, items);
+        }
+    }
+
+    private static string SummarizeEntry(SessionEntryRow entry)
+    {
+        var text = entry.Content.ReplaceLineEndings(" ").Trim();
+
+        if (text.Length == 0 && entry.ToolCalls is { Length: > 0 })
+            text = "(tool call)";
+
+        if (text.Length > 64)
+            text = text[..64] + "…";
+
+        var role = entry.Role switch
+        {
+            AgentRoles.User => "user",
+            AgentRoles.Assistant => "assistant",
+            AgentRoles.Tool => entry.Name ?? "tool",
+            _ => entry.Role
+        };
+
+        return $"{role}: {text}";
+    }
+
+    private void OpenSettingsMenu()
+    {
+        var alreadyOpen = _overlay == TermOverlay.Settings;
+
+        _overlay = TermOverlay.Settings;
+        _input = "";
+        _inputCursor = 0;
+        RebuildSettingsSelector();
+
+        if (!alreadyOpen)
+            _settingsSelector?.ClearQuery();
+    }
+
+    /// <summary>
+    /// <c>/connect</c> opens the provider list, matching pi's login flow: choose who you are
+    /// connecting to, then supply the credential. <c>/connect anthropic</c> skips the choice.
+    /// </summary>
+    private void OpenConnectInline(string? providerKey = null, string? targetModel = null)
+    {
+        _overlay = TermOverlay.Providers;
+        _input = "";
+        _inputCursor = 0;
+
+        if (providerKey is { Length: > 0 })
+        {
+            BeginKeyEntry(providerKey, targetModel);
+            return;
+        }
+
+        _providerStage = ProviderStage.PickAuthMethod;
+        _keyInputActive = false;
+        _selectedProviderIdx = 0;
+        RebuildAuthMethodSelector();
+    }
+
+    private void BeginKeyEntry(string providerKey, string? targetModel = null)
+    {
+        _providerStage = ProviderStage.EnterKey;
+        _keyInputActive = true;
+        _keyInputProvider = providerKey;
+        _keyInputModel = targetModel;
+        _keyInputBuffer = "";
+        _keyFieldIndex = -1;
+        _keyFieldValues.Clear();
+    }
+
+    /// <summary>The provider fields still to collect for the one being connected.</summary>
+    private IReadOnlyList<ProviderField> PendingFields
+    {
+        get
+        {
+            var info = LlmProviders.Find(_keyInputProvider);
+            return info?.ExtraFields ?? [];
+        }
+    }
+
+    /// <summary>What the key prompt is currently asking for.</summary>
+    private string CurrentKeyPrompt
+    {
+        get
+        {
+            var fields = PendingFields;
+            return _keyFieldIndex >= 0 && _keyFieldIndex < fields.Count
+                ? fields[_keyFieldIndex].Label
+                : "api key";
+        }
+    }
+
+    /// <summary>
+    /// Reads the active branch, importing a flat session into the tree the first time it is
+    /// opened so old conversations stay loadable.
+    /// </summary>
+    private async Task<List<ChatMessage>> LoadBranchAsync(string sessionId)
+    {
+        if (_tree is null)
+            return _store is null ? [] : await _store.LoadMessagesAsync(sessionId).ConfigureAwait(false);
+
+        if (_store is not null)
+            await _tree.ImportFlatAsync(sessionId, _store.Messages).ConfigureAwait(false);
+
+        return await _tree.LoadBranchAsync(sessionId).ConfigureAwait(false);
+    }
+
+    /// <summary>Appends to the tree when available, else to the flat table.</summary>
+    private async Task AppendAsync(ChatMessage message)
+    {
+        if (_session is null)
+            return;
+
+        if (_tree is not null)
+            await _tree.AppendAsync(_session.Id, message, _store?.PersistFilter).ConfigureAwait(false);
+        else if (_store is not null)
+            await AppendAsync(message).ConfigureAwait(false);
+    }
+
+    /// <summary>Providers in display order, filtered by the chosen auth method.</summary>
+    private List<ProviderInfo> ConnectableProviders() => _authMethod == ProviderAuth.Account
+        ? [.. LlmProviders.Known.Where(provider => provider.SupportsAccountSignIn)]
+        : [.. LlmProviders.Known];
+
+    /// <summary>
+    /// Rebuilds the model selector from the live catalog. Only configured providers appear, and
+    /// the notice says so, because a model you cannot call is worse than no model.
+    /// </summary>
+    private void RebuildModelSelector()
+    {
+        var items = _catalog.Select(model => new TermSelectorItem(
+            model.ModelId,
+            model.Specs,
+            model.ProviderDisplayName,
+            IsCurrentModel(model.ModelId),
+            $"Model Name: {(model.DisplayName.Length > 0 ? model.DisplayName : model.ModelId)}",
+            model));
+
+        // Reuse the instance: a refresh after connecting must not clear what you were typing.
+        if (_modelSelector is null)
+        {
+            _modelSelector = new TermSelector("", items, Math.Max(6, ComposerRow - 12));
+        }
+        else
+        {
+            _modelSelector.SetItems(items);
+        }
+
+        _modelSelector.Notice = "Only showing models from configured providers. Use /connect to add one.";
+        _modelSelector.Hint = "Type to search · Enter to select · Ctrl+S set as default · Esc cancel";
+    }
+
+    private bool IsCurrentModel(string modelId) =>
+        string.Equals(_client.Config.Model, modelId, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The first step of <c>/connect</c>, matching pi: choose how you want to sign in, then pick
+    /// a provider. The two lists differ because subscription-backed providers are not the same
+    /// set as API-key ones.
+    /// </summary>
+    private void RebuildAuthMethodSelector()
+    {
+        var accountProviders = LlmProviders.Known.Count(provider => provider.SupportsAccountSignIn);
+
+        var items = new List<TermSelectorItem>
+        {
+            new("Sign in with an account",
+                $"{accountProviders} providers",
+                accountProviders == 0 ? "· not available yet" : "",
+                _authMethod == ProviderAuth.Account,
+                "Use a coding subscription you already pay for.",
+                ProviderAuth.Account),
+            new("Sign in with an API key",
+                $"{LlmProviders.Known.Length} providers",
+                "",
+                _authMethod == ProviderAuth.ApiKey,
+                "Paste a key from the provider's dashboard.",
+                ProviderAuth.ApiKey)
+        };
+
+        _authSelector = new TermSelector("Select authentication method:", items, Math.Max(4, ComposerRow - 10))
+        {
+            Hint = "↑↓ navigate · enter select · esc cancel"
+        };
+    }
+
+    /// <summary>Rebuilds the provider selector with pi's status vocabulary.</summary>
+    /// <summary>
+    /// The provider list, as pi draws it: a name and whether it is configured. No model column —
+    /// the model is a separate decision, and putting it here made the list read like a model
+    /// picker with a provider prefix.
+    /// </summary>
+    private void RebuildProviderSelector()
+    {
+        var providers = _authMethod == ProviderAuth.Account
+            ? LlmProviders.Known.Where(provider => provider.SupportsAccountSignIn)
+            : LlmProviders.Known;
+
+        var items = providers.Select(provider =>
+        {
+            var (source, detail) = LlmProviders.CredentialSource(provider.Key, _auth);
+            var saved = _auth.Get(provider.Key);
+            var missing = LlmProviders.MissingRequirements(provider, saved, saved?.ApiKey);
+
+            var status = source switch
+            {
+                "env" when missing.Count == 0 => $"✓ {detail}",
+                "saved" when missing.Count == 0 => "✓ stored",
+                _ when !provider.RequiresApiKey && missing.Count == 0 => "✓ no key needed",
+                _ when missing.Count == 0 => "· not configured",
+                _ => $"· needs {string.Join(" + ", missing)}"
+            };
+
+            var description = _authMethod == ProviderAuth.Account
+                ? "Account sign-in is not implemented yet — use an API key for now."
+                : !string.IsNullOrEmpty(provider.KeyUrl)
+                    ? $"Get a key at {provider.KeyUrl}"
+                    : provider.Note ?? provider.DisplayName;
+
+            return new TermSelectorItem(
+                provider.DisplayName,
+                "",
+                status,
+                string.Equals(_client.Config.ProviderKey, provider.Key, StringComparison.OrdinalIgnoreCase),
+                description,
+                provider);
+        });
+
+        if (_providerSelector is null)
+            _providerSelector = new TermSelector("Select provider to configure:", items, Math.Max(6, ComposerRow - 12));
+        else
+            _providerSelector.SetItems(items);
+
+        _providerSelector.Hint = "Type to search · Enter to configure · Esc back";
+        _providerSelector.Status = "";
+    }
+
+    /// <summary>
+    /// The settings menu: a searchable list of the knobs Reptar actually has, with the current
+    /// value and a one-line explanation for each.
+    /// </summary>
+    private void RebuildSettingsSelector()
+    {
+        var settings = _settings.Settings;
+
+        var items = new List<TermSelectorItem>
+        {
+            new("Auto-compact", settings.EffectiveCompaction.Enabled ? "true" : "false",
+                Description: "Automatically compact context when it gets too large.",
+                Value: "compaction"),
+            new("Thinking level", ThinkingLevels.Name(_thinking),
+                Description: "Reasoning effort. Shift+Tab cycles it without opening this menu.",
+                Value: "thinking"),
+            new("Prompt cache", settings.PromptCache == true ? "true" : "false",
+                Description: "Ask the provider to cache the system prompt and tools.",
+                Value: "promptCache"),
+            new("Cache warming", settings.WarmPromptCache == true ? "true" : "false",
+                Description: "Warm the cache with one cheap request before the first turn.",
+                Value: "warmCache"),
+            new("Steering mode", settings.SteeringMode == AgentQueueMode.All ? "all" : "one-at-a-time",
+                Description: "How many queued messages are delivered per turn while the agent runs.",
+                Value: "steering"),
+            new("Keep recent tokens", settings.EffectiveCompaction.KeepRecentTokens.ToString("N0"),
+                Description: "Conversation kept verbatim when compacting.",
+                Value: "keepRecent"),
+            new("Reserve tokens", settings.EffectiveCompaction.ReserveTokens.ToString("N0"),
+                Description: "Headroom kept free so the next response fits.",
+                Value: "reserve"),
+            new("Retry attempts", settings.EffectiveRetry.MaxAttempts.ToString(),
+                Description: "Retries for a transient provider failure.",
+                Value: "retry"),
+            new("Autocomplete rows", (settings.AutocompleteMaxVisible ?? 5).ToString(),
+                Description: "Rows shown in the command and file dropdowns.",
+                Value: "autocomplete"),
+            new("Show thinking", _options.ShowThinking ? "true" : "false",
+                Description: "Show reasoning blocks in the transcript.",
+                Value: "showThinking")
+        };
+
+        if (_settingsSelector is null)
+            _settingsSelector = new TermSelector("Settings", items, Math.Max(6, ComposerRow - 14));
+        else
+            _settingsSelector.SetItems(items);
+
+        _settingsSelector.Hint = "Type to search · Enter/Space to change · Esc cancel";
+    }
+
+    /// <summary>
+    /// Switches to a provider and model, refreshes the catalog so the model list reflects the new
+    /// credentials, and closes the overlay.
+    /// </summary>
+    /// <summary>
+    /// Levels the active model offers. A model that does not reason offers only <c>off</c>, which
+    /// is why the footer can say "thinking off" instead of hiding the control.
+    /// </summary>
+    private IReadOnlyList<ThinkingLevel> AvailableThinkingLevels()
+    {
+        var known = _catalog.FirstOrDefault(m =>
+            string.Equals(m.ModelId, _client.Config.Model, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(m.ProviderKey, _client.Config.ProviderKey, StringComparison.OrdinalIgnoreCase));
+
+        // Unknown model: offer the standard ladder rather than hiding the control, since the
+        // provider clamps a level it does not accept. A known model uses its real list, which is
+        // what stops Shift+Tab offering xhigh on a model that rejects it.
+        return known is null
+            ? ThinkingLevels.Supported(true)
+            : known.SupportedThinking;
+    }
+
+    /// <summary>
+    /// Shift+Tab: advance to the next level the model supports, wrapping around. pi binds
+    /// <c>shift+tab</c> to <c>app.thinking.cycle</c>.
+    /// </summary>
+    private void CycleThinking()
+    {
+        var levels = AvailableThinkingLevels();
+        _thinking = ThinkingLevels.Cycle(_thinking, levels);
+
+        // The level lives on the provider config, so the client is rebuilt with it.
+        _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(
+            _options with
+            {
+                Provider = _client.Config.ProviderKey,
+                Model = _client.Config.Model
+            }) with { Thinking = _thinking });
+
+        _ = _settings.SaveThinkingAsync(_thinking);
+
+        UpdateStatusRibbon();
+        _dirty = true;
+    }
+
+    private void ActivateProvider(string providerKey, string modelId)
+    {
+        var provider = LlmProviders.Find(providerKey);
+        var display = provider?.DisplayName ?? providerKey;
+
+        _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(
+            _options with { Provider = providerKey, Model = modelId }));
+
+        _auth.SetDefault(providerKey);
+        _ = _settings.SaveModelAsync(providerKey, modelId);
+
+        _keyInputActive = false;
+        _keyInputBuffer = "";
+        _providerStage = ProviderStage.Models;
+        _overlay = TermOverlay.None;
+        _selectedCatalogIdx = 0;
+
+        UpdateStatusRibbon();
+        _messages.Add(new ChatMessage("assistant", $"Connected to **{display}** using `{modelId}`."));
+        _dirty = true;
+
+        // The model list is scoped to configured providers, so it has to be rebuilt now.
+        _ = RefreshCatalogAsync();
+        _ = RefreshPricingAsync();
     }
 
     private static void OpenBrowser(string url)
@@ -452,13 +1186,13 @@ public sealed class ReptarTerm : IDisposable
     private async Task HandleMainKeyAsync(TermKey key)
     {
         // 0. If in Providers tab with inline key input active, route all input to it
-        if (_activeTab == TermTab.Providers && _keyInputActive)
+        if (_overlay == TermOverlay.Providers && _keyInputActive)
         {
             HandleProvidersKey(key);
             return;
         }
 
-        // 1. Escape returns to Chat from any non-Chat tab, or closes open dropdowns
+        // 1. Escape closes an overlay, or dismisses an open dropdown.
         if (key.Key == ConsoleKey.Escape)
         {
             if (_slashDropdownOpen || _fileDropdownOpen)
@@ -468,9 +1202,9 @@ public sealed class ReptarTerm : IDisposable
                 return;
             }
 
-            if (_activeTab != TermTab.Chat)
+            if (_overlay != TermOverlay.None)
             {
-                _activeTab = TermTab.Chat;
+                _overlay = TermOverlay.None;
                 _input = "";
                 _inputCursor = 0;
                 return;
@@ -478,73 +1212,72 @@ public sealed class ReptarTerm : IDisposable
         }
 
         // 2. 'q' or 'Q' returns to Chat from any non-Chat tab
-        if (_activeTab != TermTab.Chat && key.Ch is 'q' or 'Q')
+        if (_overlay != TermOverlay.None && key.Ch is 'q' or 'Q')
         {
-            _activeTab = TermTab.Chat;
+            _overlay = TermOverlay.None;
             _input = "";
             _inputCursor = 0;
             return;
         }
 
         // 3. When slash dropdown or file dropdown is open, route keys to autocomplete
-        if (_activeTab == TermTab.Chat && (_slashDropdownOpen || _fileDropdownOpen))
+        if (_overlay == TermOverlay.None && (_slashDropdownOpen || _fileDropdownOpen))
         {
-            if (HandleDropdownKey(key))
+            if (await HandleDropdownKeyAsync(key).ConfigureAwait(false))
                 return;
+        }
+
+        // Shift+Tab cycles reasoning effort, as pi binds it.
+        if (key.Key == ConsoleKey.Tab && key.Shift && _overlay == TermOverlay.None)
+        {
+            CycleThinking();
+            return;
         }
 
         // 4. Tab key handling
         if (key.Key == ConsoleKey.Tab)
         {
-            if (_activeTab == TermTab.Chat && _input.Length > 0)
+            if (_overlay == TermOverlay.None && _input.Length > 0)
             {
                 // Tab triggers autocomplete trigger check if not already open
                 CheckInputTriggers();
                 return;
             }
 
-            if (_activeTab == TermTab.Providers)
+            if (_overlay == TermOverlay.Providers)
             {
-                // In Providers tab, Tab cycles the category tabs (fx style)
-                _providerCategoryIdx = (_providerCategoryIdx + 1) % ProviderCategories.Length;
+                // Inside the provider picker, Tab cycles the category filter.
+                _providerCategoryIdx = (_providerCategoryIdx + 1) % _providerCategories.Count;
                 _selectedCatalogIdx = 0;
                 return;
             }
 
-            // Cycle workspace tabs: Chat -> Sessions -> Tools -> Providers -> Chat
-            _activeTab = (TermTab)(((int)_activeTab + 1) % 4);
-            _input = "";
-            _inputCursor = 0;
+            // No overlays open: Tab is autocomplete, handled by the chat key path.
             return;
         }
 
-        // 5. Quick numbers switch tab when on non-Chat tab OR when Chat prompt is empty
-        if ((_activeTab != TermTab.Chat || _input.Length == 0) && key.Ch is >= '1' and <= '4')
+        // A selector owns every key while it is open: search, navigate, choose, cancel.
+        if (ActiveSelector is { } selector)
         {
-            _activeTab = (TermTab)(key.Ch - '1');
-            _input = "";
-            _inputCursor = 0;
+            await HandleSelectorKeyAsync(selector, key).ConfigureAwait(false);
             return;
         }
 
-        switch (_activeTab)
+        switch (_overlay)
         {
-            case TermTab.Chat:
+            case TermOverlay.None:
                 await HandleChatKeyAsync(key).ConfigureAwait(false);
                 break;
-            case TermTab.Sessions:
+            case TermOverlay.Sessions:
                 await HandleSessionsKeyAsync(key).ConfigureAwait(false);
                 break;
-            case TermTab.Tools:
-                HandleToolsKey(key);
-                break;
-            case TermTab.Providers:
+            case TermOverlay.Providers:
                 HandleProvidersKey(key);
                 break;
         }
     }
 
-    private bool HandleDropdownKey(TermKey key)
+    private async Task<bool> HandleDropdownKeyAsync(TermKey key)
     {
         if (key.Key == ConsoleKey.Escape)
         {
@@ -555,25 +1288,47 @@ public sealed class ReptarTerm : IDisposable
 
         if (_slashDropdownOpen)
         {
-            var commands = GetPaletteCommands();
-            if (key.Key == ConsoleKey.UpArrow && commands.Count > 0)
+            var commands = SlashMatches();
+
+            if (commands.Count == 0)
             {
-                _slashSelectedIdx = (_slashSelectedIdx - 1 + commands.Count) % commands.Count;
-                return true;
+                // Nothing matched, but the list stays open so the user can keep typing or
+                // backspace. Escape is the only thing that closes it here.
+                return false;
             }
-            if (key.Key == ConsoleKey.DownArrow && commands.Count > 0)
+
             {
-                _slashSelectedIdx = (_slashSelectedIdx + 1) % commands.Count;
-                return true;
-            }
-            if (key.Key is ConsoleKey.Tab or ConsoleKey.Enter && commands.Count > 0)
-            {
-                var chosen = commands[_slashSelectedIdx];
-                _slashDropdownOpen = false;
-                _input = "";
-                _inputCursor = 0;
-                chosen.Execute();
-                return true;
+                if (key.Key == ConsoleKey.UpArrow)
+                {
+                    _slashSelectedIdx = (_slashSelectedIdx - 1 + commands.Count) % commands.Count;
+                    return true;
+                }
+
+                if (key.Key == ConsoleKey.DownArrow)
+                {
+                    _slashSelectedIdx = (_slashSelectedIdx + 1) % commands.Count;
+                    return true;
+                }
+
+                if (key.Key is ConsoleKey.Tab or ConsoleKey.Enter)
+                {
+                    var chosen = commands[Math.Clamp(_slashSelectedIdx, 0, commands.Count - 1)];
+                    _slashDropdownOpen = false;
+                    _slashSelectedIdx = 0;
+
+                    // Tab completes into the editor so you can add arguments.
+                    _input = chosen.Name + " ";
+                    _inputCursor = _input.Length;
+
+                    if (key.Key == ConsoleKey.Enter)
+                    {
+                        // Enter completes and submits, which is pi's behaviour: accept the
+                        // completion, close the list, and fall through to running the command.
+                        await SubmitInputAsync(chosen.Name).ConfigureAwait(false);
+                    }
+
+                    return true;
+                }
             }
         }
 
@@ -592,6 +1347,8 @@ public sealed class ReptarTerm : IDisposable
             }
             if (key.Key is ConsoleKey.Tab or ConsoleKey.Enter && files.Count > 0)
             {
+                // pi returns here rather than submitting: attaching a file is a step in composing
+                // a prompt, not the end of one.
                 var chosen = files[_fileSelectedIdx];
                 _fileDropdownOpen = false;
 
@@ -628,7 +1385,22 @@ public sealed class ReptarTerm : IDisposable
     {
         if (key.Key == ConsoleKey.Enter)
         {
-            var text = _input.Trim();
+            await SubmitInputAsync(_input).ConfigureAwait(false);
+            return;
+        }
+
+        await HandleChatEditingKeyAsync(key).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Submits whatever is in the composer: a shell command, a slash command, or a prompt.
+    /// Separated from key handling because pi's Enter accepts an autocompletion and then
+    /// <em>falls through to submit</em>, so both paths have to land here.
+    /// </summary>
+    private async Task SubmitInputAsync(string raw)
+    {
+        {
+            var text = raw.Trim();
             if (text.Length == 0)
                 return;
 
@@ -640,6 +1412,24 @@ public sealed class ReptarTerm : IDisposable
             _slashDropdownOpen = false;
             _fileDropdownOpen = false;
 
+            // !command runs locally and is recorded as a bash-execution message so the model
+            // can reason about output you just looked at. !!command keeps it out of context.
+            if (text.StartsWith('!'))
+            {
+                await RunShellPassthroughAsync(text).ConfigureAwait(false);
+                return;
+            }
+
+            // A prompt template wins over a built-in command only when its name is not one of
+            // the built-ins, so /help and /compact cannot be shadowed by a stray file.
+            if (text.StartsWith('/') &&
+                PromptTemplates.TryExpand(_templates, text) is { Length: > 0 } expanded &&
+                !IsBuiltinCommand(text))
+            {
+                await SendChatMessageAsync(expanded).ConfigureAwait(false);
+                return;
+            }
+
             if (text.StartsWith('/'))
             {
                 var cmdPart = text.Split(' ')[0].ToLowerInvariant();
@@ -650,7 +1440,7 @@ public sealed class ReptarTerm : IDisposable
                 }
                 else if (cmdPart is "/clear")
                 {
-                    _messages.Clear();
+                    ReplaceTranscript([]);
                 }
                 else if (cmdPart is "/new")
                 {
@@ -666,15 +1456,37 @@ public sealed class ReptarTerm : IDisposable
                 }
                 else if (cmdPart is "/sessions")
                 {
-                    _activeTab = TermTab.Sessions;
+                    _overlay = TermOverlay.Sessions;
                 }
                 else if (cmdPart is "/tools")
                 {
-                    _activeTab = TermTab.Tools;
+                    ShowToolsTable();
                 }
                 else if (cmdPart is "/providers")
                 {
-                    _activeTab = TermTab.Providers;
+                    ShowProvidersTable();
+                }
+                else if (cmdPart is "/compact")
+                {
+                    await CompactNowAsync(text.Length > cmdPart.Length ? text[cmdPart.Length..].Trim() : "")
+                        .ConfigureAwait(false);
+                }
+                else if (cmdPart is "/templates")
+                {
+                    _messages.Add(new ChatMessage("assistant", PromptTemplates.Describe(_templates)));
+                    _dirty = true;
+                }
+                else if (cmdPart is "/settings")
+                {
+                    OpenSettingsMenu();
+                }
+                else if (cmdPart is "/tree")
+                {
+                    await OpenTreeAsync().ConfigureAwait(false);
+                }
+                else if (cmdPart is "/fork")
+                {
+                    await ForkSessionAsync().ConfigureAwait(false);
                 }
                 else if (cmdPart is "/help")
                 {
@@ -695,10 +1507,20 @@ public sealed class ReptarTerm : IDisposable
             else if (text is "3" or "[3]" && _messages.Count == 0)
                 text = "Scan the project routes and minimal API endpoints in this app.";
 
+            // Typing while the agent works steers it instead of blocking or being dropped.
+            if (_isStreaming)
+            {
+                SteerAgent(text);
+                return;
+            }
+
             await SendChatMessageAsync(text).ConfigureAwait(false);
             return;
         }
+    }
 
+    private async Task HandleChatEditingKeyAsync(TermKey key)
+    {
         if (key.Key == ConsoleKey.UpArrow)
         {
             if (_history.Count > 0)
@@ -760,6 +1582,19 @@ public sealed class ReptarTerm : IDisposable
             return;
         }
 
+        // Transcript scrollback. PgUp detaches from the tail; PgDn walks back down.
+        if (key.Key == ConsoleKey.PageUp)
+        {
+            _scrollOffset += Math.Max(1, _height / 2);
+            return;
+        }
+
+        if (key.Key == ConsoleKey.PageDown)
+        {
+            _scrollOffset = Math.Max(0, _scrollOffset - Math.Max(1, _height / 2));
+            return;
+        }
+
         if (key.Key == ConsoleKey.Backspace)
         {
             if (_inputCursor > 0 && _input.Length > 0)
@@ -789,19 +1624,18 @@ public sealed class ReptarTerm : IDisposable
 
     private void CheckInputTriggers()
     {
-        // Check for slash command trigger at the beginning of prompt
-        if (_input.StartsWith('/'))
+        // pi's trigger: a slash at the very start with no space yet. Once you type an argument
+        // the list closes and Enter submits, which is what makes the flow feel like one gesture.
+        if (SlashCommands.IsCompleting(_input))
         {
             _slashDropdownOpen = true;
             _fileDropdownOpen = false;
-            _paletteFilter = _input.TrimStart('/');
+            _paletteFilter = SlashCommands.Query(_input);
             _slashSelectedIdx = 0;
             return;
         }
-        else
-        {
-            _slashDropdownOpen = false;
-        }
+
+        _slashDropdownOpen = false;
 
         // Check for @ file mention trigger
         var atIdx = _input.LastIndexOf('@');
@@ -824,19 +1658,14 @@ public sealed class ReptarTerm : IDisposable
     {
         if (key.Key == ConsoleKey.Escape || key.Ch is 'q' or 'Q')
         {
-            _activeTab = TermTab.Chat;
+            _overlay = TermOverlay.None;
             _input = "";
             _inputCursor = 0;
             return;
         }
 
         if (key.Key == ConsoleKey.Tab)
-        {
-            _activeTab = TermTab.Tools;
-            _input = "";
-            _inputCursor = 0;
             return;
-        }
 
         if (key.Key == ConsoleKey.UpArrow && _sessionsList.Count > 0)
         {
@@ -850,16 +1679,15 @@ public sealed class ReptarTerm : IDisposable
         {
             var target = _sessionsList[_selectedSessionIdx];
             _session = target;
-            _messages.Clear();
-            _messages.AddRange(await _store.LoadMessagesAsync(target.Id).ConfigureAwait(false));
-            _activeTab = TermTab.Chat;
+            ReplaceTranscript(await LoadBranchAsync(target.Id).ConfigureAwait(false));
+            _overlay = TermOverlay.None;
             _input = "";
             _inputCursor = 0;
         }
         else if (key.Ch is 'n' or 'N')
         {
             await StartNewSessionAsync().ConfigureAwait(false);
-            _activeTab = TermTab.Chat;
+            _overlay = TermOverlay.None;
             _input = "";
             _inputCursor = 0;
         }
@@ -877,7 +1705,7 @@ public sealed class ReptarTerm : IDisposable
     {
         if (key.Key == ConsoleKey.Escape || key.Ch is 'q' or 'Q')
         {
-            _activeTab = TermTab.Chat;
+            _overlay = TermOverlay.None;
             _input = "";
             _inputCursor = 0;
             return;
@@ -885,7 +1713,7 @@ public sealed class ReptarTerm : IDisposable
 
         if (key.Key == ConsoleKey.Tab)
         {
-            _activeTab = TermTab.Providers;
+            _overlay = TermOverlay.Providers;
             _input = "";
             _inputCursor = 0;
             return;
@@ -898,182 +1726,410 @@ public sealed class ReptarTerm : IDisposable
             _selectedToolIdx = (_selectedToolIdx + 1) % tools.Count;
     }
 
-    private void HandleProvidersKey(TermKey key)
+    /// <summary>
+    /// Keys for any searchable selector: typing filters, arrows move, Enter chooses, Escape backs
+    /// out one level.
+    /// </summary>
+    private async Task HandleSelectorKeyAsync(TermSelector selector, TermKey key)
     {
-        var models = GetFilteredCatalog();
-        if (_selectedCatalogIdx >= models.Count)
-            _selectedCatalogIdx = Math.Max(0, models.Count - 1);
-
-        var currentModel = models.Count > 0 ? models[_selectedCatalogIdx] : null;
-
-        // 1. If inline key input is active
-        if (_keyInputActive)
+        if (key.Key == ConsoleKey.Escape)
         {
-            if (key.Key == ConsoleKey.Escape)
+            // Escape clears the query first, then closes — the same two-step pi uses, so a
+            // mistyped search does not throw you out of the menu.
+            if (selector.IsSearching)
             {
-                _keyInputActive = false;
-                _keyInputBuffer = "";
-                return;
-            }
-
-            if (key.Key == ConsoleKey.Enter)
-            {
-                var p = LlmProviders.Find(_keyInputProvider) ?? LlmProviders.Known[0];
-                var modelToSet = _keyInputModel ?? currentModel?.ModelId ?? p.DefaultModel;
-
-                if (!string.IsNullOrWhiteSpace(_keyInputBuffer))
-                {
-                    _auth.Set(p.Key, new ProviderCredential(
-                        ApiKey: _keyInputBuffer.Trim(),
-                        BaseUrl: p.DefaultBaseUrl,
-                        DefaultModel: modelToSet
-                    ));
-                }
-
-                _client = LlmClientFactory.Create(LlmConfig.FromEnvironment(p.Key, modelToSet));
-                _auth.SetDefault(p.Key);
-                UpdateStatusRibbon();
-                _keyInputActive = false;
-                _keyInputBuffer = "";
-                _activeTab = TermTab.Chat;
-                _messages.Add(new ChatMessage("assistant", $"Connected to **{p.DisplayName}** using model `{modelToSet}`."));
-                return;
-            }
-
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (_keyInputBuffer.Length > 0)
-                    _keyInputBuffer = _keyInputBuffer[..^1];
-                return;
-            }
-
-            if (key.PastedText is { Length: > 0 } paste)
-            {
-                _keyInputBuffer += paste.Trim();
-                return;
-            }
-
-            if ((key.Ch is 'o' or 'O') && _keyInputBuffer.Length == 0)
-            {
-                var p = LlmProviders.Find(_keyInputProvider);
-                var url = p?.KeyUrl ?? (_keyInputProvider == LlmProviders.Ollama ? "ollama.com/download" : null);
-                if (url is not null)
-                    OpenBrowser(url);
-                return;
-            }
-
-            if (key.Ch is not '\0' && !char.IsControl(key.Ch))
-            {
-                _keyInputBuffer += key.Ch;
-            }
-            return;
-        }
-
-        // 2. Normal catalog browsing
-        if (key.Key == ConsoleKey.Escape || key.Ch is 'q' or 'Q')
-        {
-            _activeTab = TermTab.Chat;
-            _input = "";
-            _inputCursor = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.Tab)
-        {
-            _providerCategoryIdx = (_providerCategoryIdx + 1) % ProviderCategories.Length;
-            _selectedCatalogIdx = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.LeftArrow)
-        {
-            _providerCategoryIdx = (_providerCategoryIdx - 1 + ProviderCategories.Length) % ProviderCategories.Length;
-            _selectedCatalogIdx = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.RightArrow)
-        {
-            _providerCategoryIdx = (_providerCategoryIdx + 1) % ProviderCategories.Length;
-            _selectedCatalogIdx = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.UpArrow && models.Count > 0)
-        {
-            _selectedCatalogIdx = (_selectedCatalogIdx - 1 + models.Count) % models.Count;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.DownArrow && models.Count > 0)
-        {
-            _selectedCatalogIdx = (_selectedCatalogIdx + 1) % models.Count;
-            return;
-        }
-
-        if (key.Ch is 'o' or 'O' && currentModel is not null)
-        {
-            var p = LlmProviders.Find(currentModel.ProviderKey);
-            var url = p?.KeyUrl ?? (currentModel.ProviderKey == LlmProviders.Ollama ? "ollama.com/download" : null);
-            if (url is not null)
-                OpenBrowser(url);
-
-            _keyInputActive = true;
-            _keyInputProvider = currentModel.ProviderKey;
-            _keyInputModel = currentModel.ModelId;
-            _keyInputBuffer = "";
-            return;
-        }
-
-        if (key.Ch is 'c' or 'C' && currentModel is not null)
-        {
-            _keyInputActive = true;
-            _keyInputProvider = currentModel.ProviderKey;
-            _keyInputModel = currentModel.ModelId;
-            _keyInputBuffer = "";
-            return;
-        }
-
-        if (key.Key == ConsoleKey.Enter && currentModel is not null)
-        {
-            var (source, _) = LlmProviders.CredentialSource(currentModel.ProviderKey, _auth);
-            var isLocal = currentModel.ProviderKey == LlmProviders.Ollama;
-            var isConfigured = source != "none" || isLocal;
-
-            if (isConfigured)
-            {
-                _client = LlmClientFactory.Create(LlmConfig.FromEnvironment(currentModel.ProviderKey, currentModel.ModelId));
-                _auth.SetDefault(currentModel.ProviderKey);
-                UpdateStatusRibbon();
-                _messages.Add(new ChatMessage("assistant", $"Switched active model to **{currentModel.ModelId}** ({currentModel.ProviderDisplayName})."));
-                _activeTab = TermTab.Chat;
+                selector.Backspace();
+                while (selector.IsSearching)
+                    selector.Backspace();
             }
             else
             {
-                _keyInputActive = true;
-                _keyInputProvider = currentModel.ProviderKey;
-                _keyInputModel = currentModel.ModelId;
-                _keyInputBuffer = "";
+                CloseOverlay();
             }
+
+            _dirty = true;
+            return;
+        }
+
+        if (key.Key == ConsoleKey.UpArrow)
+        {
+            selector.Move(-1);
+            _dirty = true;
+            return;
+        }
+
+        if (key.Key == ConsoleKey.DownArrow)
+        {
+            selector.Move(1);
+            _dirty = true;
             return;
         }
 
         if (key.Key == ConsoleKey.Backspace)
         {
-            if (_providerFilterText.Length > 0)
+            selector.Backspace();
+            _dirty = true;
+            return;
+        }
+
+        if (key.PastedText is { Length: > 0 } paste)
+        {
+            selector.Paste(paste);
+            _dirty = true;
+            return;
+        }
+
+        // pi's Ctrl+S in the model picker: remember this model as the default without switching
+        // to it now. Useful when you are browsing a catalog for next time.
+        if (key.Ctrl && key.Key == ConsoleKey.S && selector == _modelSelector)
+        {
+            if (selector.Selected?.Value is CatalogModelItem defaulted)
             {
-                _providerFilterText = _providerFilterText[..^1];
-                _selectedCatalogIdx = 0;
+                await _settings.SaveModelAsync(defaulted.ProviderKey, defaulted.ModelId)
+                    .ConfigureAwait(false);
+                selector.Status = $"Default set to {defaulted.ModelId}.";
+                _dirty = true;
             }
+            return;
+        }
+
+        if (key.Key == ConsoleKey.Enter)
+        {
+            await ActivateSelectionAsync(selector).ConfigureAwait(false);
             return;
         }
 
         if (key.Ch is not '\0' && !char.IsControl(key.Ch))
         {
-            _providerFilterText += key.Ch;
-            _selectedCatalogIdx = 0;
+            selector.Type(key.Ch);
+            _dirty = true;
         }
     }
+
+    /// <summary>
+    /// Moves the leaf to an entry and reloads the branch. This is the branch switch: the next
+    /// message continues from that point, and the previous continuation stays in the tree.
+    /// </summary>
+    private async Task SwitchLeafAsync(string entryId)
+    {
+        if (_tree is null || _session is null)
+            return;
+
+        await _tree.SetLeafAsync(_session.Id, entryId).ConfigureAwait(false);
+
+        ReplaceTranscript(await _tree.LoadBranchAsync(_session.Id).ConfigureAwait(false));
+
+        CloseOverlay();
+
+        _messages.Add(new ChatMessage("assistant",
+            $"Leaf moved to `{entryId}`. The conversation continues from here " +
+            $"({_messages.Count} messages on this branch). `/tree` again to switch back."));
+        _dirty = true;
+    }
+
+    /// <summary>Adds a hint about ctrl+o to the startup summary once.</summary>
+    private void NoteResourcesHint()
+    {
+        if (_resources is null || !_resources.HasProblems || _showResources)
+            return;
+
+        _messages.Add(new ChatMessage("assistant",
+            "⚠ Some project resources were rejected. Press `ctrl+o` to see which."));
+    }
+
+    private void CloseOverlay()
+    {
+        _overlay = TermOverlay.None;
+        _providerStage = ProviderStage.Models;
+        _authMethod = ProviderAuth.ApiKey;
+        _keyInputActive = false;
+        _keyInputBuffer = "";
+    }
+
+    /// <summary>Applies whatever the highlighted row means in the current selector.</summary>
+    private async Task ActivateSelectionAsync(TermSelector selector)
+    {
+        if (selector.Selected is not { } item)
+            return;
+
+        if (selector == _authSelector && item.Value is ProviderAuth method)
+        {
+            _authMethod = method;
+            _providerStage = ProviderStage.PickProvider;
+            RebuildProviderSelector();
+            _dirty = true;
+            return;
+        }
+
+        if (selector == _providerSelector && item.Value is ProviderInfo provider)
+        {
+            // Account sign-in is not implemented; say so instead of dropping into a key prompt
+            // that would look like the same flow under a different name.
+            if (_authMethod == ProviderAuth.Account)
+            {
+                _providerSelector.Status =
+                    $"{provider.DisplayName}: account sign-in is not implemented yet. " +
+                    "Go back and choose an API key.";
+                _dirty = true;
+                return;
+            }
+
+            if (!provider.RequiresApiKey)
+            {
+                ActivateProvider(provider.Key, provider.DefaultModel);
+                return;
+            }
+
+            BeginKeyEntry(provider.Key);
+            _dirty = true;
+            return;
+        }
+
+        if (selector == _modelSelector && item.Value is CatalogModelItem model)
+        {
+            var (source, _) = LlmProviders.CredentialSource(model.ProviderKey, _auth);
+            var configured = source != "none" || model.ProviderKey == LlmProviders.Ollama;
+
+            if (!configured)
+            {
+                BeginKeyEntry(model.ProviderKey, model.ModelId);
+                _dirty = true;
+                return;
+            }
+
+            ActivateProvider(model.ProviderKey, model.ModelId);
+            return;
+        }
+
+        if (selector == _treeSelector && item.Value is string entryId)
+        {
+            await SwitchLeafAsync(entryId).ConfigureAwait(false);
+            return;
+        }
+
+        if (selector == _settingsSelector && item.Value is string setting)
+        {
+            await ToggleSettingAsync(setting).ConfigureAwait(false);
+            return;
+        }
+    }
+
+    /// <summary>
+    /// Flips one setting and persists it. Numeric settings cycle through a short list rather than
+    /// asking for input, which keeps the menu a menu.
+    /// </summary>
+    private async Task ToggleSettingAsync(string setting)
+    {
+        var current = _settings.Settings;
+
+        switch (setting)
+        {
+            case "compaction":
+                _autoCompact = !_autoCompact;
+                await _settings.SaveUserAsync(s => s with
+                {
+                    Compaction = s.EffectiveCompaction with { Enabled = _autoCompact }
+                }).ConfigureAwait(false);
+                break;
+
+            case "thinking":
+                CycleThinking();
+                break;
+
+            case "promptCache":
+                await _settings.SaveUserAsync(s => s with { PromptCache = !(s.PromptCache ?? true) })
+                    .ConfigureAwait(false);
+                break;
+
+            case "warmCache":
+                await _settings.SaveUserAsync(s => s with { WarmPromptCache = !(s.WarmPromptCache ?? true) })
+                    .ConfigureAwait(false);
+                break;
+
+            case "steering":
+                var next = current.SteeringMode == AgentQueueMode.All
+                    ? AgentQueueMode.OneAtATime
+                    : AgentQueueMode.All;
+                await _settings.SaveUserAsync(s => s with { SteeringMode = next }).ConfigureAwait(false);
+                break;
+
+            case "keepRecent":
+                var keep = current.EffectiveCompaction.KeepRecentTokens switch
+                {
+                    <= 8_000 => 20_000,
+                    <= 20_000 => 40_000,
+                    <= 40_000 => 80_000,
+                    _ => 8_000
+                };
+                await _settings.SaveUserAsync(s => s with
+                {
+                    Compaction = s.EffectiveCompaction with { KeepRecentTokens = keep }
+                }).ConfigureAwait(false);
+                break;
+
+            case "reserve":
+                var reserve = current.EffectiveCompaction.ReserveTokens switch
+                {
+                    <= 8_192 => 16_384,
+                    <= 16_384 => 32_768,
+                    _ => 8_192
+                };
+                await _settings.SaveUserAsync(s => s with
+                {
+                    Compaction = s.EffectiveCompaction with { ReserveTokens = reserve }
+                }).ConfigureAwait(false);
+                break;
+
+            case "retry":
+                var attempts = current.EffectiveRetry.MaxAttempts switch
+                {
+                    <= 1 => 3,
+                    <= 3 => 5,
+                    _ => 1
+                };
+                await _settings.SaveUserAsync(s => s with
+                {
+                    Retry = s.EffectiveRetry with { MaxAttempts = attempts }
+                }).ConfigureAwait(false);
+                break;
+
+            case "autocomplete":
+                var rows = (current.AutocompleteMaxVisible ?? 5) switch
+                {
+                    <= 5 => 8,
+                    <= 8 => 12,
+                    _ => 5
+                };
+                await _settings.SaveUserAsync(s => s with { AutocompleteMaxVisible = rows })
+                    .ConfigureAwait(false);
+                break;
+
+            case "showThinking":
+                _options = _options with { ShowThinking = !_options.ShowThinking };
+                await _settings.SaveUserAsync(s => s with { HideThinking = _options.ShowThinking })
+                    .ConfigureAwait(false);
+                break;
+        }
+
+        // SetItems restores the selection by label, so the list stays where it was.
+        RebuildSettingsSelector();
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// One Enter in the key flow: collect the key, then each provider field in turn, then
+    /// activate. Each step is a single line, so the flow reads as a short sequence rather than a
+    /// form.
+    /// </summary>
+    private void AdvanceKeyEntry()
+    {
+        var provider = LlmProviders.Find(_keyInputProvider) ?? LlmProviders.Known[0];
+        var fields = PendingFields;
+
+        if (_keyFieldIndex < 0)
+        {
+            if (!string.IsNullOrWhiteSpace(_keyInputBuffer))
+                _keyFieldValues["api_key"] = _keyInputBuffer.Trim();
+
+            _keyInputBuffer = "";
+            _keyFieldRequired = false;
+
+            if (fields.Count > 0)
+            {
+                _keyFieldIndex = 0;
+                _dirty = true;
+                return;
+            }
+        }
+        else if (_keyFieldIndex < fields.Count)
+        {
+            var field = fields[_keyFieldIndex];
+
+            if (_keyInputBuffer.Trim().Length == 0)
+            {
+                _keyFieldRequired = true;
+                _dirty = true;
+                return;
+            }
+
+            _keyFieldValues[field.Name] = _keyInputBuffer.Trim();
+            _keyInputBuffer = "";
+            _keyFieldRequired = false;
+            _keyFieldIndex++;
+
+            if (_keyFieldIndex < fields.Count)
+            {
+                _dirty = true;
+                return;
+            }
+        }
+
+        var modelToSet = _keyInputModel
+            ?? _catalog.FirstOrDefault(m => m.ProviderKey == provider.Key)?.ModelId
+            ?? provider.DefaultModel;
+
+        _auth.Set(provider.Key, new ProviderCredential(
+            ApiKey: _keyFieldValues.GetValueOrDefault("api_key"),
+            BaseUrl: provider.HasUrlTemplate ? null : provider.DefaultBaseUrl,
+            DefaultModel: modelToSet,
+            Extra: _keyFieldValues
+                .Where(pair => pair.Key != "api_key")
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)));
+
+        _keyFieldIndex = -1;
+        ActivateProvider(provider.Key, modelToSet);
+    }
+
+    /// <summary>
+    /// Keys for the provider overlay's key-entry stage. The list stages are handled by
+    /// <see cref="HandleSelectorKeyAsync"/> because they are <see cref="TermSelector"/>s.
+    /// </summary>
+    private void HandleProvidersKey(TermKey key)
+    {
+        if (!_keyInputActive)
+            return;
+
+        if (key.Key == ConsoleKey.Escape)
+        {
+            _keyInputActive = false;
+            _keyInputBuffer = "";
+            _providerStage = ProviderStage.PickProvider;
+            RebuildProviderSelector();
+            return;
+        }
+
+        if (key.Key == ConsoleKey.Enter)
+        {
+            AdvanceKeyEntry();
+            return;
+        }
+
+        if (key.Key == ConsoleKey.Backspace)
+        {
+            if (_keyInputBuffer.Length > 0)
+                _keyInputBuffer = _keyInputBuffer[..^1];
+            return;
+        }
+
+        if (key.PastedText is { Length: > 0 } paste)
+        {
+            _keyInputBuffer += paste.Trim();
+            return;
+        }
+
+        if ((key.Ch is 'o' or 'O') && _keyInputBuffer.Length == 0 && _keyFieldIndex < 0)
+        {
+            var provider = LlmProviders.Find(_keyInputProvider);
+            var url = provider?.KeyUrl ?? (_keyInputProvider == LlmProviders.Ollama ? "ollama.com/download" : null);
+            if (url is not null)
+                OpenBrowser(url);
+            return;
+        }
+
+        if (key.Ch is not '\0' && !char.IsControl(key.Ch))
+            _keyInputBuffer += key.Ch;
+    }
+
 
     private async Task SendChatMessageAsync(string prompt)
     {
@@ -1097,104 +2153,451 @@ public sealed class ReptarTerm : IDisposable
             }
         }
 
-        var userMessage = new ChatMessage("user", prompt);
+        var userMessage = new ChatMessage("user", resolvedPrompt.ToString());
         _messages.Add(userMessage);
+        _persistedCount = _messages.Count - 1;
 
         if (_store is not null && _session is not null)
-            await _store.AppendMessageAsync(_session.Id, userMessage).ConfigureAwait(false);
+            await AppendAsync(userMessage).ConfigureAwait(false);
 
+        StartAgentRun(userMessage);
+    }
+
+    /// <summary>
+    /// Launches the agent on a background task and returns immediately, so the prompt
+    /// stays responsive: typing while streaming queues a steering message, Esc aborts.
+    /// </summary>
+    private void StartAgentRun(ChatMessage userMessage)
+    {
         _isStreaming = true;
-        _streamingDelta = "";
+        _runStartedAt = DateTimeOffset.UtcNow;
+        _dirty = true;
+        _streamingText = "";
+        _thinkingText = "";
+        _runError = null;
+        _statusNote = "";
+        _scrollOffset = 0;
         _activePlanSteps.Clear();
-        _activeTools.Clear();
-        Render();
+        _toolCards.Clear();
+        lock (_steeringGate) _steeringQueue.Clear();
 
-        var assistantText = new StringBuilder();
+        // Snapshot on this thread; the background loop owns its own list from here on and
+        // reports back through MessageEnd events, which we apply to _messages.
+        var history = new List<ChatMessage>(_messages.Count + _bashHistory.Count);
+        history.AddRange(_messages);
+        history.AddRange(_bashHistory);
+        var systemPrompt = SystemPrompt();
 
-        try
+        _runCts?.Dispose();
+        _runCts = new CancellationTokenSource();
+        var token = _runCts.Token;
+        var sink = _agentEvents.Writer;
+
+        _runTask = Task.Run(async () =>
         {
-            var summary = await StreamingAgentHarness.RunAsync(
-                _app,
-                _client,
-                _messages,
-                systemPrompt: "You are Reptar Agent, an autonomous coding pair programmer in-process with access to workspace tools.",
-                maxSteps: _options.MaxSteps,
-                onEvent: evt =>
-                {
-                    switch (evt)
+            try
+            {
+                await StreamingAgentHarness.RunAsync(
+                    _app,
+                    _client,
+                    history,
+                    systemPrompt: systemPrompt,
+                    maxSteps: _options.MaxSteps,
+                    onEvent: evt => sink.TryWrite(evt),
+                    configure: config => config with
                     {
-                        case AgentEvent.TurnStarted turn:
-                            _activePlanSteps.Add($"Step {turn.Step}");
-                            Render();
-                            break;
-
-                        case AgentEvent.TextDelta delta:
-                            assistantText.Append(delta.Text);
-                            _streamingDelta = assistantText.ToString();
-                            Render();
-                            break;
-
-                        case AgentEvent.ToolCallStarted call:
-                            _activePlanSteps.Add($"Executing {call.Name}...");
-                            _activeTools.Add((call.Name, call.ArgumentsJson, "running", 0));
-                            Render();
-                            break;
-
-                        case AgentEvent.ToolCallFinished call:
-                            if (_activeTools.Count > 0)
+                        GetSteeringMessages = () =>
+                        {
+                            lock (_steeringGate)
                             {
-                                var last = _activeTools[^1];
-                                _activeTools[^1] = (last.Name, last.Args, call.Success ? "ok" : "bad", (int)call.ElapsedMs);
+                                if (_steeringQueue.Count == 0)
+                                    return [];
+                                return [_steeringQueue.Dequeue()];
                             }
-                            Render();
-                            break;
+                        },
+                        Retry = new AgentRetryPolicy { MaxAttempts = 3 },
+                        PrepareNextTurn = (turn, ct) => CompactIfNeededAsync(turn, sink, ct)
+                    },
+                    cancellationToken: token).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                sink.TryWrite(new AgentEvent.AgentError(ex.Message));
+            }
+            finally
+            {
+                sink.TryWrite(new AgentEvent.AgentSettled(token.IsCancellationRequested));
+            }
+        });
+    }
 
-                        case AgentEvent.UsageReported usage:
-                            _totalTokensIn += usage.InputTokens;
-                            _totalTokensOut += usage.OutputTokens;
-                            break;
+    /// <summary>
+    /// Applies queued agent events to display state. Runs on the render thread only.
+    /// </summary>
+    private void DrainAgentEvents()
+    {
+        while (_agentEvents.Reader.TryRead(out var evt))
+        {
+            _dirty = true;
+
+            switch (evt)
+            {
+                case AgentEvent.TurnStart turn:
+                    _activePlanSteps.Add($"step {turn.Step}");
+                    break;
+
+                case AgentEvent.MessageUpdate { Kind: AgentContentKind.Text } delta:
+                    _streamingText += delta.Delta;
+                    break;
+
+                case AgentEvent.MessageUpdate { Kind: AgentContentKind.Thinking } delta:
+                    _thinkingText += delta.Delta;
+                    break;
+
+                case AgentEvent.MessageEnd end when end.Message.Role != "assistant":
+                    // Tool results and queued user messages join the transcript here.
+                    _messages.Add(end.Message);
+                    break;
+
+                case AgentEvent.MessageEnd end:
+                    _messages.Add(end.Message);
+                    _streamingText = "";
+                    _thinkingText = "";
+                    break;
+
+                case AgentEvent.ToolExecutionStart start:
+                    _toolCards.Add(new ToolCard
+                    {
+                        Id = start.ToolCallId,
+                        Name = start.ToolName,
+                        Args = SummarizeArgs(start.ArgumentsJson)
+                    });
+                    break;
+
+                case AgentEvent.ToolExecutionUpdate update:
+                    FindCard(update.ToolCallId)?.Output.Append(update.PartialResult);
+                    break;
+
+                case AgentEvent.ToolExecutionEnd end:
+                    var card = FindCard(end.ToolCallId);
+                    if (card is not null)
+                    {
+                        card.Status = end.IsError ? "failed" : "ok";
+                        card.DurationMs = (int)end.DurationMs;
+                        if (card.Output.Length == 0)
+                            card.Output.Append(end.Result);
                     }
-                }
-            ).ConfigureAwait(false);
+                    break;
 
-            if (summary.StopReason == AgentStopReason.Error)
-            {
-                var errMsg = new ChatMessage("assistant",
-                    $"⚠️ **Provider Error ({_client.Config.Model}):**\n\n{summary.FinalContent}\n\n*Tip: Run `/connect` to set API credentials or `/model` to switch providers.*");
-                _messages.Add(errMsg);
-                if (_store is not null && _session is not null)
-                    await _store.AppendMessageAsync(_session.Id, errMsg).ConfigureAwait(false);
+                case AgentEvent.UsageReported usage:
+                    _totalTokensIn += usage.InputTokens;
+                    _totalTokensOut += usage.OutputTokens;
+                    _totalCost +=
+                        (usage.InputTokens / 1_000_000.0 * _inputCostPerMillion) +
+                        (usage.OutputTokens / 1_000_000.0 * _outputCostPerMillion);
+                    break;
+
+                case AgentEvent.AgentError error:
+                    _runError = error.Message;
+                    break;
+
+                case AgentEvent.RetryScheduled retry:
+                    _statusNote = $"provider error, retrying in {retry.DelayMs / 1000.0:0.0}s " +
+                        $"(attempt {retry.Attempt})";
+                    break;
+
+                case AgentEvent.RetryFinished:
+                    _statusNote = "";
+                    break;
+
+                case AgentEvent.CompactionStart:
+                    _statusNote = "compacting context…";
+                    break;
+
+                case AgentEvent.CompactionEnd compaction:
+                    _statusNote = compaction.Error is { Length: > 0 }
+                        ? $"compaction failed: {compaction.Error}"
+                        : $"compacted {compaction.TokensBefore:N0} → {compaction.EstimatedTokensAfter:N0} tokens";
+                    break;
             }
-            else if (_store is not null && _session is not null)
-            {
-                var last = _messages.LastOrDefault(m => m.Role == "assistant");
-                if (last is not null)
-                    await _store.AppendMessageAsync(_session.Id, last).ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex)
-        {
-            var err = new ChatMessage("assistant", $"⚠️ **Error:** {ex.Message}");
-            _messages.Add(err);
-            if (_store is not null && _session is not null)
-                await _store.AppendMessageAsync(_session.Id, err).ConfigureAwait(false);
-        }
-        finally
-        {
-            _isStreaming = false;
-            _streamingDelta = "";
-            UpdateStatusRibbon();
-            Render();
         }
     }
+
+    private ToolCard? FindCard(string toolCallId)
+    {
+        foreach (var card in _toolCards)
+        {
+            if (card.Id == toolCallId)
+                return card;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Called on the render thread once the background run has finished. Persists the
+    /// messages the run produced and clears streaming state.
+    /// </summary>
+    private async Task FinishAgentRunAsync()
+    {
+        var task = _runTask;
+        _runTask = null;
+        _runCts?.Dispose();
+        _runCts = null;
+
+        _isStreaming = false;
+        _runStartedAt = default;
+        _streamingText = "";
+        _thinkingText = "";
+        _dirty = true;
+
+        if (task is not null)
+        {
+            try
+            {
+                await task.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // aborted by the user
+            }
+            catch (Exception ex)
+            {
+                _runError ??= ex.Message;
+            }
+        }
+
+        if (_runError is { Length: > 0 } message)
+        {
+            _messages.Add(new ChatMessage("assistant",
+                $"⚠️ **Error ({_client.Config.Model}):**\n\n{message}\n\n" +
+                "*Tip: `/connect` to set API credentials, `/model` to switch providers.*"));
+            _runError = null;
+        }
+
+        if (_store is not null && _session is not null)
+        {
+            for (var i = Math.Max(0, _persistedCount); i < _messages.Count; i++)
+            {
+                var stored = _messages[i];
+                if (stored.Role is "assistant" or "tool")
+                    await AppendAsync(stored).ConfigureAwait(false);
+            }
+        }
+
+        _persistedCount = _messages.Count;
+        UpdateStatusRibbon();
+    }
+
+    /// <summary>Queue a message for the running agent (Enter while streaming).</summary>
+    private void SteerAgent(string text)
+    {
+        var message = new ChatMessage("user", text);
+        lock (_steeringGate) _steeringQueue.Enqueue(message);
+        _messages.Add(new ChatMessage("user", $"(steering) {text}"));
+        _dirty = true;
+    }
+
+    private static readonly HashSet<string> BuiltinCommands = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "/palette", "/p", "/clear", "/new", "/model", "/connect", "/sessions", "/tools",
+        "/providers", "/help", "/compact", "/exit", "/quit", "/templates"
+    };
+
+    private static bool IsBuiltinCommand(string text) =>
+        BuiltinCommands.Contains(text.Split(' ')[0]);
+
+    /// <summary>
+    /// Runs a shell command outside the model and records it in the transcript.
+    /// </summary>
+    private async Task RunShellPassthroughAsync(string input)
+    {
+        var excludeFromContext = input.StartsWith("!!");
+        var command = input.TrimStart('!').Trim();
+
+        if (command.Length == 0)
+            return;
+
+        var workspace = new WorkspaceRoot(new WorkspaceToolOptions
+        {
+            RootPath = _options.WorkspaceRoot,
+            AllowRunCommand = true
+        });
+
+        _messages.Add(new ChatMessage("assistant", $"**$ {command}**"));
+        _dirty = true;
+        Render();
+
+        var result = await WorkspaceTools
+            .RunCommandAsync(workspace, command, 30_000)
+            .ConfigureAwait(false);
+
+        var shown = ToolOutput.Tail(
+            string.Concat(result.Stdout, result.Stderr),
+            maxLines: 40,
+            maxBytes: 8 * 1024);
+
+        _messages.Add(new ChatMessage("assistant",
+            "```\n" + (shown.Content.Length > 0 ? shown.Content : "(no output)") + "\n```" +
+            (result.TimedOut ? "\n\n_timed out_" : "") +
+            (result.ExitCode != 0 ? $"\n\n_exit {result.ExitCode}_" : "")));
+
+        var message = AgentMessages.BashExecution(
+            command,
+            result.Stdout,
+            result.Stderr,
+            result.ExitCode,
+            cancelled: result.TimedOut,
+            excludeFromContext: excludeFromContext);
+
+        // Keep the bash message in the transcript used to seed the next run, without showing
+        // the raw record twice in the UI.
+        _bashHistory.Add(message);
+
+        if (_store is not null && _session is not null)
+            await AppendAsync(message).ConfigureAwait(false);
+
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// Manual <c>/compact [instructions]</c>. Replaces the older half of the transcript with a
+    /// structured checkpoint so a long session can keep going.
+    /// </summary>
+    private async Task CompactNowAsync(string customInstructions)
+    {
+        if (_isStreaming)
+        {
+            _messages.Add(new ChatMessage("assistant", "Cannot compact while the agent is running."));
+            _dirty = true;
+            return;
+        }
+
+        _statusNote = "compacting context…";
+        _dirty = true;
+        Render();
+
+        var before = ContextCompaction.EstimateContextTokens(_messages);
+
+        var outcome = await ContextCompactor.CompactAsync(
+            _messages,
+            _client,
+            new CompactionSettings(),
+            CompactionReason.Manual,
+            customInstructions: customInstructions.Length > 0 ? customInstructions : null)
+            .ConfigureAwait(false);
+
+        if (outcome is null)
+        {
+            _statusNote = "";
+            _messages.Add(new ChatMessage("assistant",
+                before < 4_000
+                    ? "Nothing to compact yet — the conversation is still small."
+                    : "Compaction failed; the summary was empty or truncated. Context is unchanged."));
+            _dirty = true;
+            return;
+        }
+
+        var (result, projection) = outcome.Value;
+
+        // The TUI keeps the raw transcript for scrollback; only the model-facing projection
+        // shrinks. Persisting keeps the session reloadable.
+        ReplaceTranscript(projection);
+
+        _statusNote = $"compacted {result.TokensBefore:N0} → {result.EstimatedTokensAfter:N0} tokens";
+        _messages.Add(new ChatMessage("assistant",
+            $"**Context compacted.** {result.TokensBefore:N0} → {result.EstimatedTokensAfter:N0} tokens " +
+            $"({projection.Count} messages retained).\n\n{result.Summary}"));
+        _dirty = true;
+
+        if (_store is not null && _session is not null)
+        {
+            for (var i = Math.Max(0, _persistedCount - projection.Count); i < _messages.Count; i++)
+                await AppendAsync(_messages[i]).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// Runs between turns. When the live context is close to the model's window, summarizes the
+    /// older half and hands the loop a shorter projection — the raw transcript is untouched, so
+    /// scrollback and export still show everything.
+    /// </summary>
+    private async Task<AgentNextTurn?> CompactIfNeededAsync(
+        AgentTurnResult turn,
+        ChannelWriter<AgentEvent> sink,
+        CancellationToken cancellationToken)
+    {
+        if (!_autoCompact || _contextLimit <= 0)
+            return null;
+
+        var settings = new CompactionSettings();
+        var contextTokens = ContextCompaction.EstimateContextTokens(turn.History);
+
+        if (!ContextCompaction.ShouldCompact(contextTokens, _contextLimit, settings))
+            return null;
+
+        sink.TryWrite(new AgentEvent.CompactionStart(CompactionReason.Threshold));
+
+        var outcome = await ContextCompactor.CompactAsync(
+            turn.History,
+            _client,
+            settings,
+            CompactionReason.Threshold,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        if (outcome is null)
+        {
+            sink.TryWrite(new AgentEvent.CompactionEnd(
+                CompactionReason.Threshold, contextTokens, contextTokens, "summary unavailable"));
+            return null;
+        }
+
+        var (result, projection) = outcome.Value;
+        sink.TryWrite(new AgentEvent.CompactionEnd(
+            CompactionReason.Threshold, result.TokensBefore, result.EstimatedTokensAfter, null));
+
+        return new AgentNextTurn(ContextMessages: projection);
+    }
+
+    /// <summary>Abort the running agent, mirroring pi's Esc: clear the queue, keep the text.</summary>
+    private void AbortAgent()
+    {
+        _runCts?.Cancel();
+        lock (_steeringGate) _steeringQueue.Clear();
+        _dirty = true;
+    }
+
+    private string SystemPrompt() =>
+        "You are Reptar Agent, an autonomous coding pair programmer in-process with access to " +
+        "workspace tools (read_file, write_file, edit_file, list_dir, run_command). Read before " +
+        "editing, prefer edit_file over rewriting whole files, verify with run_command when a " +
+        "build or test can check your work, and answer concisely in Markdown.";
 
     private async Task StartNewSessionAsync()
     {
         if (_store is null) return;
         _session = await _store.CreateSessionAsync("New chat").ConfigureAwait(false);
-        _messages.Clear();
+        ReplaceTranscript([]);
         _input = "";
         await RefreshSessionsListAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Swaps the visible transcript and resets everything derived from it: scroll position, tool
+    /// cards, and the persistence cursor. Anything that replaces the conversation goes through
+    /// here so switching sessions cannot leave you scrolled up in a list of another session's
+    /// tool cards.
+    /// </summary>
+    private void ReplaceTranscript(IEnumerable<ChatMessage> messages)
+    {
+        _messages.Clear();
+        _messages.AddRange(messages);
+        _persistedCount = _messages.Count;
+        _scrollOffset = 0;
+        _toolCards.Clear();
+        _activePlanSteps.Clear();
+        _streamingText = "";
+        _thinkingText = "";
+        _dirty = true;
     }
 
     private async Task RefreshSessionsListAsync()
@@ -1216,6 +2619,7 @@ public sealed class ReptarTerm : IDisposable
                 _height = h;
                 _back.Resize(_width, _height);
                 _front = null; // force full redraw
+                _dirty = true;
             }
         }
         catch { }
@@ -1223,11 +2627,36 @@ public sealed class ReptarTerm : IDisposable
 
     private void UpdateStatusRibbon()
     {
+        // Line 1 is where you are; line 2 is what it has cost. Mirrors pi's footer.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var root = Path.GetFullPath(_options.WorkspaceRoot);
+
+        var where = root;
+        if (home.Length > 0 && root.StartsWith(home, StringComparison.Ordinal))
+        {
+            var tail = root[home.Length..].TrimStart(Path.DirectorySeparatorChar);
+            where = tail.Length == 0 ? "~" : "~/" + tail;
+        }
+
         var branch = ReadGitBranch(_options.WorkspaceRoot);
-        var branchPart = string.IsNullOrEmpty(branch) ? "" : $" ({branch})";
-        var modelName = _client.Config.Model;
-        var costPart = _totalCost > 0 ? $" · ${_totalCost:F3}" : "";
-        _statusRibbon = $"~/{_workspaceName}{branchPart} · {modelName}{costPart} · Tab: switch view / autocomplete · /: commands · @: files";
+        if (!string.IsNullOrEmpty(branch))
+            where += $" ({branch})";
+
+        _footerLocation = where;
+    }
+
+    private string _footerLocation = "";
+
+    /// <summary>
+    /// pi's <c>formatTokens</c>: compact enough for a footer, precise where precision is visible.
+    /// </summary>
+    private static string FormatTokens(int count)
+    {
+        if (count < 1_000) return count.ToString();
+        if (count < 10_000) return $"{count / 1_000.0:0.0}k";
+        if (count < 1_000_000) return $"{Math.Round(count / 1_000.0)}k";
+        if (count < 10_000_000) return $"{count / 1_000_000.0:0.0}M";
+        return $"{Math.Round(count / 1_000_000.0)}M";
     }
 
     /// <summary>
@@ -1237,35 +2666,42 @@ public sealed class ReptarTerm : IDisposable
     {
         _back.Clear();
 
-        // 1. Top Header & Tab Strip (GitHub Copilot style with Reptar emerald mark)
-        RenderHeaderTabs();
+        // 1. Header: identity and branch, no tab strip.
+        RenderHeader();
 
-        // 2. Active Tab Body
-        switch (_activeTab)
+        // 2. The conversation, preceded by the resource panel while it is open.
+        RenderChatTab();
+
+        if (_overlay == TermOverlay.Sessions)
+            RenderSessionsOverlay();
+
+        // 3. The composer slot. A selector takes it over entirely — pi does not draw the prompt
+        //    behind a picker, because the picker *is* the input.
+        var selector = ActiveSelector;
+
+        if (selector is not null)
         {
-            case TermTab.Chat:
-                RenderChatTab();
-                break;
-            case TermTab.Sessions:
-                RenderSessionsTab();
-                break;
-            case TermTab.Tools:
-                RenderToolsTab();
-                break;
-            case TermTab.Providers:
-                RenderProvidersTab();
-                break;
+            selector.Render(
+                _back,
+                _width,
+                Layout.SelectorBottom,
+                ruleFg: "\x1b[38;2;60;65;95m",
+                textFg: "\x1b[37m",
+                dimFg: "\x1b[90m",
+                accentFg: "\x1b[38;2;16;185;129m",
+                selectedBg: "\x1b[48;2;22;36;45m");
+        }
+        else
+        {
+            RenderWorkingIndicator();
+            RenderComposer();
         }
 
-        // 3. Docked Bottom Input Card (OpenAI Codex style)
-        if (_activeTab == TermTab.Chat)
-            RenderDockedInputCard();
-
-        // 4. Status Ribbon (Pi style)
+        // 4. Footer: location, then stats
         RenderFooterRibbon();
 
         // 5. Autocomplete Dropdowns for '/' and '@'
-        if (_activeTab == TermTab.Chat && !_showPalette)
+        if (_overlay == TermOverlay.None && !_showPalette)
         {
             if (_slashDropdownOpen)
                 RenderSlashDropdown();
@@ -1279,18 +2715,17 @@ public sealed class ReptarTerm : IDisposable
 
         // Compute cursor position for terminal caret
         int caretX = -1, caretY = -1;
-        if (!_showPalette && _activeTab == TermTab.Chat)
+        if (!_showPalette && _overlay == TermOverlay.None)
         {
-            var promptY = _height - 3;
+            var promptY = ComposerRow;
             caretX = Math.Min(_width - 4, 5 + _inputCursor);
             caretY = promptY;
         }
-        else if (_activeTab == TermTab.Providers && _keyInputActive)
+        else if (_overlay == TermOverlay.Providers && _providerStage == ProviderStage.EnterKey)
         {
-            var boxY = _height - 6;
-            var keyPromptLen = "❯ Paste API Key: ".Length;
-            caretX = Math.Min(_width - 4, 3 + 2 + keyPromptLen + _keyInputBuffer.Length);
-            caretY = boxY + 1;
+            // The composer is the key field, so the caret sits after the mask.
+            caretX = Math.Min(_width - 4, 4 + _keyInputBuffer.Length);
+            caretY = ComposerRow;
         }
 
         // Emit diff
@@ -1300,38 +2735,40 @@ public sealed class ReptarTerm : IDisposable
         _front = _back.Clone();
     }
 
-    private void RenderHeaderTabs()
+    /// <summary>
+    /// One line of identity: mark, name, version, and the branch. No tab strip — pi's shape is a
+    /// single conversation, and pickers appear over it when asked for.
+    /// </summary>
+    private void RenderHeader()
     {
-        // Line 0: Tab strip matching website header (apps/web/src/components/header.astro)
         _back.Print(1, 0, "▲ ", fg: "\x1b[38;2;16;185;129m", bold: true);
         _back.Print(3, 0, "reptar agent ", fg: "\x1b[37m", bold: true);
         _back.Print(16, 0, "v0.2", fg: "\x1b[90m");
 
-        var tabs = new (string Label, TermTab Tab)[]
+        if (_overlay != TermOverlay.None)
         {
-            ("1 Chat", TermTab.Chat),
-            ("2 Sessions", TermTab.Sessions),
-            ("3 Tools", TermTab.Tools),
-            ("4 Providers", TermTab.Providers)
-        };
+            var title = _overlay switch
+            {
+                TermOverlay.Sessions => "sessions",
+                TermOverlay.Settings => "settings",
+                TermOverlay.Tree => "tree",
+                TermOverlay.Providers => _providerStage switch
+                {
+                    ProviderStage.PickAuthMethod => "connect",
+                    ProviderStage.PickProvider => "connect",
+                    ProviderStage.EnterKey => "connect",
+                    _ => "models"
+                },
+                _ => "menu"
+            };
 
-        var x = 23;
-        foreach (var (lbl, tab) in tabs)
-        {
-            var active = _activeTab == tab;
-            if (active)
-            {
-                _back.Print(x, 0, $"[ {lbl} ]", fg: "\x1b[37m", bg: "\x1b[48;2;16;185;129m", bold: true);
-                x += lbl.Length + 5;
-            }
-            else
-            {
-                _back.Print(x, 0, $"  {lbl}  ", fg: "\x1b[90m");
-                x += lbl.Length + 4;
-            }
+            var label = $"/ {title}";
+            _back.Print(23, 0, label, fg: "\x1b[38;2;16;185;129m", bold: true);
+
+            // Two spaces after the label: the two runs used to butt together.
+            _back.Print(23 + label.Length + 2, 0, "esc to close", fg: "\x1b[90m");
         }
 
-        // Right side: branch & tools
         var branch = ReadGitBranch(_options.WorkspaceRoot);
         if (!string.IsNullOrEmpty(branch))
         {
@@ -1339,17 +2776,18 @@ public sealed class ReptarTerm : IDisposable
             _back.Print(_width - branchStr.Length - 1, 0, branchStr, fg: "\x1b[38;2;16;185;129m", dim: true);
         }
 
-        // Horizontal divider line
         _back.FillRect(0, 1, _width, 1, '─', fg: "\x1b[38;2;40;45;65m");
     }
 
     private void RenderChatTab()
     {
         var viewportTop = 2;
-        var viewportBottom = _height - 5;
+
+        // The transcript stops above whatever owns the bottom of the screen.
+        var viewportBottom = Layout.TranscriptBottom;
         var availableHeight = viewportBottom - viewportTop;
 
-        if (_messages.Count == 0 && !_isStreaming)
+        if (_messages.Count == 0 && !_isStreaming && _overlay == TermOverlay.None)
         {
             // Empty State Hero (Official Reptar emerald pixel dinosaur watermark + quick tips)
             var startY = Math.Max(viewportTop, (viewportTop + availableHeight - PixelDinoWatermark.Length - 4) / 2);
@@ -1372,77 +2810,446 @@ public sealed class ReptarTerm : IDisposable
             return;
         }
 
-        // Render message turns (ignoring background system prompts)
-        var chatMessages = _messages.Where(m => m.Role != "system").ToList();
+        // Build the full transcript as styled lines, then window it. Doing it this way
+        // gives real scrollback instead of the previous "last six messages" cap.
+        var lines = BuildTranscriptLines();
+
+        var total = lines.Count;
+        var viewHeight = Math.Max(1, availableHeight);
+        var maxScroll = Math.Max(0, total - viewHeight);
+        _scrollOffset = Math.Clamp(_scrollOffset, 0, maxScroll);
+
+        var first = Math.Max(0, total - viewHeight - _scrollOffset);
         var y = viewportTop;
-        var startMsgIdx = Math.Max(0, chatMessages.Count - 6);
 
-        for (var i = startMsgIdx; i < chatMessages.Count && y < viewportBottom; i++)
+        for (var i = first; i < total && y < viewportBottom; i++)
+            lines[i].Draw(_back, ref y, viewportBottom);
+
+        if (_scrollOffset > 0 && viewportBottom - 1 >= viewportTop)
         {
-            var msg = chatMessages[i];
-            var isUser = msg.Role == "user";
-            var prefix = isUser ? "❯ User: " : "⚡ Reptar: ";
-            var prefixColor = isUser ? "\x1b[38;2;139;92;246m" : "\x1b[38;2;16;185;129m";
-
-            _back.Print(2, y++, prefix, fg: prefixColor, bold: true);
-
-            var lines = WrapText(msg.Content, _width - 6);
-            foreach (var l in lines)
-            {
-                if (y >= viewportBottom) break;
-                _back.Print(4, y++, l, fg: "\x1b[37m");
-            }
-            y++;
-        }
-
-        // Render streaming delta & Pi-style plan tree
-        if (_isStreaming)
-        {
-            if (_activePlanSteps.Count > 0 && y < viewportBottom)
-            {
-                _back.Print(2, y++, $"● Plan ({_activePlanSteps.Count} steps)", fg: "\x1b[38;2;251;146;60m", bold: true);
-                for (var si = 0; si < _activePlanSteps.Count && y < viewportBottom; si++)
-                {
-                    var isLast = si == _activePlanSteps.Count - 1;
-                    var branchGlyph = isLast ? "└─ ◐ " : "├─ ✓ ";
-                    _back.Print(4, y++, branchGlyph + _activePlanSteps[si], fg: "\x1b[90m");
-                }
-            }
-
-            if (_activeTools.Count > 0 && y < viewportBottom)
-            {
-                var tool = _activeTools[^1];
-                var toolBox = $"╭─ ⚙ {tool.Name} ({tool.Ms}ms) ─────────── [ {tool.Status} ] ╮";
-                _back.Print(2, y++, toolBox, fg: "\x1b[38;2;16;185;129m");
-            }
-
-            if (!string.IsNullOrEmpty(_streamingDelta) && y < viewportBottom)
-            {
-                _back.Print(2, y++, "⚡ Reptar: ", fg: "\x1b[38;2;16;185;129m", bold: true);
-                var streamLines = WrapText(_streamingDelta, _width - 6);
-                var takeLines = streamLines.TakeLast(Math.Max(1, viewportBottom - y)).ToList();
-                foreach (var sl in takeLines)
-                {
-                    if (y >= viewportBottom) break;
-                    _back.Print(4, y++, sl, fg: "\x1b[37m");
-                }
-            }
+            _back.Print(
+                Math.Max(2, _width - 24), viewportBottom - 1,
+                $"▲ {_scrollOffset} lines back (PgDn)",
+                fg: "\x1b[90m");
         }
     }
 
-    private void RenderSessionsTab()
+    /// <summary>One rendered transcript line: text plus styling, deferred until placement.</summary>
+    private readonly record struct TranscriptLine(string Text, string Fg, bool Bold, int Indent = 4)
+    {
+        public void Draw(TerminalBuffer buffer, ref int y, int limit)
+        {
+            if (y >= limit)
+                return;
+            buffer.Print(Indent, y++, Text, fg: Fg, bold: Bold);
+        }
+    }
+
+    private List<TranscriptLine> BuildTranscriptLines()
+    {
+        const string textFg = "\x1b[37m";
+        const string warnFg = "\x1b[38;2;251;191;36m";
+        const string userFg = "\x1b[38;2;139;92;246m";
+        const string agentFg = "\x1b[38;2;16;185;129m";
+        const string dimFg = "\x1b[90m";
+        const string toolFg = "\x1b[38;2;251;146;60m";
+        const string errorFg = "\x1b[38;2;248;113;113m";
+
+        var lines = new List<TranscriptLine>(_messages.Count * 4);
+        var codeFence = false;
+
+        // pi's startup panel sits above the transcript. Collapsed it is one line; ctrl+o expands
+        // it to name every loaded resource and every rejection.
+        if (_resources is { } resources)
+        {
+            if (_showResources)
+            {
+                foreach (var line in resources.Render(compact: false).Split('\n'))
+                {
+                    var isHeading = line.StartsWith('`') || line.StartsWith("**");
+                    var isProblem = line.Contains("collision", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("error", StringComparison.OrdinalIgnoreCase)
+                        || line.Contains("shadowed", StringComparison.OrdinalIgnoreCase);
+
+                    lines.Add(new TranscriptLine(
+                        line,
+                        isProblem ? warnFg : isHeading ? agentFg : dimFg,
+                        isHeading,
+                        2));
+                }
+            }
+            else
+            {
+                var summary = resources.Skills.Count + " skills"
+                    + (resources.ContextFiles.Count > 0
+                        ? " · " + string.Join(", ", resources.ContextFileNames)
+                        : "")
+                    + (_resources!.HasProblems ? "  ⚠ problems — ctrl+o" : "  · ctrl+o");
+
+                lines.Add(new TranscriptLine(summary, resources.HasProblems ? warnFg : dimFg, false, 2));
+            }
+
+            lines.Add(new TranscriptLine("", textFg, false, 0));
+        }
+
+        void Emit(string text, string fg = textFg, bool bold = false, int indent = 4)
+        {
+            foreach (var wrapped in WrapText(text, Math.Max(10, _width - indent - 2)))
+                lines.Add(new TranscriptLine(wrapped, fg, bold, indent));
+        }
+
+        foreach (var message in _messages)
+        {
+            switch (message.Role)
+            {
+                case "user":
+                    if (lines.Count > 0) lines.Add(new TranscriptLine("", textFg, false, 0));
+                    // A left bar, not the composer's `❯`: a submitted turn and the live prompt
+                    // should not look like the same thing.
+                    lines.Add(new TranscriptLine("▌ you", userFg, true, 2));
+                    Emit(message.Content, textFg, false, 4);
+                    break;
+
+                case "assistant":
+                    if (message.Content.Length == 0) break;
+                    if (lines.Count > 0) lines.Add(new TranscriptLine("", textFg, false, 0));
+                    RenderMarkdown(message.Content, codeFence, Emit, lines, textFg, dimFg);
+                    break;
+
+                // Tool payloads are shown through the cards below, so the raw result stays out
+                // of the conversation flow.
+                case "tool":
+                    break;
+            }
+        }
+
+        if (_toolCards.Count > 0)
+        {
+            lines.Add(new TranscriptLine("", textFg, false, 0));
+
+            foreach (var card in _toolCards)
+            {
+                // pi's shape: a header naming the call, a bordered box with the output, then the
+                // duration. The border colour is the success signal.
+                var glyph = card.Status switch
+                {
+                    "ok" => "✓",
+                    "failed" => "✗",
+                    _ => "◐"
+                };
+
+                var border = card.Status == "failed" ? errorFg : agentFg;
+
+                lines.Add(new TranscriptLine(
+                    $"{glyph} {card.Name}  {card.Args}",
+                    card.Status == "failed" ? errorFg : toolFg,
+                    true,
+                    2));
+
+                var output = card.Output.ToString().TrimEnd();
+                if (output.Length > 0)
+                {
+                    var body = output.Split('\n');
+                    var shown = card.Status == "running"
+                        ? body.TakeLast(4).ToArray()
+                        : body.Take(8).ToArray();
+
+                    var width = Math.Max(20, Math.Min(_width - 8, 110));
+
+                    lines.Add(new TranscriptLine("┌" + new string('─', width - 2) + "┐", border, false, 4));
+
+                    foreach (var bodyLine in shown)
+                    {
+                        var clipped = Clip(bodyLine, width - 4);
+                        lines.Add(new TranscriptLine(
+                            "│ " + clipped.PadRight(width - 4) + " │", border, false, 4));
+                    }
+
+                    if (body.Length > shown.Length)
+                    {
+                        var more = $"… {body.Length - shown.Length} more lines";
+                        lines.Add(new TranscriptLine(
+                            "│ " + more.PadRight(width - 4) + " │", dimFg, false, 4));
+                    }
+
+                    lines.Add(new TranscriptLine("└" + new string('─', width - 2) + "┘", border, false, 4));
+                }
+
+                if (card.Status != "running")
+                {
+                    var took = card.DurationMs >= 1000
+                        ? $"{card.DurationMs / 1000.0:0.0}s"
+                        : $"{card.DurationMs}ms";
+                    lines.Add(new TranscriptLine($"Took {took}", dimFg, false, 4));
+                }
+            }
+        }
+
+        if (_isStreaming)
+        {
+            if (_thinkingText.Length > 0 && _options.ShowThinking)
+            {
+                lines.Add(new TranscriptLine("", textFg, false, 0));
+                lines.Add(new TranscriptLine("◇ thinking", dimFg, false, 2));
+                foreach (var thinkingLine in WrapText(_thinkingText, Math.Max(10, _width - 8)).TakeLast(3))
+                    lines.Add(new TranscriptLine(thinkingLine, dimFg, false, 4));
+            }
+
+            if (_streamingText.Length > 0)
+            {
+                lines.Add(new TranscriptLine("", textFg, false, 0));
+                RenderMarkdown(_streamingText, codeFence, Emit, lines, textFg, dimFg);
+            }
+        }
+
+        return lines;
+    }
+
+    /// <summary>
+    /// Minimal inline markdown: headings, bullets, blockquotes, inline code, bold, and
+    /// fenced code blocks. Deliberately not a full parser — it only needs to make an
+    /// agent transcript scannable.
+    /// </summary>
+    private static void RenderMarkdown(
+        string text,
+        bool startsInFence,
+        Action<string, string, bool, int> emit,
+        List<TranscriptLine> lines,
+        string textFg,
+        string dimFg)
+    {
+        const string codeFg = "\x1b[38;2;148;163;184m";
+        const string headingFg = "\x1b[97m";
+
+        var inFence = startsInFence;
+
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var trimmed = line.TrimStart();
+
+            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            {
+                inFence = !inFence;
+                var language = trimmed.Length > 3 ? trimmed[3..].Trim() : "";
+                lines.Add(new TranscriptLine(
+                    language.Length > 0 ? $"┄┄ {language} ┄┄" : "┄┄┄┄",
+                    dimFg, false, 4));
+                continue;
+            }
+
+            if (inFence)
+            {
+                lines.Add(new TranscriptLine("  " + line, codeFg, false, 4));
+                continue;
+            }
+
+            if (trimmed.Length == 0)
+            {
+                lines.Add(new TranscriptLine("", textFg, false, 0));
+                continue;
+            }
+
+            if (trimmed.StartsWith('#'))
+            {
+                var level = trimmed.TakeWhile(c => c == '#').Count();
+                var body = trimmed[level..].Trim();
+                emit(body, level <= 2 ? headingFg : textFg, true, 4);
+                continue;
+            }
+
+            if (trimmed.StartsWith("- ", StringComparison.Ordinal) ||
+                trimmed.StartsWith("* ", StringComparison.Ordinal))
+            {
+                emit("• " + trimmed[2..], textFg, false, 6);
+                continue;
+            }
+
+            if (trimmed.StartsWith('>'))
+            {
+                emit("│ " + trimmed[1..].TrimStart(), dimFg, false, 6);
+                continue;
+            }
+
+            emit(StripInlineMarkdown(line), textFg, false, 4);
+        }
+    }
+
+    /// <summary>Strips the inline markers a terminal cannot style per-character.</summary>
+    private static string StripInlineMarkdown(string line)
+    {
+        var builder = new StringBuilder(line.Length);
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '*')
+            {
+                i++;
+                continue;
+            }
+            if (line[i] == '`')
+                continue;
+            builder.Append(line[i]);
+        }
+        return builder.ToString();
+    }
+
+    private static string Clip(string value, int width) =>
+        value.Length <= width ? value : value[..Math.Max(0, width - 1)] + "…";
+
+    /// <summary>
+    /// Rebuilds the model catalog from providers that have credentials.
+    /// </summary>
+    /// <remarks>
+    /// pi only lists models for configured providers (<c>available = all.filter(configured)</c>).
+    /// Offering a model you cannot call is worse than offering nothing: you pick it, get a 401,
+    /// and have to work out that the provider was never connected.
+    /// </remarks>
+    private async Task RefreshCatalogAsync()
+    {
+        var items = new List<CatalogModelItem>();
+        var categories = new List<string> { "All" };
+
+        foreach (var provider in LlmProviders.Known)
+        {
+            var (source, _) = LlmProviders.CredentialSource(provider.Key, _auth);
+            var usable = source != "none" || !provider.RequiresApiKey;
+
+            if (!usable)
+                continue;
+
+            var category = provider.DisplayName.Split(' ')[0];
+            if (!categories.Contains(category))
+                categories.Add(category);
+
+            List<LlmCatalog.CuratedModel> models;
+            try
+            {
+                models = await LlmCatalog.ListCuratedAsync(provider.Key).ConfigureAwait(false);
+            }
+            catch
+            {
+                models = [];
+            }
+
+            if (models.Count == 0)
+            {
+                // Offline or unlisted: offer the provider's default so it is still selectable.
+                items.Add(new CatalogModelItem(
+                    provider.DefaultModel, provider.Key, provider.DisplayName, category,
+                    "default", "default", [ThinkingLevel.Off], provider.DefaultModel));
+                continue;
+            }
+
+            foreach (var model in models)
+            {
+                // A model picker that offers embedding, image-generation, and TTS models is
+                // noise: picking one produces a confusing provider error rather than a reply.
+                if (!IsChatModel(model.Id))
+                    continue;
+
+                var specs = new List<string>();
+                if (model.ContextTokens > 0)
+                    specs.Add($"{FormatTokens((int)Math.Min(int.MaxValue, model.ContextTokens))} ctx");
+                if (model.Reasoning)
+                    specs.Add("reasoning");
+                if (model.Vision)
+                    specs.Add("vision");
+
+                items.Add(new CatalogModelItem(
+                    model.Id,
+                    provider.Key,
+                    provider.DisplayName,
+                    category,
+                    specs.Count > 0 ? string.Join(" · ", specs) : "—",
+                    model.Reasoning ? "reasoning" : "chat",
+                    model.SupportedThinking,
+                    model.Name));
+            }
+        }
+
+        _catalog.Clear();
+        _catalog.AddRange(items);
+
+        _providerCategories = categories;
+        if (_providerCategoryIdx >= _providerCategories.Count)
+            _providerCategoryIdx = 0;
+
+        // Selection is preserved by SetItems; only clamp when the old index is now out of range.
+        if (_selectedCatalogIdx >= _catalog.Count)
+            _selectedCatalogIdx = Math.Max(0, _catalog.Count - 1);
+
+        RebuildModelSelector();
+        RebuildProviderSelector();
+    }
+
+    /// <summary>
+    /// Whether a model id names a chat model. Excludes the families that cannot answer a prompt:
+    /// embeddings, image generation, speech, and the audio-only realtime models.
+    /// </summary>
+    private static bool IsChatModel(string modelId)
+    {
+        var id = modelId.ToLowerInvariant();
+
+        string[] excluded =
+        [
+            "embedding", "embed-", "-embed", "rerank",
+            "-image", "image-", "dall-e", "stable-diffusion", "imagen",
+            "tts", "-audio", "audio-", "whisper", "transcribe",
+            "realtime", "moderation", "clip", "-vision-preview"
+        ];
+
+        return !excluded.Any(token => id.Contains(token, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Pulls per-million pricing from models.dev so the status ribbon can show a running
+    /// cost. Best-effort: a failed lookup simply hides the cost segment.
+    /// </summary>
+    private async Task RefreshPricingAsync()
+    {
+        try
+        {
+            var info = await LlmCatalog
+                .GetModelInfoAsync(_client.Config.ProviderKey, _client.Config.Model)
+                .ConfigureAwait(false);
+
+            if (info is null)
+                return;
+
+            _inputCostPerMillion = info.InputCostPerMillion;
+            _outputCostPerMillion = info.OutputCostPerMillion;
+            _contextLimit = (int)Math.Min(int.MaxValue, info.ContextTokens);
+            _dirty = true;
+        }
+        catch
+        {
+            // offline: the ribbon hides the cost segment
+        }
+    }
+
+    private static string SummarizeArgs(string argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+            return "{}";
+
+        var single = argumentsJson.Replace('\n', ' ');
+        return single.Length > 64 ? single[..64] + "…" : single;
+    }
+
+    private void RenderSessionsOverlay()
     {
         var boxW = Math.Min(90, _width - 4);
         var boxH = Math.Min(20, _height - 6);
         var x = (_width - boxW) / 2;
-        var y = 3;
+        var y = Math.Max(2, (_height - boxH) / 2);
 
-        _back.DrawBox(x, y, boxW, boxH, "Saved Chat Sessions", borderFg: "\x1b[38;2;16;185;129m");
-        _back.Print(x + 3, y + 1, "Enter: resume session · d: delete · n: new · Esc/1/q: back to chat · Tab: next tab", fg: "\x1b[90m");
+        _back.DrawShadow(x + 2, y + 1, boxW, boxH);
+        _back.DrawBox(x, y, boxW, boxH, "Sessions", borderFg: "\x1b[38;2;16;185;129m");
+        _back.Print(x + 3, y + 1, "enter: resume · d: delete · n: new · esc: close", fg: "\x1b[90m");
 
         if (_sessionsList.Count == 0)
         {
-            _back.Print(x + 4, y + 4, "No saved sessions yet. Start a chat in Tab 1!", fg: "\x1b[90m");
+            _back.Print(x + 4, y + 4, "No saved sessions yet.", fg: "\x1b[90m");
             return;
         }
 
@@ -1461,267 +3268,577 @@ public sealed class ReptarTerm : IDisposable
         }
     }
 
-    private void RenderToolsTab()
+    /// <summary>
+    /// <c>/tools</c> prints the mounted tool list into the transcript. It is reference
+    /// information, not a place you navigate to, so a table in the conversation beats a view.
+    /// </summary>
+    private void ShowToolsTable()
     {
-        var boxW = Math.Min(96, _width - 4);
-        var boxH = Math.Min(20, _height - 6);
-        var x = (_width - boxW) / 2;
-        var y = 3;
-
-        _back.DrawBox(x, y, boxW, boxH, "Mounted Workspace AI Tools", borderFg: "\x1b[38;2;16;185;129m");
-
         var tools = _app.GetAiTools(onlyExplicit: true);
-        _back.Print(x + 3, y + 1, $"Total {tools.Count} in-process tools mounted at workspace root:", fg: "\x1b[90m");
 
-        var listY = y + 3;
-        for (var i = 0; i < tools.Count && listY < y + boxH - 2; i++, listY += 2)
+        var builder = new System.Text.StringBuilder();
+        builder.Append("**Mounted tools** (").Append(tools.Count).AppendLine(")");
+        builder.AppendLine();
+        builder.AppendLine("```");
+        foreach (var tool in tools.OrderBy(t => t.Name, StringComparer.Ordinal))
         {
-            var t = tools[i];
-            var selected = i == _selectedToolIdx;
-            var ptr = selected ? "❯ " : "  ";
-            var header = $"{ptr}⚙ {t.Name} ({t.Method})";
-            _back.Print(x + 2, listY, header, fg: selected ? "\x1b[38;2;16;185;129m" : "\x1b[37m", bold: true);
-            _back.Print(x + 6, listY + 1, t.Description, fg: "\x1b[90m", maxWidth: boxW - 8);
+            builder.Append(tool.Name.PadRight(16)).Append("  ").AppendLine(FirstLine(tool.Description));
         }
+        builder.AppendLine("```");
 
-        _back.Print(x + 3, y + boxH - 1, "↑/↓: navigate · Esc/1/q: back to chat · Tab: next tab", fg: "\x1b[90m");
+        _messages.Add(new ChatMessage("assistant", builder.ToString()));
+        _dirty = true;
     }
 
-    private void RenderProvidersTab()
+    /// <summary>
+    /// <c>/providers</c> prints connection status into the transcript: which provider each
+    /// credential came from, and whether it is live. Same information the picker shows, without
+    /// the mode switch.
+    /// </summary>
+    private void ShowProvidersTable()
     {
+        var builder = new System.Text.StringBuilder();
+        builder.AppendLine("**Providers**");
+        builder.AppendLine();
+        builder.AppendLine("```");
+
+        foreach (var provider in LlmProviders.Known)
+        {
+            var (source, detail) = LlmProviders.CredentialSource(provider.Key, _auth);
+            var isActive = string.Equals(
+                _client.Config.ProviderKey, provider.Key, StringComparison.OrdinalIgnoreCase);
+
+            var status = source switch
+            {
+                "env" => $"env: {detail}",
+                "saved" => "saved",
+                _ => provider.RequiresApiKey ? "needs key" : "local"
+            };
+
+            builder.Append((isActive ? "* " : "  "))
+                .Append(provider.Key.PadRight(20))
+                .Append(status);
+
+            if (isActive)
+                builder.Append("   <- active");
+
+            builder.AppendLine();
+        }
+
+        builder.AppendLine("```");
+        builder.AppendLine();
+        builder.Append("Active model: `").Append(_client.Config.DisplayName).AppendLine("`");
+        builder.AppendLine();
+        builder.AppendLine("`/model` opens the picker · `/connect` adds a key");
+
+        _messages.Add(new ChatMessage("assistant", builder.ToString()));
+        _dirty = true;
+    }
+
+    private static string FirstLine(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+            return "";
+
+        var end = text.IndexOf(". ", StringComparison.Ordinal);
+        var sentence = end > 0 ? text[..(end + 1)] : text;
+        return sentence.Length <= 78 ? sentence : sentence[..78] + "…";
+    }
+
+    /// <summary>
+    /// The model picker, rendered inline above the prompt the way pi does it: a list that grows
+    /// upward out of the input line, not a floating dialog. Providers scope the list, so you pick
+    /// a provider first and then a model within it.
+    /// </summary>
+    private void RenderProvidersOverlay()
+    {
+        var cardTop = ComposerRow;
+
+        if (_providerStage == ProviderStage.EnterKey)
+        {
+            RenderInlineKeyEntry(cardTop);
+            return;
+        }
+
         var models = GetFilteredCatalog();
+
         if (_selectedCatalogIdx >= models.Count)
             _selectedCatalogIdx = Math.Max(0, models.Count - 1);
 
-        // 1. Header row with Category Tabs (fx style: "Models 18   [All]   Google   Anthropic   OpenAI   OpenRouter   Local")
-        var headerY = 2;
-        var headerX = 3;
+        // Build the body top-down, then draw it bottom-up so it hugs the prompt.
+        var body = new List<(string Text, string Fg, bool Bold, bool Selected)>();
 
-        _back.Print(headerX, headerY, $"Models {models.Count}", fg: "\x1b[37m", bold: true);
-        var curX = headerX + 12;
-
-        for (var i = 0; i < ProviderCategories.Length; i++)
+        // Scope row: the provider filter doubles as the scope selector.
+        var scope = new System.Text.StringBuilder("  scope  ");
+        for (var i = 0; i < _providerCategories.Count; i++)
         {
-            var cat = ProviderCategories[i];
-            var isCurrent = i == _providerCategoryIdx;
-            if (isCurrent)
-            {
-                _back.Print(curX, headerY, $"[{cat}]", fg: "\x1b[1;37m", bg: "\x1b[48;2;16;185;129m", bold: true);
-                curX += cat.Length + 4;
-            }
-            else
-            {
-                _back.Print(curX, headerY, $" {cat} ", fg: "\x1b[90m");
-                curX += cat.Length + 3;
-            }
+            var category = _providerCategories[i];
+            var current = i == _providerCategoryIdx;
+            scope.Append(current ? $"[{category}]" : $" {category} ").Append(' ');
         }
+        body.Add((scope.ToString().TrimEnd(), "\x1b[38;2;148;163;184m", false, false));
 
-        if (!string.IsNullOrWhiteSpace(_providerFilterText))
+        body.Add(("  " + new string('─', Math.Max(8, Math.Min(_width - 6, 74))), "\x1b[38;2;40;45;65m", false, false));
+
+        if (models.Count == 0)
         {
-            _back.Print(curX + 2, headerY, $"Filter: \"{_providerFilterText}\"", fg: "\x1b[33m");
-        }
-
-        // 2. Models list
-        var startY = 4;
-        var maxRows = _keyInputActive ? Math.Max(4, _height - 14) : Math.Max(6, _height - 8);
-
-        var startIdx = 0;
-        if (_selectedCatalogIdx >= maxRows)
-            startIdx = _selectedCatalogIdx - maxRows + 1;
-
-        var listY = startY;
-        for (var i = startIdx; i < models.Count && listY < startY + maxRows; i++, listY++)
-        {
-            var m = models[i];
-            var isSelected = i == _selectedCatalogIdx;
-            var isActiveModel = string.Equals(_client.Config.Model, m.ModelId, StringComparison.OrdinalIgnoreCase);
-
-            var (source, detail) = LlmProviders.CredentialSource(m.ProviderKey, _auth);
-            var isLocal = m.ProviderKey == LlmProviders.Ollama;
-
-            string statusText;
-            string statusFg;
-            if (source == "env")
-            {
-                statusText = $"✓ env: {detail}";
-                statusFg = "\x1b[38;2;16;185;129m";
-            }
-            else if (source == "saved")
-            {
-                statusText = "✓ saved";
-                statusFg = "\x1b[38;2;16;185;129m";
-            }
-            else if (isLocal)
-            {
-                statusText = "✓ local";
-                statusFg = "\x1b[38;2;56;189;248m";
-            }
-            else
-            {
-                statusText = "○ needs key";
-                statusFg = "\x1b[38;2;251;191;36m";
-            }
-
-            var activeBadge = isActiveModel ? " [Active]" : "";
-            var fullStatus = $"{statusText}{activeBadge}";
-
-            var rowBg = isSelected ? "\x1b[48;2;22;36;45m" : "";
-            var ptr = isSelected ? "❯ " : "  ";
-
-            if (isSelected)
-            {
-                _back.FillRect(2, listY, _width - 4, 1, ' ', bg: rowBg);
-            }
-
-            // Column 1: Model ID
-            _back.Print(3, listY, $"{ptr}{m.ModelId}",
-                fg: isSelected ? "\x1b[1;37m" : (isActiveModel ? "\x1b[38;2;16;185;129m" : "\x1b[37m"),
-                bg: rowBg,
-                bold: isSelected || isActiveModel);
-
-            // Column 2: Specs
-            var col2X = Math.Min(40, _width / 3 + 2);
-            _back.Print(col2X, listY, m.Specs,
-                fg: "\x1b[38;2;148;163;184m",
-                bg: rowBg,
-                maxWidth: Math.Max(10, _width - col2X - 28));
-
-            // Column 3: Credential Status
-            var col3X = Math.Max(col2X + 38, _width - 26);
-            _back.Print(col3X, listY, fullStatus,
-                fg: isActiveModel ? "\x1b[1;32m" : statusFg,
-                bg: rowBg,
-                bold: isSelected || isActiveModel);
-        }
-
-        // 3. Info status line
-        var infoY = _keyInputActive ? _height - 8 : _height - 3;
-        var pInfo = LlmProviders.Find(_client.Config.ProviderKey);
-        var activePName = pInfo?.DisplayName ?? _client.Config.ProviderKey;
-        _back.Print(3, infoY, $"Storage: ~/.reptar/agent/auth.json · Active: {activePName} ({_client.Config.Model})", fg: "\x1b[90m");
-
-        // 4. Inline Fast Credential Input Card (if active)
-        if (_keyInputActive)
-        {
-            var pTarget = LlmProviders.Find(_keyInputProvider) ?? LlmProviders.Known[0];
-            var boxY = _height - 6;
-            var boxW = Math.Min(84, _width - 6);
-            var boxX = 3;
-
-            _back.DrawShadow(boxX + 2, boxY + 1, boxW, 5);
-            _back.DrawBox(boxX, boxY, boxW, 5, $"Connect Provider: {pTarget.DisplayName}",
-                borderFg: "\x1b[38;2;16;185;129m", titleFg: "\x1b[1;37m");
-
-            var masked = new string('•', _keyInputBuffer.Length);
-            var keyPrompt = "❯ Paste API Key: ";
-            _back.Print(boxX + 2, boxY + 1, keyPrompt, fg: "\x1b[33m", bold: true);
-            var displayVal = string.IsNullOrEmpty(masked) ? "[ Paste key here or type ]" : masked;
-            _back.Print(boxX + 2 + keyPrompt.Length, boxY + 1, displayVal, fg: "\x1b[37m");
-
-            if (!string.IsNullOrEmpty(pTarget.KeyUrl))
-            {
-                _back.Print(boxX + 2, boxY + 2, $"Press 'o' to open https://{pTarget.KeyUrl} in browser", fg: "\x1b[38;2;56;189;248m");
-            }
-
-            _back.Print(boxX + 2, boxY + 3, "Enter: save to auth.json & activate · Esc: cancel", fg: "\x1b[90m");
-        }
-
-        // 5. Controls Ribbon at bottom
-        var ribbonY = _height - 1;
-        if (_keyInputActive)
-        {
-            _back.Print(2, ribbonY, "Enter: save & activate   o: open portal in browser   Esc: cancel", fg: "\x1b[90m");
+            body.Add(("  no models match this scope", "\x1b[90m", false, false));
         }
         else
         {
-            _back.Print(2, ribbonY, "↑↓ navigate   ←→/tab category   enter use   o open portal   c set key   esc chat", fg: "\x1b[90m");
+            var maxRows = Math.Max(3, cardTop - 8);
+            var first = Math.Max(0, Math.Min(_selectedCatalogIdx - maxRows + 1, models.Count - maxRows));
+
+            for (var i = first; i < models.Count && body.Count < maxRows + 3; i++)
+            {
+                var model = models[i];
+                var selected = i == _selectedCatalogIdx;
+                var active = string.Equals(_client.Config.Model, model.ModelId, StringComparison.OrdinalIgnoreCase);
+
+                var (source, detail) = LlmProviders.CredentialSource(model.ProviderKey, _auth);
+                var status = source switch
+                {
+                    "env" => $"✓ {detail}",
+                    "saved" => "✓ saved",
+                    _ => model.ProviderKey == LlmProviders.Ollama ? "✓ local" : "○ needs key"
+                };
+
+                var pointer = selected ? "→ " : "  ";
+                var name = model.ModelId;
+                var nameWidth = Math.Min(34, Math.Max(18, _width / 3));
+                var label = name.Length > nameWidth ? name[..(nameWidth - 1)] + "…" : name.PadRight(nameWidth);
+
+                var text = $"  {pointer}{label}  {model.Specs,-22} {status}{(active ? "  ● active" : "")}";
+
+                var fg = active ? "\x1b[38;2;16;185;129m" : selected ? "\x1b[97m" : "\x1b[90m";
+                body.Add((text, fg, selected || active, selected));
+            }
+
+            if (models.Count > maxRows)
+                body.Add(($"  ({_selectedCatalogIdx + 1}/{models.Count})", "\x1b[90m", false, false));
+        }
+
+        body.Add(("  ↑↓ select · tab scope · enter use · c set key · esc close", "\x1b[90m", false, false));
+
+        // Bottom-anchored: the last line sits directly above the prompt card.
+        var y = cardTop - 1;
+        for (var i = body.Count - 1; i >= 0 && y >= 2; i--, y--)
+        {
+            var (text, fg, bold, selected) = body[i];
+            if (selected)
+                _back.FillRect(0, y, _width, 1, ' ', bg: "\x1b[48;2;22;36;45m");
+            _back.Print(1, y, text, fg: fg, bold: bold, maxWidth: _width - 2);
+        }
+
+    }
+
+    /// <summary>
+    /// The API-key prompt, inline where the composer normally sits. The key is masked, and the
+    /// portal hint sits underneath so you can open the provider's page without leaving the flow.
+    /// </summary>
+    /// <summary>
+    /// The API-key prompt, inline where the composer normally sits. The key is masked, and the
+    /// portal hint sits underneath so you can open the provider's page without leaving the flow.
+    /// </summary>
+    /// <summary>
+    /// The provider list <c>/connect</c> opens with. Each row says whether it is already
+    /// configured and where the credential came from, so you can see what you are changing.
+    /// </summary>
+    private void RenderProviderList(int cardTop)
+    {
+        var providers = ConnectableProviders();
+        if (providers.Count == 0)
+            return;
+
+        _selectedProviderIdx = Math.Clamp(_selectedProviderIdx, 0, providers.Count - 1);
+
+        var body = new List<(string Text, string Fg, bool Bold, bool Selected)>
+        {
+            ("  connect a provider", "\x1b[97m", true, false),
+            ("  " + new string('─', Math.Max(8, Math.Min(_width - 6, 74))), "\x1b[38;2;40;45;65m", false, false)
+        };
+
+        var visible = Math.Max(4, cardTop - 9);
+        var first = Math.Max(0, Math.Min(_selectedProviderIdx - visible + 1, providers.Count - visible));
+
+        for (var i = first; i < providers.Count && i < first + visible; i++)
+        {
+            var provider = providers[i];
+            var selected = i == _selectedProviderIdx;
+            var (source, detail) = LlmProviders.CredentialSource(provider.Key, _auth);
+
+            var status = source switch
+            {
+                "env" => $"✓ env: {detail}",
+                "saved" => "✓ saved",
+                _ => provider.RequiresApiKey ? "○ needs key" : "✓ no key needed"
+            };
+
+            var pointer = selected ? "→ " : "  ";
+            var name = provider.DisplayName;
+            var nameWidth = Math.Min(30, Math.Max(18, _width / 3));
+            var label = name.Length > nameWidth ? name[..(nameWidth - 1)] + "…" : name.PadRight(nameWidth);
+
+            var fg = source != "none" ? "\x1b[38;2;16;185;129m" : selected ? "\x1b[97m" : "\x1b[90m";
+            body.Add(($"  {pointer}{label}  {status}", fg, selected, selected));
+        }
+
+        body.Add(("  ↑↓ select · enter connect · esc close", "\x1b[90m", false, false));
+
+        var y = cardTop - 1;
+        for (var i = body.Count - 1; i >= 0 && y >= 2; i--, y--)
+        {
+            var (text, fg, bold, selected) = body[i];
+            if (selected)
+                _back.FillRect(0, y, _width, 1, ' ', bg: "\x1b[48;2;22;36;45m");
+            _back.Print(1, y, text, fg: fg, bold: bold, maxWidth: _width - 2);
         }
     }
 
-    private void RenderDockedInputCard()
+    /// <summary>
+    /// The API-key prompt, inline where the composer normally sits. pi swaps the editor for the
+    /// login input; this does the same thing within a line-oriented buffer.
+    /// </summary>
+    private void RenderInlineKeyEntry(int cardTop)
     {
-        var cardY = _height - 4;
-        var cardW = _width - 2;
+        var provider = LlmProviders.Find(_keyInputProvider) ?? LlmProviders.Known[0];
 
-        _back.DrawBox(1, cardY, cardW, 3, borderFg: "\x1b[38;2;60;65;95m");
+        // Guidance only: the field itself lives in the composer below, which the key prompt has
+        // taken over. Anchored to the card so the two read as one block.
+        var fields = PendingFields;
+        var onField = _keyFieldIndex >= 0 && _keyFieldIndex < fields.Count;
 
-        // Prompt symbol
-        _back.Print(3, cardY + 1, "› ", fg: "\x1b[38;2;16;185;129m", bold: true);
+        var lines = new List<(string Text, string Fg, bool Bold)>
+        {
+            ($"connect {provider.DisplayName}", "\x1b[97m", true)
+        };
 
-        // Clear input area in buffer to eliminate any ghost characters
-        _back.FillRect(5, cardY + 1, cardW - 6, 1, ' ');
+        if (fields.Count > 0)
+        {
+            var step = _keyFieldIndex + 2;   // key is step 1
+            lines.Add(($"step {Math.Min(step, fields.Count + 1)}/{fields.Count + 1}: " +
+                       (onField ? fields[_keyFieldIndex].Label : "api key"), "\x1b[90m", false));
+        }
+
+        if (!string.IsNullOrEmpty(provider.KeyUrl))
+            lines.Add(($"o  open https://{provider.KeyUrl}", "\x1b[38;2;56;189;248m", false));
+        else if (!provider.RequiresApiKey && fields.Count == 0)
+            lines.Add(("this provider needs no key — enter to activate", "\x1b[90m", false));
+
+        // Show the URL that will actually be used, with placeholders filled in.
+        if (provider.HasUrlTemplate)
+        {
+            var preview = LlmProviders.ResolveBaseUrl(provider, null, null);
+            var complete = !preview.Contains('{', StringComparison.Ordinal);
+            lines.Add((complete ? preview : "url needs the fields above",
+                complete ? "\x1b[90m" : "\x1b[38;2;251;191;36m", false));
+        }
+
+        if (_keyFieldRequired)
+            lines.Add(("this value is required", "\x1b[38;2;248;113;113m", false));
+
+        lines.Add(("enter next · esc back", "\x1b[90m", false));
+
+        var y = cardTop - 1;
+        for (var i = lines.Count - 1; i >= 0 && y >= 2; i--, y--)
+        {
+            var (text, fg, bold) = lines[i];
+            _back.Print(2, y, text, fg: fg, bold: bold, maxWidth: _width - 4);
+        }
+    }
+
+    /// <summary>
+    /// The composer, as pi draws it: a bare <c>❯</c> line with no frame. The frame was a
+    /// Codex-ism; pi's prompt reads as the last line of the transcript rather than a widget.
+    /// </summary>
+    private void RenderComposer()
+    {
+        var row = ComposerRow;
+        _back.FillRect(0, row, _width, 1, ' ');
+
+        var enteringKey = _overlay == TermOverlay.Providers && _providerStage == ProviderStage.EnterKey;
+
+        _back.Print(2, row, "❯ ", fg: "\x1b[38;2;16;185;129m", bold: true);
+
+        if (enteringKey)
+        {
+            // pi replaces the editor with the login input; here the composer becomes the key
+            // field, so the prompt has an obvious place to go.
+            var onField = _keyFieldIndex >= 0;
+            var masked = onField
+                ? _keyInputBuffer
+                : new string('•', _keyInputBuffer.Length);
+
+            if (masked.Length > 0)
+                _back.Print(4, row, masked, fg: "\x1b[97m", maxWidth: _width - 8);
+            else
+                _back.Print(4, row,
+                    onField ? CurrentKeyPrompt + " — input is visible" : "paste the api key — input is hidden",
+                    fg: "\x1b[90m");
+            return;
+        }
 
         if (string.IsNullOrEmpty(_input))
         {
             var placeholder = _isStreaming
-                ? "Agent is thinking and running tools…"
-                : "Ask Reptar anything… (Type / for commands, @ for files)";
-            _back.Print(5, cardY + 1, placeholder, fg: "\x1b[90m");
+                ? "queued message will steer the run…"
+                : "ask reptar anything  ·  / commands  ·  @ files  ·  ! shell";
+            _back.Print(4, row, placeholder, fg: "\x1b[90m");
         }
         else
         {
-            _back.Print(5, cardY + 1, _input, fg: "\x1b[37m", maxWidth: cardW - 6);
+            _back.Print(4, row, _input, fg: "\x1b[37m", maxWidth: _width - 6);
         }
     }
 
+    /// <summary>
+    /// Vertical geometry for this frame. Computed once per render so every band agrees about
+    /// where the others are.
+    /// </summary>
+    private TermLayout Layout => new(_height, DropdownRows, ActiveSelector?.Height ?? 0);
+
+    /// <summary>
+    /// Rows the slash / file dropdown needs. It sits *between* the composer and the footer, so
+    /// the composer moves up by exactly this much — otherwise the list lands on the footer,
+    /// which is what made the input appear to cover the list.
+    /// </summary>
+    private int DropdownRows
+    {
+        get
+        {
+            if (_overlay != TermOverlay.None)
+                return 0;
+
+            // Cap the band at a third of the screen so a short terminal still shows the
+            // transcript and the prompt.
+            var cap = Math.Max(3, (_height - 6) / 3);
+
+            if (_slashDropdownOpen)
+            {
+                // Always reserve at least the rule and one row, so "no matches" has somewhere
+                // to be shown instead of the band collapsing and the list vanishing.
+                var count = SlashMatches().Count;
+                return Math.Min(Math.Max(count, 1), cap) + 2;
+            }
+
+            if (_fileDropdownOpen)
+            {
+                var count = GetMatchingFiles().Count;
+                return Math.Min(Math.Max(count, 1), cap) + 2;
+            }
+
+            return 0;
+        }
+    }
+
+    private int FooterStatsRow => Layout.FooterStats;
+    private int FooterLocationRow => Layout.FooterLocation;
+    private int ComposerRow => Layout.Composer;
+    private int WorkingRow => Layout.Working;
+
+    /// <summary>
+    /// pi's working indicator: a spinner and a running timer on its own line above the prompt.
+    /// Only while a run is in flight, so an idle screen stays quiet.
+    /// </summary>
+    private void RenderWorkingIndicator()
+    {
+        var row = WorkingRow;
+        _back.FillRect(0, row, _width, 1, ' ');
+
+        if (!_isStreaming)
+            return;
+
+        var frames = new[] { "✻", "✽", "✶", "✳", "✢" };
+        var frame = frames[(int)(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 120 % frames.Length)];
+
+        var elapsed = _runStartedAt == default
+            ? ""
+            : $" ({(DateTimeOffset.UtcNow - _runStartedAt).TotalSeconds:0}s)";
+
+        _back.Print(2, row, $"{frame} Working{elapsed}", fg: "\x1b[38;2;16;185;129m");
+
+        if (_statusNote.Length > 0)
+            _back.Print(14, row, "· " + _statusNote, fg: "\x1b[90m", maxWidth: _width - 16);
+    }
+
+    /// <summary>
+    /// The <c>/</c> dropdown, inline above the prompt. pi's row shape: the command name, its
+    /// argument hint, then the description, with <c>→</c> marking the selection.
+    /// </summary>
+    /// <summary>
+    /// The <c>/</c> list, drawn where pi draws it: under the prompt, after a rule. The prompt
+    /// stays visible because you are still typing into it, unlike a selector which replaces it.
+    /// </summary>
     private void RenderSlashDropdown()
     {
-        var commands = GetPaletteCommands();
-        if (commands.Count == 0) return;
+        if (!SlashListOpen)
+            return;
 
-        var popW = Math.Min(64, _width - 6);
-        var popH = Math.Min(commands.Count + 2, 10);
-        var popX = 4;
-        var popY = Math.Max(2, _height - 4 - popH);
+        var commands = SlashMatches();
 
-        _back.DrawShadow(popX + 2, popY + 1, popW, popH);
-        _back.DrawBox(popX, popY, popW, popH, "Commands (/)", borderFg: "\x1b[38;2;16;185;129m", titleFg: "\x1b[37m");
+        const string dim = "\x1b[90m";
+        const string selectedBg = "\x1b[48;2;20;45;35m";
 
-        var y = popY + 1;
-        for (var i = 0; i < commands.Count && y < popY + popH - 1; i++, y++)
+        var visible = Math.Max(1, DropdownRows - 2);
+        var nameWidth = commands.Count == 0 ? 12 : Math.Min(24, commands.Max(c => c.Name.Length));
+        var first = Math.Max(0, Math.Min(_slashSelectedIdx - visible + 1, commands.Count - visible));
+
+        // The block sits between the composer and the footer, in rows the layout reserved.
+        var y = Layout.DropdownTop;
+
+        // Clear the reserved band so nothing from the previous frame shows through.
+        _back.FillRect(0, y, _width, DropdownRows, ' ');
+
+        _back.Print(0, y++, new string('─', Math.Max(4, _width - 2)), fg: "\x1b[38;2;60;65;95m");
+
+        for (var i = first; i < commands.Count && i < first + visible && y < _height - 2; i++, y++)
         {
-            var c = commands[i];
+            var command = commands[i];
             var selected = i == _slashSelectedIdx;
-            var ptr = selected ? "❯ " : "  ";
-            var fg = selected ? "\x1b[37m" : "\x1b[90m";
-            var bg = selected ? "\x1b[48;2;20;45;35m" : "";
 
-            var line = $"{ptr}{c.Name,-12} {c.Desc}";
-            _back.Print(popX + 2, y, line, fg: fg, bg: bg, bold: selected, maxWidth: popW - 4);
+            if (selected)
+                _back.FillRect(0, y, _width, 1, ' ', bg: selectedBg);
+
+            _back.Print(2, y, selected ? "→ " : "  ", fg: "\x1b[38;2;16;185;129m", bg: selected ? selectedBg : "");
+            _back.Print(4, y, command.Name,
+                fg: selected ? "\x1b[97m" : "\x1b[37m", bg: selected ? selectedBg : "", bold: selected);
+
+            var x = 4 + nameWidth + 2;
+
+            if (command.Hint.Length > 0)
+            {
+                _back.Print(x, y, command.Hint, fg: dim, bg: selected ? selectedBg : "");
+                x += command.Hint.Length + 2;
+            }
+
+            _back.Print(x, y, command.Desc,
+                fg: selected ? "\x1b[37m" : dim,
+                bg: selected ? selectedBg : "",
+                maxWidth: Math.Max(8, _width - x - 2));
         }
+
+        if (y < FooterLocationRow)
+            _back.Print(2, y, $"({_slashSelectedIdx + 1}/{commands.Count})", fg: dim);
     }
 
+    /// <summary>
+    /// The <c>@</c> file dropdown, inline above the prompt, same shape as the command list.
+    /// </summary>
     private void RenderFileDropdown()
     {
         var files = GetMatchingFiles();
-        if (files.Count == 0) return;
 
-        var popW = Math.Min(64, _width - 6);
-        var popH = Math.Min(files.Count + 2, 10);
-        var popX = 4;
-        var popY = Math.Max(2, _height - 4 - popH);
+        var visible = Math.Max(1, DropdownRows - 2);
 
-        _back.DrawShadow(popX + 2, popY + 1, popW, popH);
-        _back.DrawBox(popX, popY, popW, popH, "Workspace Files (@)", borderFg: "\x1b[38;2;16;185;129m", titleFg: "\x1b[37m");
+        var first = Math.Max(0, Math.Min(_fileSelectedIdx - visible + 1, Math.Max(0, files.Count - visible)));
+        var y = Layout.DropdownTop;
 
-        var y = popY + 1;
-        for (var i = 0; i < files.Count && y < popY + popH - 1; i++, y++)
+        _back.FillRect(0, y, _width, DropdownRows, ' ');
+
+        _back.Print(0, y++, new string('─', Math.Max(4, _width - 2)), fg: "\x1b[38;2;60;65;95m");
+
+        if (files.Count == 0)
         {
-            var f = files[i];
+            _back.Print(2, y++, $"no file matches \"{_fileQuery}\"", fg: "\x1b[38;2;251;191;36m");
+            _back.Print(2, y, "backspace to widen · esc to dismiss", fg: "\x1b[90m");
+            return;
+        }
+
+        for (var i = first; i < files.Count && i < first + visible && y < FooterLocationRow; i++, y++)
+        {
+            var file = files[i];
             var selected = i == _fileSelectedIdx;
-            var ptr = selected ? "❯ " : "  ";
-            var fg = selected ? "\x1b[37m" : "\x1b[90m";
             var bg = selected ? "\x1b[48;2;20;45;35m" : "";
 
-            var line = $"{ptr}@{f}";
-            _back.Print(popX + 2, y, line, fg: fg, bg: bg, bold: selected, maxWidth: popW - 4);
+            if (selected)
+                _back.FillRect(0, y, _width, 1, ' ', bg: bg);
+
+            _back.Print(2, y, selected ? "→ " : "  ", fg: "\x1b[38;2;16;185;129m", bg: bg);
+            _back.Print(4, y, "@" + file, fg: selected ? "\x1b[97m" : "\x1b[90m", bg: bg,
+                bold: selected, maxWidth: _width - 6);
         }
+
+        if (y < FooterLocationRow)
+            _back.Print(2, y, $"({_fileSelectedIdx + 1}/{files.Count})", fg: "\x1b[90m");
     }
 
+    /// <summary>
+    /// pi's footer: two dim lines. The first is the working directory and branch; the second is
+    /// token totals, cache hit rate, cost, context pressure on the left and the model on the right.
+    /// </summary>
     private void RenderFooterRibbon()
     {
-        var ribbonY = _height - 1;
-        _back.Print(2, ribbonY, _statusRibbon, fg: "\x1b[90m", maxWidth: _width - 4);
+        const string dim = "\x1b[90m";
+
+        var locationY = FooterLocationRow;
+        var statsY = FooterStatsRow;
+
+        _back.FillRect(0, locationY, _width, 2, ' ');
+
+        _back.Print(2, locationY, _footerLocation.Length > 0 ? _footerLocation : "~", fg: dim, maxWidth: _width - 4);
+
+        var left = new System.Text.StringBuilder();
+
+        if (_totalTokensIn > 0) left.Append('↑').Append(FormatTokens(_totalTokensIn));
+        if (_totalTokensOut > 0) left.Append(left.Length > 0 ? " " : "").Append('↓').Append(FormatTokens(_totalTokensOut));
+        if (_totalCacheRead > 0) left.Append(left.Length > 0 ? " " : "").Append('R').Append(FormatTokens(_totalCacheRead));
+        if (_totalCacheWrite > 0) left.Append(left.Length > 0 ? " " : "").Append('W').Append(FormatTokens(_totalCacheWrite));
+
+        if (_lastCacheHitRate >= 0)
+            left.Append(left.Length > 0 ? " " : "").Append("CH").Append(_lastCacheHitRate.ToString("0.0")).Append('%');
+
+        if (_totalCost > 0)
+            left.Append(left.Length > 0 ? " " : "").Append('$').Append(_totalCost.ToString("0.000"));
+
+        // Context pressure: the number that decides whether the session survives.
+        var used = ContextCompaction.EstimateContextTokens(_messages);
+        var percent = _contextLimit > 0 ? used * 100.0 / _contextLimit : 0;
+
+        var contextText = _contextLimit > 0
+            ? $"{percent:0.0}%/{FormatTokens(_contextLimit)}{(_autoCompact ? " (auto)" : "")}"
+            : $"?/{FormatTokens(used)}";
+
+        var contextColor = percent > 90 ? "\x1b[38;2;248;113;113m"
+            : percent > 70 ? "\x1b[38;2;251;191;36m"
+            : dim;
+
+        var right = _client.Config.Model;
+
+        if (AvailableThinkingLevels().Count > 1)
+        {
+            var label = _thinking == ThinkingLevel.Off ? "thinking off" : ThinkingLevels.Name(_thinking);
+            right += $" • {label}";
+        }
+
+        var rightWithProvider = $"({_client.Config.ProviderName}) {right}";
+
+        var leftText = left.ToString();
+
+        // Fit the right side into what is left: full form, then without the provider, then
+        // truncated. A footer that wraps or overflows is worse than one that shortens a name.
+        var available = Math.Max(8, _width - 2 - leftText.Length - 3);
+        var rightText = rightWithProvider;
+
+        if (rightText.Length > available)
+            rightText = right;
+
+        if (rightText.Length > available)
+            rightText = rightText[..Math.Max(1, available - 1)] + "…";
+
+        _back.FillRect(0, statsY, _width, 1, ' ');
+
+        var contextX = 2 + (leftText.Length > 0 ? leftText.Length + 1 : 0);
+        var rightX = Math.Max(contextX + contextText.Length + 2, _width - rightText.Length - 1);
+
+        if (leftText.Length > 0)
+            _back.Print(2, statsY, leftText, fg: dim);
+
+        // The context column gets whatever space the right side does not need.
+        var contextWidth = Math.Max(6, rightX - contextX - 1);
+        _back.Print(contextX, statsY, contextText, fg: contextColor, maxWidth: contextWidth);
+
+        if (rightX + rightText.Length <= _width)
+            _back.Print(rightX, statsY, rightText, fg: dim, maxWidth: rightText.Length + 1);
     }
 
     private void RenderFloatingPalette()

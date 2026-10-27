@@ -385,9 +385,21 @@ public static class RequestPortAgent
 
         try
         {
-            var summary = await StreamingAgentHarness.RunAsync(
-                history, stream, portAwareExecutor, allTools,
-                maxSteps, model, onEvent, cancellationToken).ConfigureAwait(false);
+            var summary = await AgentLoop.RunAsync(
+                history,
+                new AgentLoopConfig
+                {
+                    Model = model,
+                    MaxSteps = maxSteps,
+                    ToolExecutor = AgentToolExecutors.FromNameArgs(portAwareExecutor),
+                    // The ask-user port throws to suspend the run; keep it out of a parallel
+                    // batch so no sibling tool call is left mid-flight.
+                    SequentialTools = new HashSet<string>(StringComparer.Ordinal) { AskUserToolName }
+                },
+                stream,
+                allTools,
+                onEvent,
+                cancellationToken).ConfigureAwait(false);
             return RequestPortRunResult.Complete(summary);
         }
         catch (RequestPortSuspendedException)

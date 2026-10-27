@@ -426,13 +426,31 @@ public static class WorkspaceTools
                     WorkspaceTools.Int(node?["waitMs"] ?? node?["wait_ms"]) ?? o.DefaultCommandTimeoutMs,
                     100, o.MaxCommandTimeoutMs);
                 var result = await RunCommandAsync(workspace, command, waitMs);
+
+                // The tail is what matters for a build or test run, so truncate from the head
+                // and spill the full log so the model can read it back.
+                var stdout = ToolOutput.Tail(result.Stdout, maxBytes: o.MaxCommandOutputBytes);
+                var stderr = ToolOutput.Tail(result.Stderr, maxBytes: o.MaxCommandOutputBytes);
+                string? fullLogPath = null;
+
+                if (stdout.Truncated || stderr.Truncated)
+                {
+                    fullLogPath = ToolOutput.SpillToFile(
+                        $"$ {command}\n\n--- stdout ---\n{result.Stdout}\n--- stderr ---\n{result.Stderr}",
+                        Path.Combine(workspace.Root, ".reptar", "tool-output"),
+                        "run_command");
+                }
+
                 return ctx.JsonRaw(new JsonObject
                 {
                     ["exitCode"] = result.ExitCode,
-                    ["stdout"] = result.Stdout,
-                    ["stderr"] = result.Stderr,
+                    ["stdout"] = stdout.Content,
+                    ["stderr"] = stderr.Content,
                     ["timedOut"] = result.TimedOut,
-                    ["elapsedMs"] = Math.Round(result.ElapsedMs, 1)
+                    ["elapsedMs"] = Math.Round(result.ElapsedMs, 1),
+                    ["truncated"] = stdout.Truncated || stderr.Truncated,
+                    ["fullOutputPath"] = fullLogPath,
+                    ["truncationNote"] = ToolOutput.DescribeTruncation(stdout, fullLogPath)
                 }.ToJsonString());
             }
             catch (UnauthorizedAccessException ex)
@@ -636,8 +654,11 @@ public static class WorkspaceTools
             process.Start();
             process.StandardInput.Close();
 
-            var stdoutTask = process.StandardOutput.ReadToEndAsync(timeoutCts.Token);
-            var stderrTask = process.StandardError.ReadToEndAsync(timeoutCts.Token);
+            // Read incrementally rather than buffering to the end, so a long build streams
+            // to the agent UI instead of looking like a hang. Each line is also reported to
+            // the ambient tool sink when one is attached (AgentToolStreaming).
+            var stdoutTask = PumpAsync(process.StandardOutput, timeoutCts.Token);
+            var stderrTask = PumpAsync(process.StandardError, timeoutCts.Token);
 
             try
             {
@@ -673,6 +694,33 @@ public static class WorkspaceTools
             stopwatch.Stop();
             return new CommandResult(-1, "", ex.Message, false, stopwatch.Elapsed.TotalMilliseconds);
         }
+    }
+
+    /// <summary>
+    /// Drains a redirected stream line by line, accumulating the full text and forwarding
+    /// each line to <see cref="AgentToolStreaming"/> when a tool call is listening.
+    /// </summary>
+    private static async Task<string> PumpAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var accumulated = new StringBuilder();
+        var observed = AgentToolStreaming.IsObserved;
+
+        try
+        {
+            while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
+            {
+                accumulated.AppendLine(line);
+
+                if (observed)
+                    AgentToolStreaming.Report(line);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Timeout or abort: keep whatever arrived.
+        }
+
+        return accumulated.ToString();
     }
 
     internal static JsonNode? ReadJsonNode(Ctx ctx)

@@ -138,6 +138,13 @@ jobs:
           dotnet build examples/agent-cli/app.cs
           dotnet build examples/ai-gateway/app.cs
 
+      - name: Published Native AOT agent offline smoke
+        run: |
+          dotnet publish examples/agent-cli/app.cs -c Release -r linux-x64 --self-contained \
+            -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+            -o "$RUNNER_TEMP/reptar-agent-native"
+          python3 scripts/test-agent-native.py "$RUNNER_TEMP/reptar-agent-native/app"
+
       - name: Doctor (strict)
         run: bun reptar doctor --strict
 

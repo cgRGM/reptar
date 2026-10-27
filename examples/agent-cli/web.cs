@@ -590,6 +590,7 @@ public static class WebSpa
           { cmd: "/connect", desc: "Connect or update API key" },
           { cmd: "/providers", desc: "View status of all LLM providers" },
           { cmd: "/tools", desc: "Inspect workspace tools (read, write, edit, run)" },
+          { cmd: "/compact", desc: "Summarize the context into a checkpoint" },
           { cmd: "/clear", desc: "Clear current conversation" },
           { cmd: "/new", desc: "Start a new chat session" },
         ];
@@ -814,7 +815,34 @@ public static class WebSpa
 
           const send = async (customText) => {
             const text = (customText || input).trim();
-            if (!text || busy) return;
+            if (!text) return;
+
+            if (text === "/compact") {
+              setInput("");
+              await compactNow();
+              return;
+            }
+
+            if (text === "/clear") {
+              setInput("");
+              setMessages([]);
+              return;
+            }
+
+            // While the agent runs, a new message steers it rather than starting a second run.
+            if (busy) {
+              setInput("");
+              if (textareaRef.current) textareaRef.current.style.height = "auto";
+              setMessages(m => [...m, { role: "user", content: `(steering) ${text}` }]);
+              try {
+                await fetch("/api/chat/steer", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ sessionId, message: text })
+                });
+              } catch { /* the run may have finished; the message is simply lost */ }
+              return;
+            }
 
             // Intercept slash commands locally if user ran /clear, /new, etc.
             if (text === "/clear") { setMessages([]); setInput(""); return; }
@@ -912,6 +940,17 @@ public static class WebSpa
                     setSessionId(evt.sessionId);
                     loadSessions();
                   }
+                } else if (evt.type === "compaction_start") {
+                  activeSteps.push(`Compacting (${evt.reason})…`);
+                  updateAssistant();
+                } else if (evt.type === "compaction_end") {
+                  activeSteps.push(evt.error
+                    ? `Compaction failed: ${evt.error}`
+                    : `Compacted ${evt.tokensBefore} → ${evt.estimatedTokensAfter} tokens`);
+                  updateAssistant();
+                } else if (evt.type === "retry_scheduled") {
+                  activeSteps.push(`Retrying in ${Math.round(evt.delayMs)}ms (${evt.reason})`);
+                  updateAssistant();
                 } else if (evt.type === "error") {
                   assistantText += `\n\n**Error:** ${evt.message}`;
                   updateAssistant();
@@ -946,6 +985,37 @@ public static class WebSpa
               setMessages(m => [...m, { role: "assistant", content: `**Network Error:** ${err.message}` }]);
             } finally {
               setBusy(false);
+            }
+          };
+
+          const abortRun = async () => {
+            try {
+              await fetch("/api/chat/abort", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ sessionId })
+              });
+            } catch { /* already finished */ }
+          };
+
+          // Compact on demand, mirroring the terminal's /compact.
+          const compactNow = async () => {
+            try {
+              const res = await fetch("/api/chat/compact", {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({ sessionId })
+              });
+              const data = await res.json();
+              setMessages(m => [...m, {
+                role: "assistant",
+                content: res.ok
+                  ? `**Context compacted.** ${data.tokensBefore} → ${data.estimatedTokensAfter} tokens.\n\n${data.summary}`
+                  : `**Compaction skipped:** ${data.error ?? res.status}`
+              }]);
+              if (res.ok) loadMessages(sessionId);
+            } catch (err) {
+              setMessages(m => [...m, { role: "assistant", content: `**Compaction failed:** ${err.message}` }]);
             }
           };
 
@@ -1236,9 +1306,10 @@ public static class WebSpa
                       React.createElement("span", { className: "prompt-hint" }, "Enter to send · Shift+Enter for new line"),
                       React.createElement("button", {
                         className: "send-btn",
-                        disabled: busy || !input.trim(),
-                        onClick: () => send(),
-                        title: busy ? "Streaming…" : "Send message"
+                        // While streaming, the button aborts; typing still sends a steering message.
+                        disabled: !busy && !input.trim(),
+                        onClick: () => busy ? abortRun() : send(),
+                        title: busy ? "Abort the run" : "Send message"
                       }, busy ? React.createElement(Icon.Stop) : React.createElement(Icon.Send))
                     )
                   )
