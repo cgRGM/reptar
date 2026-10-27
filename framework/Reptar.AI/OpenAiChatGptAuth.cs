@@ -1,4 +1,5 @@
 #if !NETWASM
+using System.Text;
 namespace Reptar.AI;
 
 /// <summary>
@@ -38,6 +39,26 @@ public static class OpenAiChatGptAuth
     public const string Scope =
         "openid profile email offline_access resource.invoke " + DirectTokenScope;
 
+    /// <summary>
+    /// Application name shown on the consent screen. OpenAI rejects the authorize request without
+    /// a name hint.
+    /// </summary>
+    public const string AgentName = "Reptar";
+
+    /// <summary>
+    /// Stable per-installation identity, as <c>urn:uuid:&lt;uuid&gt;</c>.
+    /// </summary>
+    /// <remarks>
+    /// OpenAI identifies an agent host by a durable URI. It must survive restarts — a new value on
+    /// every launch looks like a new device — so it is generated once and persisted next to the
+    /// credentials.
+    /// </remarks>
+    public static string AgentHostId(string? deviceId = null)
+    {
+        var id = deviceId ?? DeviceIdStore.LoadOrCreate();
+        return "urn:uuid:" + id.ToLowerInvariant();
+    }
+
     /// <summary>Fixed callback port. OpenAI requires the redirect URI to match exactly.</summary>
     public const int CallbackPort = 1455;
 
@@ -64,15 +85,8 @@ public static class OpenAiChatGptAuth
         var pkce = OAuthPkce.CreateChallenge();
         var state = OAuthPkce.CreateState();
 
-        var url =
-            $"{AuthorizeUrl}?response_type=code"
-            + $"&client_id={Uri.EscapeDataString(PlaceholderClientId)}"
-            + $"&redirect_uri={Uri.EscapeDataString(RedirectUri)}"
-            + $"&scope={Uri.EscapeDataString(Scope)}"
-            + $"&state={Uri.EscapeDataString(state)}"
-            + $"&code_challenge={Uri.EscapeDataString(pkce.Challenge)}"
-            + "&code_challenge_method=S256"
-            + $"&resource={Uri.EscapeDataString(Resource)}";
+        var nonce = OAuthPkce.CreateState();
+        var url = BuildAuthorizeUrl(state, pkce.Challenge, nonce);
 
         onUrl?.Invoke(url);
 
@@ -102,6 +116,40 @@ public static class OpenAiChatGptAuth
         }
 
         return tokens;
+    }
+
+    /// <summary>
+    /// Builds the authorize URL.
+    /// </summary>
+    /// <remarks>
+    /// Every parameter here is required. Omitting <c>agent_name_hint</c>, <c>nonce</c>, or
+    /// <c>ext_agent_host_id</c> makes OpenAI answer "Invalid authorize request" with no indication
+    /// of which one was missing, which is why the set is pinned by a test rather than by reading.
+    /// </remarks>
+    public static string BuildAuthorizeUrl(string state, string codeChallenge, string nonce)
+    {
+        var query = new StringBuilder();
+
+        void Add(string key, string value)
+        {
+            if (query.Length > 0)
+                query.Append('&');
+            query.Append(key).Append('=').Append(Uri.EscapeDataString(value));
+        }
+
+        Add("response_type", "code");
+        Add("client_id", PlaceholderClientId);
+        Add("agent_name_hint", AgentName);
+        Add("ext_agent_host_id", AgentHostId());
+        Add("redirect_uri", RedirectUri);
+        Add("scope", Scope);
+        Add("state", state);
+        Add("nonce", nonce);
+        Add("code_challenge", codeChallenge);
+        Add("code_challenge_method", "S256");
+        Add("resource", Resource);
+
+        return $"{AuthorizeUrl}?{query}";
     }
 
     /// <summary>Refreshes an expired ChatGPT access token.</summary>
@@ -227,6 +275,59 @@ public static class ChatGptSubscription
             // A failed refresh means the grant is gone; the caller will surface a 401 and the
             // user can sign in again.
             return access;
+        }
+    }
+}
+
+/// <summary>
+/// A stable identifier for this installation, used as the ChatGPT agent host id.
+/// </summary>
+/// <remarks>
+/// Stored beside the credentials so it survives restarts. Regenerating it per launch would present
+/// every run as a new device, which is exactly the signal an authorization server uses to distrust
+/// a client.
+/// </remarks>
+public static class DeviceIdStore
+{
+    private static readonly object Gate = new();
+
+    /// <summary>Path of the device id file.</summary>
+    public static string Path => System.IO.Path.Combine(LlmAuthFile.ActiveDirectory, "device-id");
+
+    /// <summary>Reads the id, creating and persisting one on first use.</summary>
+    public static string LoadOrCreate()
+    {
+        lock (Gate)
+        {
+            try
+            {
+                if (File.Exists(Path) && File.ReadAllText(Path).Trim() is { Length: > 0 } existing &&
+                    Guid.TryParse(existing, out var parsed))
+                {
+                    return parsed.ToString();
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Fall through and mint a new one for this process.
+            }
+
+            var id = Guid.NewGuid().ToString();
+
+            try
+            {
+                var directory = System.IO.Path.GetDirectoryName(Path);
+                if (directory is { Length: > 0 })
+                    Directory.CreateDirectory(directory);
+
+                File.WriteAllText(Path, id);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A non-writable config directory must not block sign-in.
+            }
+
+            return id;
         }
     }
 }

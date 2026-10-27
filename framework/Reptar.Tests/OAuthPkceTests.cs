@@ -130,6 +130,66 @@ public sealed class OAuthPkceTests
         Assert.Contains("authorization code", error.Message);
     }
 
+
+    [Fact]
+    public void the_authorize_url_carries_every_parameter_openai_requires()
+    {
+        var url = OpenAiChatGptAuth.BuildAuthorizeUrl("st", "ch", "no");
+
+        // Each of these was missing at some point and OpenAI answers "Invalid authorize request"
+        // without saying which one, so the whole set is pinned.
+        string[] required =
+        [
+            "response_type=code",
+            "client_id=",
+            "agent_name_hint=",
+            "ext_agent_host_id=",
+            "redirect_uri=",
+            "scope=",
+            "state=st",
+            "nonce=no",
+            "code_challenge=ch",
+            "code_challenge_method=S256",
+            "resource="
+        ];
+
+        foreach (var parameter in required)
+            Assert.Contains(parameter, url);
+    }
+
+    [Fact]
+    public void the_agent_host_id_is_a_urn_uuid_and_is_stable()
+    {
+        var first = OpenAiChatGptAuth.AgentHostId("11111111-2222-3333-4444-555555555555");
+        var second = OpenAiChatGptAuth.AgentHostId("11111111-2222-3333-4444-555555555555");
+
+        Assert.Equal("urn:uuid:11111111-2222-3333-4444-555555555555", first);
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void the_installed_device_id_is_persisted_across_calls()
+    {
+        // Two calls in the same process must agree; a value that changed per call would present
+        // every launch as a new device.
+        Assert.Equal(DeviceIdStore.LoadOrCreate(), DeviceIdStore.LoadOrCreate());
+        Assert.True(Guid.TryParse(DeviceIdStore.LoadOrCreate(), out _));
+    }
+
+    [Fact]
+    public void the_authorize_url_is_well_formed_and_escaped()
+    {
+        var url = OpenAiChatGptAuth.BuildAuthorizeUrl("a b", "c+d", "e/f");
+
+        var parsed = new Uri(url);
+
+        Assert.Equal("auth.openai.com", parsed.Host);
+        Assert.Equal("/api/accounts/authorize", parsed.AbsolutePath);
+        // The space, plus, and slash in the inputs must not survive raw in the query.
+        Assert.DoesNotContain("a b", url);
+        Assert.Contains("state=a%20b", url);
+    }
+
     // ------------------------------------------------------------------
     // ChatGPT endpoint contract
     // ------------------------------------------------------------------
