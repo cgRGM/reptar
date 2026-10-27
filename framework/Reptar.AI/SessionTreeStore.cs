@@ -134,7 +134,10 @@ public sealed record SessionTreeNode(
 /// </list>
 ///
 /// The leaf is the only mutable state, which is why it lives in its own one-row-per-session
-/// table rather than as a column on the session.
+/// table rather than as a column on the session. Append, leaf switch, fork, and legacy import
+/// each own a database transaction; do not wrap them in a nested SQLite transaction.
+/// Atomic read/write isolation is required from the database client. SQLite has published
+/// multi-process/crash coverage; buffered-write adapters alone do not establish that contract.
 /// </remarks>
 public sealed class SessionTreeStore
 {
@@ -187,6 +190,12 @@ public sealed class SessionTreeStore
             message = filtered;
         }
 
+        return await _db.TransactionAsync(db =>
+            new SessionTreeStore(db).AppendCoreAsync(sessionId, message)).ConfigureAwait(false);
+    }
+
+    private async Task<string> AppendCoreAsync(string sessionId, ChatMessage message)
+    {
         var parentId = await LeafAsync(sessionId).ConfigureAwait(false);
         var next = await NextSequenceAsync(sessionId).ConfigureAwait(false);
 
@@ -217,12 +226,28 @@ public sealed class SessionTreeStore
             ("toolCallId", row.ToolCallId),
             ("createdAt", row.CreatedAt)).ConfigureAwait(false);
 
-        await SetLeafAsync(sessionId, row.Id).ConfigureAwait(false);
+        await WriteLeafAsync(sessionId, row.Id).ConfigureAwait(false);
         return row.Id;
     }
 
-    /// <summary>Moves the leaf, which is how you switch or start a branch.</summary>
-    public async Task SetLeafAsync(string sessionId, string? entryId)
+    /// <summary>Atomically moves the leaf to an entry in this session, or null to start a root.</summary>
+    /// <exception cref="ArgumentException">The entry is absent or belongs to another session.</exception>
+    public Task SetLeafAsync(string sessionId, string? entryId) =>
+        _db.TransactionAsync(async db =>
+        {
+            var store = new SessionTreeStore(db);
+            if (entryId is not null)
+            {
+                var found = await db.QueryAsync<LeafRow>(
+                    $"select id from \"{Entries.Name}\" where id = @entryId and session_id = @sessionId",
+                    ("entryId", entryId), ("sessionId", sessionId)).ConfigureAwait(false);
+                if (found.Count == 0)
+                    throw new ArgumentException("Leaf must identify an entry in the same session.", nameof(entryId));
+            }
+            await store.WriteLeafAsync(sessionId, entryId).ConfigureAwait(false);
+        });
+
+    private async Task WriteLeafAsync(string sessionId, string? entryId)
     {
         await _db.ExecuteAsync(
             $"delete from \"{State.Name}\" where session_id = @sessionId",
@@ -366,12 +391,18 @@ public sealed class SessionTreeStore
     /// <param name="fromEntryId">
     /// Entry to cut at. Null uses the current leaf, which clones the whole active branch.
     /// </param>
-    /// <returns>True when the fork was created.</returns>
-    public async Task<bool> ForkAsync(
+    /// <returns>True when the fork was created atomically; false for an absent source or nonempty target.</returns>
+    public Task<bool> ForkAsync(
         string sessionId,
         string newSessionId,
-        string? fromEntryId = null)
+        string? fromEntryId = null) =>
+        _db.TransactionAsync(db => new SessionTreeStore(db).ForkCoreAsync(sessionId, newSessionId, fromEntryId));
+
+    private async Task<bool> ForkCoreAsync(string sessionId, string newSessionId, string? fromEntryId)
     {
+        if (sessionId == newSessionId || (await EntriesAsync(newSessionId).ConfigureAwait(false)).Count > 0)
+            return false;
+
         var entries = await EntriesAsync(sessionId).ConfigureAwait(false);
         if (entries.Count == 0)
             return false;
@@ -420,7 +451,7 @@ public sealed class SessionTreeStore
             parent = id;
         }
 
-        await SetLeafAsync(newSessionId, parent).ConfigureAwait(false);
+        await WriteLeafAsync(newSessionId, parent).ConfigureAwait(false);
         return true;
     }
 
@@ -437,7 +468,10 @@ public sealed class SessionTreeStore
     /// branched like any other.
     /// </remarks>
     /// <returns>How many entries were imported.</returns>
-    public async Task<int> ImportFlatAsync(string sessionId, TableDef flatMessages)
+    public Task<int> ImportFlatAsync(string sessionId, TableDef flatMessages) =>
+        _db.TransactionAsync(db => new SessionTreeStore(db).ImportFlatCoreAsync(sessionId, flatMessages));
+
+    private async Task<int> ImportFlatCoreAsync(string sessionId, TableDef flatMessages)
     {
         var existing = await EntriesAsync(sessionId).ConfigureAwait(false);
         if (existing.Count > 0)
@@ -475,7 +509,7 @@ public sealed class SessionTreeStore
             parent = id;
         }
 
-        await SetLeafAsync(sessionId, parent).ConfigureAwait(false);
+        await WriteLeafAsync(sessionId, parent).ConfigureAwait(false);
         return rows.Count;
     }
 
