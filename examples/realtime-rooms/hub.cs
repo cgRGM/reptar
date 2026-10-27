@@ -426,6 +426,18 @@ public static class RoomsRoutes
 {
     public static ReptarApp Configure(ReptarApp app, RoomHub hub)
     {
+#if !NETWASM
+        EntityMapper<RoomMessageRecord>.Factory ??= reader =>
+        {
+            var id = reader.GetOrdinal("id");
+            var room = reader.GetOrdinal("room_id");
+            var sender = reader.GetOrdinal("sender_id");
+            var payload = reader.GetOrdinal("payload");
+            var created = reader.GetOrdinal("created_at");
+            return row => new RoomMessageRecord(row.GetString(id), row.GetString(room),
+                row.GetString(sender), row.GetString(payload), row.IsDBNull(created) ? null : row.GetString(created));
+        };
+#endif
         app.OnWebSocket("/rooms/{roomId}", hub.CreateHandlers());
 
         app.Get("/health", ctx => ctx.JsonRaw(hub.HealthJson()));

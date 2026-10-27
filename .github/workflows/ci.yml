@@ -181,6 +181,13 @@ jobs:
             -o "$RUNNER_TEMP/reptar-background-native" 2>&1 | tee "$RUNNER_TEMP/reptar-background-publish.log"
           python3 scripts/test-background-lifecycle.py "$RUNNER_TEMP/reptar-background-native/app"
 
+      - name: Publish Native AOT Rooms for the two-host realtime gate
+        run: |
+          set -o pipefail
+          dotnet publish examples/realtime-rooms/app.cs -c Release -r linux-x64 --self-contained \
+            -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+            -o "$RUNNER_TEMP/reptar-rooms-native" 2>&1 | tee "$RUNNER_TEMP/reptar-rooms-publish.log"
+
       - name: Reviewed Native AOT diagnostic instances
         run: |
           python3 scripts/check-aot-warnings.py \
@@ -188,13 +195,14 @@ jobs:
             "$RUNNER_TEMP/reptar-agent-publish.log" \
             "$RUNNER_TEMP/reptar-http-publish.log" \
             "$RUNNER_TEMP/reptar-session-publish.log" \
-            "$RUNNER_TEMP/reptar-background-publish.log"
+            "$RUNNER_TEMP/reptar-background-publish.log" \
+            "$RUNNER_TEMP/reptar-rooms-publish.log"
 
       - name: Doctor (strict)
         run: bun reptar doctor --strict
 
       - name: Two-host realtime smoke
-        run: bun reptar test:realtime
+        run: REPTAR_ROOMS_NATIVE_BINARY="$RUNNER_TEMP/reptar-rooms-native/app" bun reptar test:realtime
 
       - name: Scaffold end-to-end
         run: bun scripts/test-scaffold.ts

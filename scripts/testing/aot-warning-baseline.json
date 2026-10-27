@@ -2,7 +2,7 @@
   "schema": 1,
   "sdk": "10.0.401",
   "sourceBaseline": "240f93e02cf1e9ba8d7a53d23e000fa770e637ca plus R4 guard changes",
-  "scope": "Native publish logs for agent, HTTP, sessions, background lifecycle and AOT contract fixtures; source spans and ILC member diagnostics remain exact. This is an acknowledged-risk inventory, not suppression or proof that warnings are harmless.",
+  "scope": "Native publish logs for agent, HTTP, sessions, background lifecycle, Rooms and AOT contract fixtures; source spans and ILC member diagnostics remain exact. This is an acknowledged-risk inventory, not suppression or proof that warnings are harmless.",
   "instances": [
     {
       "diagnostic": "ILC|IL2026|Reptar.AI.AgentEventJson.MessageNode(ChatMessage): Using member 'System.Text.Json.Nodes.JsonArray.Add<JsonObject>(JsonObject)' which has 'RequiresUnreferencedCodeAttribute' can break functionality when trimming application code. Creating JsonValue instances with non-primitive types is not compatible with trimming. It can result in non-primitive types being serialized, which may have their members trimmed.",
@@ -1077,15 +1077,15 @@
       "review": "Acknowledged legacy reflection/annotation debt. Native unknown row/parameter/table-write shapes now fail closed; generated mapper, scalar/count, queue and session artifact paths are tested. Managed reflection compatibility remains; no universal AOT annotation claim."
     },
     {
-      "diagnostic": "framework/Reptar/Data/Services.cs(145,6)|CA2255|The 'ModuleInitializer' attribute is only intended to be used in application code or advanced source generator scenarios (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca2255)",
+      "diagnostic": "framework/Reptar/Data/Services.cs(146,6)|CA2255|The 'ModuleInitializer' attribute is only intended to be used in application code or advanced source generator scenarios (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca2255)",
       "review": "Intentional module initializer for the built-in DbCount mapper; native CountAsync is exercised without reflective mapping."
     },
     {
-      "diagnostic": "framework/Reptar/Data/Services.cs(569,30)|IL2026|Using member 'System.Text.Json.JsonSerializer.Serialize<TValue>(TValue, JsonSerializerOptions)' which has 'RequiresUnreferencedCodeAttribute' can break functionality when trimming application code. JSON serialization and deserialization might require types that cannot be statically analyzed. Use the overload that takes a JsonTypeInfo or JsonSerializerContext, or make sure all of the required types are preserved.",
+      "diagnostic": "framework/Reptar/Data/Services.cs(571,30)|IL2026|Using member 'System.Text.Json.JsonSerializer.Serialize<TValue>(TValue, JsonSerializerOptions)' which has 'RequiresUnreferencedCodeAttribute' can break functionality when trimming application code. JSON serialization and deserialization might require types that cannot be statically analyzed. Use the overload that takes a JsonTypeInfo or JsonSerializerContext, or make sure all of the required types are preserved.",
       "review": "Existing generic JSON/metadata propagation warning. Named generated-codec auth/HTTP/SSE/typed-queue boundaries have artifact tests; custom claims, generic payload shapes and all portable adapters are not universally certified."
     },
     {
-      "diagnostic": "framework/Reptar/Data/Services.cs(569,30)|IL3050|Using member 'System.Text.Json.JsonSerializer.Serialize<TValue>(TValue, JsonSerializerOptions)' which has 'RequiresDynamicCodeAttribute' can break functionality when AOT compiling. JSON serialization and deserialization might require types that cannot be statically analyzed and might need runtime code generation. Use System.Text.Json source generation for native AOT applications.",
+      "diagnostic": "framework/Reptar/Data/Services.cs(571,30)|IL3050|Using member 'System.Text.Json.JsonSerializer.Serialize<TValue>(TValue, JsonSerializerOptions)' which has 'RequiresDynamicCodeAttribute' can break functionality when AOT compiling. JSON serialization and deserialization might require types that cannot be statically analyzed and might need runtime code generation. Use System.Text.Json source generation for native AOT applications.",
       "review": "Existing generic JSON/metadata propagation warning. Named generated-codec auth/HTTP/SSE/typed-queue boundaries have artifact tests; custom claims, generic payload shapes and all portable adapters are not universally certified."
     },
     {

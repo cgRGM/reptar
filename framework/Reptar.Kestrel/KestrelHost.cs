@@ -466,6 +466,7 @@ public static class KestrelHost
         private readonly System.Net.WebSockets.WebSocket _socket;
         private readonly System.Threading.Channels.Channel<byte[]> _channel;
         private readonly CancellationTokenSource _cts = new();
+        private readonly Task _sendPump;
         private long _sent;
         private long _dropped;
         private long _errors;
@@ -479,9 +480,9 @@ public static class KestrelHost
                     FullMode = System.Threading.Channels.BoundedChannelFullMode.DropOldest,
                     SingleReader = true,
                     SingleWriter = false,
-                });
+                }, _ => Interlocked.Increment(ref _dropped));
 
-            _ = Task.Run(SendPumpAsync);
+            _sendPump = Task.Run(SendPumpAsync);
         }
 
         public long Sent => Volatile.Read(ref _sent);
@@ -534,27 +535,45 @@ public static class KestrelHost
 
         public async Task CloseAsync(int code, string reason)
         {
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             try
             {
                 _channel.Writer.TryComplete();
-                _cts.Cancel();
+                // SendAsync enqueues frames. Preserve a final application frame
+                // (for example Rooms' bye) before emitting the close handshake.
+                await _sendPump.WaitAsync(deadline.Token);
 
                 if (_socket.State == System.Net.WebSockets.WebSocketState.Open)
                 {
-                    await _socket.CloseAsync(
+                    // The request loop owns ReceiveAsync; CloseAsync would start
+                    // a second competing receive while waiting for the peer.
+                    await _socket.CloseOutputAsync(
                         (System.Net.WebSockets.WebSocketCloseStatus)code,
                         reason,
-                        CancellationToken.None);
+                        deadline.Token);
                 }
+                while (_socket.State == System.Net.WebSockets.WebSocketState.CloseSent)
+                    await Task.Delay(10, deadline.Token);
             }
             catch
             {
-                // Ignore disconnect exceptions
+                // A disconnected or unresponsive peer cannot retain the pump.
+                _socket.Abort();
             }
             finally
             {
-                _cts.Dispose();
+                _cts.Cancel();
+                if (_sendPump.IsCompleted)
+                    _cts.Dispose();
+                else
+                    _ = DisposeAfterSendPumpAsync();
             }
+        }
+
+        private async Task DisposeAfterSendPumpAsync()
+        {
+            try { await _sendPump; }
+            finally { _cts.Dispose(); }
         }
     }
 

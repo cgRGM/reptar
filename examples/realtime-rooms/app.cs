@@ -29,6 +29,7 @@ var database = Db.Sqlite(Environment.GetEnvironmentVariable("REPTAR_ROOMS_DB") ?
 var app = ReptarApp.Create(new ReptarConfig
 {
     Database = database,
+    Json = new SourceGenJsonCodec(RoomsJsonContext.Default),
 });
 
 app.RegisterSchema(Schema.All);
@@ -43,3 +44,8 @@ var hub = new RoomHub(persister);
 RoomsRoutes.Configure(app, hub);
 
 await app.RunAsync(args);
+
+[System.Text.Json.Serialization.JsonSourceGenerationOptions(
+    PropertyNamingPolicy = System.Text.Json.Serialization.JsonKnownNamingPolicy.CamelCase)]
+[System.Text.Json.Serialization.JsonSerializable(typeof(List<RoomMessageRecord>))]
+internal partial class RoomsJsonContext : System.Text.Json.Serialization.JsonSerializerContext;

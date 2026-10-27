@@ -151,8 +151,12 @@ const runKestrelSmoke = async (
   dbPath: string
 ): Promise<boolean> => {
   await assertPortAvailable(port);
-  console.log(`\n[kestrel host] starting dotnet run app.cs on :${port}...`);
-  const server = await spawnOwnedProcess(dotnet(), ["run", "app.cs"], {
+  const nativeBinary = process.env.REPTAR_ROOMS_NATIVE_BINARY;
+  const executable = nativeBinary ?? dotnet();
+  const args = nativeBinary ? [] : ["run", "app.cs"];
+  const runtime = nativeBinary ? "published binary" : "dotnet run app.cs";
+  console.log(`\n[kestrel host] starting ${runtime} on :${port}...`);
+  const server = await spawnOwnedProcess(executable, args, {
     cwd: roomsDir,
     env: {
       ...process.env,
@@ -182,10 +186,31 @@ const runKestrelSmoke = async (
   }
 };
 
-export const runRealtimeSmoke = async (options: {
+interface RealtimeSmokeOptions {
   kestrelOnly?: boolean;
   workersOnly?: boolean;
-}): Promise<boolean> => {
+}
+
+const preflightPorts = async (
+  options: RealtimeSmokeOptions,
+  workersPort: number,
+  kestrelPort: number
+): Promise<void> => {
+  if (!options.kestrelOnly) {
+    await assertPortAvailable(workersPort);
+  }
+  if (!options.workersOnly) {
+    await assertPortAvailable(kestrelPort);
+  }
+  const bothHosts = !(options.kestrelOnly || options.workersOnly);
+  if (bothHosts && workersPort === kestrelPort) {
+    throw new Error("Realtime smoke hosts must use distinct ports.");
+  }
+};
+
+export const runRealtimeSmoke = async (
+  options: RealtimeSmokeOptions
+): Promise<boolean> => {
   if (options.kestrelOnly && options.workersOnly) {
     throw new Error("Choose at most one realtime smoke host filter.");
   }
@@ -200,19 +225,7 @@ export const runRealtimeSmoke = async (options: {
     process.env.REPTAR_REALTIME_KESTREL_PORT ?? "8791"
   );
 
-  if (!options.kestrelOnly) {
-    await assertPortAvailable(workersPort);
-  }
-  if (!options.workersOnly) {
-    await assertPortAvailable(kestrelPort);
-  }
-  if (
-    !options.kestrelOnly &&
-    !options.workersOnly &&
-    workersPort === kestrelPort
-  ) {
-    throw new Error("Realtime smoke hosts must use distinct ports.");
-  }
+  await preflightPorts(options, workersPort, kestrelPort);
   const stateRoot = mkdtempSync(path.join(tmpdir(), "reptar-realtime-"));
   let cleanupComplete = false;
   try {
@@ -228,7 +241,7 @@ export const runRealtimeSmoke = async (options: {
         path.join(stateRoot, "rooms.db")
       );
     }
-    cleanupComplete = true;
+    cleanupComplete = workersPassed && kestrelPassed;
   } finally {
     if (cleanupComplete) {
       rmSync(stateRoot, { force: true, recursive: true });

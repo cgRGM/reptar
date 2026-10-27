@@ -24,19 +24,29 @@ An initial attempt to forbid reflection in the global resolver also broke native
 
 `scripts/fixtures/aot-contracts/aot-contracts.csproj` references the actual entity source generator. Separate seed/cold processes verify generated mapping without constructing the record first, reordered columns, scalar and built-in count projections, generated entity parameters, and source-generated JSON roundtrip. Negative modes verify unmapped rows, anonymous parameters, anonymous insert/update, and five unknown-metadata codec entry points. Rejected writes leave the original value and row count unchanged.
 
-Local macOS Native AOT SHA256: `1def71633b37ae63c45647ad8aad5352ed4c10277e90c17318d9083f21d8da28`.
+Final local macOS metadata-contract Native AOT SHA256: `9ef3bedcf0978624514f0bcc26276dcd4f4d4ad9b2a925ff7d74aa2856300a4b`.
 
-After the repair, all five published artifact suites pass locally: metadata/binding contracts; HTTP/generated client/compression/stream faults; concurrent-session/SIGKILL durability; typed-queue/cron shutdown lifecycle; offline agent CLI/RPC/web. The complete C# suite passes **841/841**, no failures/skips. Linux CI must pass on the final head before acceptance.
+After the repair, all six published artifact suites pass locally: metadata/binding contracts; HTTP/generated client/compression/stream faults; concurrent-session/SIGKILL durability; typed-queue/cron shutdown lifecycle; offline agent CLI/RPC/web; and Rooms against the rebuilt Worker counterpart. The complete C# suite passes **844/844**, no failures/skips. Linux CI must pass on the final head before acceptance.
+
+### Worker and published Rooms follow-up failures
+
+The first Linux run caught the native-only `DbCount` initializer being compiled into NetWasm, whose data port does not define `EntityMapper`. The initializer is now explicitly fenced with `#if !NETWASM`; all three deployed Worker artifacts rebuild locally.
+
+The rebuilt two-host smoke then exposed missing native Rooms history JSON metadata. Rooms now configures its source-generated list codec and an explicit ordinal mapper instead of depending on reflective row/JSON fallback. The smoke can select an explicit published binary with `REPTAR_ROOMS_NATIVE_BINARY`; an invalid binary does not silently fall back to `dotnet run`. Failed smokes retain disposable state rather than deleting their diagnostic database.
+
+Publishing Rooms exposed another real bug: close cancelled the outbound pump before the final `bye` frame was sent. The connection now owns/awaits its send pump, flushes queued frames before close-output, avoids a competing receive operation during the close handshake, and aborts an unresponsive peer at a five-second deadline. Channel eviction uses the actual dropped-item callback, so `DropOldest` no longer reports zero evictions. Three deterministic tests cover flush-before-close, actual eviction/newest-frame retention, and deadline abort. Replacing drain with the old immediate cancellation makes the flush test fail at `Assert.False` (recorded negative control); the implementation is restored.
+
+Final local published Rooms SHA256: `f2c934c64c7d40fba514a9ab9ab1134de09812c5c48cec1c374ef6447205cbe7`. Worker/Rooms failures, the negative mutation, rebuilt Worker manifests and final executable hashes are retained under the external evidence directory. Five consecutive native-only Rooms protocol/history runs also pass, with all samples retained. No rebuilt Worker binaries are committed. These short runs do not establish sustained operational maturity.
 
 ## Warning control is not warning elimination
 
-`scripts/check-aot-warnings.py` checks the selected five native-publish logs against `scripts/testing/aot-warning-baseline.json`. The initial inventory contains **301 distinct exact diagnostic instances**, including source spans or ILC member signatures and individual review classifications. The SDK is pinned to 10.0.401.
+`scripts/check-aot-warnings.py` checks the selected six native-publish logs against `scripts/testing/aot-warning-baseline.json`. The initial inventory contains **301 distinct exact diagnostic instances**, including source spans or ILC member signatures and individual review classifications. The SDK is pinned to 10.0.401.
 
 - Compiler output is still printed and retained. No `NoWarn`, diagnostic-code exemption or analyzer suppression is introduced.
 - A warning at another source span/member, a changed diagnostic, or an unrecognized warning format fails the gate.
 - Native methods reported as **“will always throw”** and unexpanded assembly-level IL2104/IL3053 warnings fail even if someone tries to record them as known. The earlier rejected cross-checkout publish demonstrated why this matters.
 - Eight negative/parser tests cover checkout path normalization, preservation of source spans, known instances, a new callsite with an existing warning code, fatal artifact diagnostics, unrecognized formats, missing review and normal build summaries.
-- Incremental builds and architecture/reachability differences can omit known instances; absence is reported, not represented as resolution. The gate cannot prove that every repository path was built. Its declared scope is the five captured publishes, alongside their independent artifact execution gates.
+- Incremental builds and architecture/reachability differences can omit known instances; absence is reported, not represented as resolution. The gate cannot prove that every repository path was built. Its declared scope is the six captured publishes, alongside their independent artifact execution gates.
 
 ### Review classifications and remaining debt
 
