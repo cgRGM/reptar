@@ -1180,3 +1180,153 @@ Verified against a running server: `/api/health` 200, `/api/chat/status/:id` rep
 ### Placement note
 
 `AgentRunRegistry` started life inside `examples/agent-cli/features/chat.cs`. It moved to `framework/Reptar.AI/` for two reasons: the test project only compiles `terminal/*.cs` from the example, so it was untestable there; and it is genuinely generic — nothing about it is Reptar-specific, let alone web-chat-specific.
+
+---
+
+## 29. The layout bugs, and why they kept happening
+
+Five screenshots showed the same class of failure three times over: **rows being drawn on top of other rows**. Three distinct causes, all now fixed and all now tested.
+
+### Cause 1: the dropdown was positioned on the footer
+
+`RenderSlashDropdown` drew at `ComposerRow + 1`, and `ComposerRow` was `_height - 4` — so the list started at `_height - 3`, which is exactly the footer's location row. The composer never moved out of the way, so the list was painted _over_ the footer and the footer was painted back over it. That is the "input covers the list" the user saw.
+
+### Cause 2: nothing cleared the rows it drew into
+
+`TermSelector` printed over a live transcript without clearing first. `Print` with `maxWidth` stops at the text, so wherever the new line was shorter than the old one, the old text showed through:
+
+```
+  → gl_in_command    Execute a shell command in the workspace root with a timeout.
+  → ✓ deep-research-max-preview-04-2026  131k ctx · reasoning · vision · Google Gemini
+    gemini-2.5-pro-preview-tts          8.2k ctx · Google Gemini a workspace file.
+```
+
+`list_dir … ignoring .git, bin,…` bleeding into a model row. Every selector row now `FillRect`s its full width first, and the dropdown band does the same.
+
+### Cause 3: the geometry was spread across the file
+
+`_height - 4` here, `_height - 5` there, `_height - 6 - dropdownRows` somewhere else. Each number was individually reasonable and collectively wrong.
+
+`TermLayout` is now the single owner of the bottom-of-screen geometry:
+
+```
+height-1   footer: stats
+height-2   footer: working directory
+height-3   composer, or the selector's last row
+...        the dropdown band, when open
+...        working indicator
+...        transcript
+```
+
+`Composer` moves up by exactly `DropdownRows`; a selector takes the composer's slot entirely (`Composer == -1`); `TranscriptBottom` stops above whichever of the two is present. `Fits` reports when a band cannot be placed, and the dropdown caps itself at a third of the screen instead of drawing over the footer.
+
+Twelve tests pin it, including a sweep across heights and band sizes asserting that no two bands ever share a row. **That is the fix for the meta-problem**: I cannot see the TUI, so the layout had to become something a test can check.
+
+### The other four issues
+
+| Issue | Cause | Fix |
+| --- | --- | --- |
+| Model list "doesn't show models" | It did — the transcript was bleeding through it | Row clearing (cause 2) |
+| Notice says `/login` | Copied from pi verbatim, but our command is `/connect` | Reworded |
+| Can't see `deepseek-v4.1-flash` | Image, embedding, TTS, and realtime models were in the list | `IsChatModel` filters them |
+| Footer overflows on a long model id | Right side had no budget | Fit → drop provider → truncate |
+
+The model filtering matters more than it sounds: a picker offering `gemini-embedding-001` and `gpt-image-1` is not just noise, it is a trap — selecting one produces a confusing provider error instead of a reply.
+
+### Also changed
+
+- The header now names the view you actually opened: `/ models`, `/ connect`, `/ settings`, `/ tree` — it said `/ providers` for all of them.
+- Submitted user turns use `▌ you` instead of `❯`, so a sent message and the live prompt no longer look like the same thing.
+
+---
+
+## 30. Providers that need more than a key, and a dropdown that stopped vanishing
+
+### Cloudflare Workers AI
+
+The model the user could not find — `@cf/deepseek-ai/deepseek-v4.1-flash-1017` — is a **Workers AI** model, not an AI Gateway one. Those are different providers in pi (`cloudflare-workers-ai` and `cloudflare-ai-gateway`) and only the gateway existed here. Workers AI is now registered:
+
+| Provider | URL | Needs |
+| --- | --- | --- |
+| Cloudflare Workers AI | `api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1` | key + account id |
+| Cloudflare AI Gateway | `gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/compat/chat/completions` | key + account + gateway id |
+
+### Base-URL templating
+
+Both URLs contain `{account_id}`-style placeholders. `LlmProviders.ResolveBaseUrl` substitutes them from the saved credential or the environment, and **leaves an unfilled placeholder visible rather than blanking it** — a request to a URL containing a literal `{account_id}` fails in a way that looks like an auth error, so it should be obvious in the UI instead.
+
+`MissingRequirements` reports what a provider still needs, and the provider picker now says `· needs api key + Cloudflare account id` rather than a flat `· not configured`. That is the difference between "I have not set this up" and "I set the key but forgot the account id".
+
+### `/connect` became a short sequence
+
+The key prompt now steps through fields: `step 1/2: api key`, `step 2/2: Cloudflare account id`. The key is masked; the id is not, because it is not a secret and hiding it makes typos invisible. The prompt previews the resolved URL, so you can see it stop containing braces as you fill fields.
+
+### The dropdown vanishing was a matching bug
+
+`/s` did not narrow the list — it still showed `/model`. The cause: matching ran over the **description as well as the name**, and `/model`'s description is "Browse and **s**elect a model". With a one-letter query almost everything matched, so the ranking was effectively random and the command being typed fell out of the eight visible rows. It read as "the results disappeared".
+
+pi matches slash commands on the **name only** and displays the description separately (`autocomplete.ts` passes `getText: (item) => item.name`). `SlashCommands` now does the same, and the tests assert the negative case — `/summarize` must find nothing, because that word only exists in a description.
+
+Two secondary fixes in the same area:
+
+- **A no-match query keeps the list open** showing `no command matches "zz"` with a hint. pi closes it; keeping it open is friendlier, and the band is now always reserved at least one row so the message has somewhere to be drawn instead of the whole block collapsing.
+- The `@` file list had the identical bug and got the identical fix.
+
+### What the tests pin now
+
+`SlashCommandsTests` (11 cases) covers the open/closed rule, name-only matching, the negative description case, and that every single letter still leaves the list open. That last one exists because "the menu disappears when I type" is not a thing a screenshot can prove fixed.
+
+---
+
+## 31. The connect list, and small interactions that were not captured
+
+### The provider list had a model column
+
+```
+OpenAI          gpt-4o-mini        · needs api key
+Anthropic       claude-sonnet-4-5  · needs api key
+```
+
+That reads like a model picker with a provider prefix. pi's is:
+
+```
+→ Anthropic • not configured
+  GitHub Copilot ✓ stored
+  OpenAI ✓ stored
+```
+
+Name and status. The model is a separate decision made in `/models`, and putting it here made the list answer a question nobody asked. The column is gone.
+
+### The two-list split
+
+pi asks _how_ you want to sign in before asking _who_:
+
+```
+Select authentication method:
+→ Sign in with an account
+  Sign in with an API key
+  Sign in with Radius • not configured
+```
+
+…and the two provider lists are **different sets**, because subscription-backed providers are not the same as API-key ones. `ProviderInfo.Auth` (`ApiKey` / `Account` / `Both`) records the capability, and `/connect` now opens the method selector first, then filters.
+
+Reptar has no OAuth device flow, so the account list is honest about it: selecting a provider says "account sign-in is not implemented yet — use an API key for now" rather than dropping into a key prompt that would look like the same flow under a different name. The structure matches pi so the gap is visible instead of hidden, and the plumbing is there when OAuth lands.
+
+`/connect <provider>` still skips both steps for the common case.
+
+### The settings list jumped when you changed something
+
+`ToggleSettingAsync` rebuilt the selector after every change, which reset `SelectedIndex` to 0 — so the list scrolled to the top under you and you had to find your place again. `TermSelector` gained `SelectByLabel`, and the rebuild restores the selection to the row you just changed.
+
+That is the general shape of the remaining gap: pi's interactions preserve _context_ across state changes, and mine were recreating state. The other examples worth fixing in the same spirit:
+
+| Interaction     | What pi does                                    | Status |
+| --------------- | ----------------------------------------------- | ------ |
+| Settings toggle | selection stays on the row                      | fixed  |
+| Model picker    | search text survives a catalog refresh          | next   |
+| Provider list   | Escape returns to the auth-method step, not out | fixed  |
+| Session switch  | scroll position resets to the branch leaf       | ok     |
+
+### Cleanup
+
+`HandleProvidersKey` was half dead: the list stages became `TermSelector`s, so its `PickProvider` and model-list branches could never run. It is now only the key-entry handler, and `AdvanceKeyEntry` owns the key → account-id → activate sequence.

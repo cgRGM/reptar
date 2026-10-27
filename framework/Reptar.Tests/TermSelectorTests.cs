@@ -153,7 +153,7 @@ public sealed class TermSelectorTests
     }
 
     [Fact]
-    public void replacing_the_items_keeps_the_query()
+    public void replacing_the_items_refilters_against_the_existing_query()
     {
         var selector = Providers();
         selector.Type('a');
@@ -162,6 +162,78 @@ public sealed class TermSelectorTests
 
         Assert.Equal("a", selector.Query);
         Assert.Contains(selector.Visible, item => item.Label == "alpha");
+    }
+
+    // ------------------------------------------------------------------
+    // State preservation across a rebuild
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void replacing_the_items_keeps_the_query()
+    {
+        var selector = Providers();
+        selector.Type('s');
+
+        selector.SetItems([new TermSelectorItem("settings"), new TermSelectorItem("sessions")]);
+
+        Assert.Equal("s", selector.Query);
+        Assert.Equal(2, selector.Visible.Count);
+    }
+
+    [Fact]
+    public void replacing_the_items_keeps_the_selection_by_label()
+    {
+        var selector = Providers();
+        selector.Move(2);   // OpenAI
+        Assert.Equal("OpenAI", selector.Selected!.Label);
+
+        // A refresh that reorders the list must not move the highlight.
+        selector.SetItems(
+        [
+            new TermSelectorItem("OpenRouter"),
+            new TermSelectorItem("OpenAI", "gpt-4o-mini", "✓ stored"),
+            new TermSelectorItem("Anthropic")
+        ]);
+
+        Assert.Equal("OpenAI", selector.Selected!.Label);
+    }
+
+    [Fact]
+    public void replacing_the_items_falls_back_to_the_same_position_when_the_label_is_gone()
+    {
+        var selector = Providers();
+        selector.Move(2);
+
+        selector.SetItems(
+        [
+            new TermSelectorItem("a"),
+            new TermSelectorItem("b"),
+            new TermSelectorItem("c")
+        ]);
+
+        Assert.Equal(2, selector.Index);
+    }
+
+    [Fact]
+    public void clearing_the_query_restores_the_full_list()
+    {
+        var selector = Providers();
+        selector.Type('z');
+        Assert.Empty(selector.Visible);
+
+        selector.ClearQuery();
+
+        Assert.Equal(4, selector.Visible.Count);
+        Assert.False(selector.IsSearching);
+    }
+
+    [Fact]
+    public void select_by_label_ignores_an_unknown_name()
+    {
+        var selector = Providers();
+
+        Assert.False(selector.SelectByLabel("nope"));
+        Assert.Equal("Amazon Bedrock", selector.Selected!.Label);
     }
 
     [Fact]

@@ -137,6 +137,9 @@ public sealed record LlmConfig
             LlmProviders.CloudflareGateway => BuildOpenAiCompatible(
                 LlmProviders.CloudflareGateway, requestedModel, requestedBaseUrl, auth,
                 Environment.GetEnvironmentVariable("REPTAR_AGENT_API_KEY")),
+            LlmProviders.CloudflareWorkersAi => BuildOpenAiCompatible(
+                LlmProviders.CloudflareWorkersAi, requestedModel, requestedBaseUrl, auth,
+                Environment.GetEnvironmentVariable("REPTAR_AGENT_API_KEY")),
             LlmProviders.Anthropic => new LlmConfig
             {
                 ProviderKey = LlmProviders.Anthropic,
@@ -277,12 +280,14 @@ public sealed record LlmConfig
             _ => FirstNonEmpty(genericKey, saved?.ApiKey)
         };
 
-        var resolvedBaseUrl = baseUrl
-            ?? (providerKey == LlmProviders.OpenAi
-                ? Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
-                : null)
-            ?? saved?.BaseUrl
-            ?? info.DefaultBaseUrl;
+        var resolvedBaseUrl = LlmProviders.ResolveBaseUrl(
+            info,
+            baseUrl
+                ?? (providerKey == LlmProviders.OpenAi
+                    ? Environment.GetEnvironmentVariable("OPENAI_BASE_URL")
+                    : null)
+                ?? saved?.BaseUrl,
+            saved);
 
         return new LlmConfig
         {

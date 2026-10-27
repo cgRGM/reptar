@@ -113,13 +113,62 @@ public sealed class TermSelector
         SelectedIndex = (SelectedIndex + delta + _visible.Count) % _visible.Count;
     }
 
-    /// <summary>Replaces the item list, preserving the query.</summary>
+    /// <summary>
+    /// Replaces the item list while preserving what the user is doing: the search text, and the
+    /// selection by label.
+    /// </summary>
+    /// <remarks>
+    /// Rebuilding a selector from scratch resets the query and the index, which makes a refresh
+    /// look like the list jumped. Anything that reloads data behind an open picker should come
+    /// through here rather than constructing a new selector.
+    /// </remarks>
     public void SetItems(IEnumerable<TermSelectorItem> items)
     {
+        var selectedLabel = Selected?.Label;
+        var previousIndex = SelectedIndex;
+
         _all.Clear();
         _all.AddRange(items);
+
+        Refilter();
+
+        // Prefer the same item by name; fall back to the same position so the highlight does not
+        // teleport to the top when the item genuinely disappeared.
+        if (!SelectByLabel(selectedLabel))
+            SelectedIndex = Math.Clamp(previousIndex, 0, Math.Max(0, _visible.Count - 1));
+    }
+
+    /// <summary>Clears the search text, for reopening a picker fresh.</summary>
+    public void ClearQuery()
+    {
+        Query = "";
         Refilter();
     }
+
+    /// <summary>
+    /// Moves the selection to the first item whose label matches. Used after a rebuild so
+    /// changing a value does not throw you back to the top of the list.
+    /// </summary>
+    /// <returns>True when the label was found.</returns>
+    public bool SelectByLabel(string? label)
+    {
+        if (string.IsNullOrEmpty(label))
+            return false;
+
+        for (var i = 0; i < _visible.Count; i++)
+        {
+            if (string.Equals(_visible[i].Label, label, StringComparison.Ordinal))
+            {
+                SelectedIndex = i;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Index of the selection, for restoring it after a rebuild.</summary>
+    public int Index => SelectedIndex;
 
     private void Refilter()
     {
@@ -186,8 +235,9 @@ public sealed class TermSelector
         if (Title.Length > 0)
             lines.Add(("  " + Title, textFg, true, false));
 
-        // Search row. The arrow marks it as the focused input; the block cursor follows the text.
-        lines.Add(("  → " + Query + "█", textFg, false, false));
+        // Search row. The arrow marks it as the focused input; the caret follows the text so it
+        // reads as a field you are typing into rather than a static label.
+        lines.Add(("  → " + Query + "▏", textFg, false, false));
 
         if (_visible.Count == 0)
         {
@@ -246,8 +296,10 @@ public sealed class TermSelector
         {
             var (text, fg, bold, highlight) = lines[i];
 
-            if (highlight)
-                buffer.FillRect(0, y, width, 1, ' ', bg: selectedBg);
+            // Clear the whole row first. The selector is drawn over a live transcript, so
+            // without this the previous frame's text shows through wherever the new line is
+            // shorter — which reads as garbled rows rather than a list.
+            buffer.FillRect(0, y, width, 1, ' ', bg: highlight ? selectedBg : "");
 
             buffer.Print(0, y, text, fg: fg, bold: bold,
                 bg: highlight ? selectedBg : "", maxWidth: width);

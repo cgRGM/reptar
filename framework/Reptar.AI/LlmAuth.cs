@@ -9,6 +9,28 @@ namespace Reptar.AI;
 /// Mirrors the provider registry approach used by pi (provider catalog) and
 /// opencode (models.dev), scoped to the wire formats Reptar speaks natively.
 /// </summary>
+/// <summary>
+/// One additional value a provider needs beyond its API key, such as a Cloudflare account id.
+/// </summary>
+/// <param name="Name">Placeholder name, substituted into <see cref="ProviderInfo.DefaultBaseUrl"/>.</param>
+/// <param name="Label">What to ask the user for.</param>
+/// <param name="EnvVar">Environment variable that can supply it instead.</param>
+/// <param name="Required">Whether the provider cannot work without it.</param>
+public sealed record ProviderField(string Name, string Label, string EnvVar, bool Required = true);
+
+/// <summary>How a provider can be signed in to.</summary>
+public enum ProviderAuth
+{
+    /// <summary>An API key or token, entered by the user.</summary>
+    ApiKey,
+
+    /// <summary>A coding subscription signed in through the browser (OAuth device flow).</summary>
+    Account,
+
+    /// <summary>Either method works.</summary>
+    Both
+}
+
 public sealed record ProviderInfo(
     string Key,
     string DisplayName,
@@ -19,9 +41,20 @@ public sealed record ProviderInfo(
     bool RequiresApiKey = true,
     string? KeyUrl = null,
     string? Note = null,
-    bool RequiresBaseUrl = false)
+    bool RequiresBaseUrl = false,
+    IReadOnlyList<ProviderField>? Fields = null,
+    ProviderAuth Auth = ProviderAuth.ApiKey)
 {
     public bool Matches(string name) => Key.Equals(name, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Extra values this provider needs, if any.</summary>
+    public IReadOnlyList<ProviderField> ExtraFields => Fields ?? [];
+
+    /// <summary>True when the base URL has <c>{placeholder}</c> segments to fill in.</summary>
+    public bool HasUrlTemplate => DefaultBaseUrl.Contains('{', StringComparison.Ordinal);
+
+    /// <summary>True when this provider can be signed in to with a coding subscription.</summary>
+    public bool SupportsAccountSignIn => Auth is ProviderAuth.Account or ProviderAuth.Both;
 }
 
 /// <summary>
@@ -38,6 +71,7 @@ public static class LlmProviders
     public const string Gateway = "gateway";
     public const string OpenCode = "opencode";
     public const string CloudflareGateway = "cloudflare-gateway";
+    public const string CloudflareWorkersAi = "cloudflare-workers-ai";
     public const string Echo = "echo";
 
     public static readonly ProviderInfo[] Known =
@@ -45,11 +79,13 @@ public static class LlmProviders
         new(OpenAi, "OpenAI",
             ["OPENAI_API_KEY"], "OPENAI_BASE_URL",
             "https://api.openai.com/v1", "gpt-4o-mini",
-            KeyUrl: "platform.openai.com/api-keys"),
+            KeyUrl: "platform.openai.com/api-keys",
+            Auth: ProviderAuth.Both),
         new(Anthropic, "Anthropic (Claude)",
             ["ANTHROPIC_API_KEY"], "ANTHROPIC_BASE_URL",
             "https://api.anthropic.com", "claude-sonnet-4-5",
-            KeyUrl: "console.anthropic.com/settings/keys"),
+            KeyUrl: "console.anthropic.com/settings/keys",
+            Auth: ProviderAuth.Both),
         new(Gemini, "Google Gemini",
             ["GEMINI_API_KEY", "GOOGLE_API_KEY"], "GEMINI_BASE_URL",
             "https://generativelanguage.googleapis.com", "gemini-2.5-flash",
@@ -62,7 +98,8 @@ public static class LlmProviders
         new(OpenRouter, "OpenRouter",
             ["OPENROUTER_API_KEY"], null,
             "https://openrouter.ai/api/v1", "openai/gpt-4o-mini",
-            KeyUrl: "openrouter.ai/settings/keys"),
+            KeyUrl: "openrouter.ai/settings/keys",
+            Auth: ProviderAuth.Both),
         new(Gateway, "Vercel AI Gateway",
             ["AI_GATEWAY_API_KEY"], null,
             "https://ai-gateway.vercel.sh/v1", "openai/gpt-4o-mini",
@@ -70,15 +107,109 @@ public static class LlmProviders
         new(OpenCode, "OpenCode Zen",
             ["OPENCODE_API_KEY"], null,
             "https://opencode.ai/zen/v1", "anthropic/claude-sonnet-5-5",
-            KeyUrl: "opencode.ai/zen"),
+            KeyUrl: "opencode.ai/zen",
+            Auth: ProviderAuth.Both),
+        new(CloudflareWorkersAi, "Cloudflare Workers AI",
+            ["CLOUDFLARE_API_KEY"], null,
+            "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+            "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+            KeyUrl: "dash.cloudflare.com/profile/api-tokens",
+            Note: "Runs @cf/* models on Cloudflare's edge; needs your account id",
+            Fields:
+            [
+                new("account_id", "Cloudflare account id", "CLOUDFLARE_ACCOUNT_ID")
+            ]),
         new(CloudflareGateway, "Cloudflare AI Gateway",
-            [], null,
-            "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}",
+            ["CLOUDFLARE_API_KEY"], null,
+            "https://gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/compat/chat/completions",
             "openai/gpt-4o-mini",
             KeyUrl: "dash.cloudflare.com → AI Gateway",
-            Note: "URL needs your account + gateway ids; the API key is the upstream provider's",
-            RequiresBaseUrl: true)
+            Note: "Proxies any provider through your gateway; needs account + gateway ids",
+            Fields:
+            [
+                new("account_id", "Cloudflare account id", "CLOUDFLARE_ACCOUNT_ID"),
+                new("gateway_id", "AI Gateway id", "CLOUDFLARE_GATEWAY_ID")
+            ])
     ];
+
+    /// <summary>
+    /// Resolves a provider's base URL, substituting any <c>{placeholder}</c> segments from the
+    /// saved credential or the environment.
+    /// </summary>
+    /// <remarks>
+    /// Cloudflare needs this: Workers AI lives at
+    /// <c>.../accounts/{account_id}/ai/v1</c> and AI Gateway at
+    /// <c>.../v1/{account_id}/{gateway_id}/…</c>. Without the substitution the request goes to a
+    /// URL containing a literal <c>{account_id}</c>, which fails in a way that looks like an auth
+    /// error rather than a configuration one.
+    /// </remarks>
+    public static string ResolveBaseUrl(
+        ProviderInfo info,
+        string? explicitUrl,
+        ProviderCredential? saved)
+    {
+        var template = explicitUrl
+            ?? saved?.BaseUrl
+            ?? info.DefaultBaseUrl;
+
+        if (!template.Contains('{', StringComparison.Ordinal))
+            return template;
+
+        var resolved = template;
+
+        foreach (var field in info.ExtraFields)
+        {
+            var value = FirstNonEmpty(
+                saved?.Fields.GetValueOrDefault(field.Name),
+                Environment.GetEnvironmentVariable(field.EnvVar));
+
+            if (value is { Length: > 0 })
+                resolved = resolved.Replace("{" + field.Name + "}", value, StringComparison.Ordinal);
+        }
+
+        return resolved;
+    }
+
+    /// <summary>
+    /// Values still missing for a provider to work: a required key, or a required placeholder
+    /// with no value in the credential or the environment.
+    /// </summary>
+    public static IReadOnlyList<string> MissingRequirements(
+        ProviderInfo info,
+        ProviderCredential? saved,
+        string? apiKey)
+    {
+        var missing = new List<string>();
+
+        if (info.RequiresApiKey && string.IsNullOrEmpty(apiKey) && string.IsNullOrEmpty(saved?.ApiKey))
+            missing.Add("api key");
+
+        foreach (var field in info.ExtraFields)
+        {
+            if (!field.Required)
+                continue;
+
+            var value = FirstNonEmpty(
+                saved?.Fields.GetValueOrDefault(field.Name),
+                Environment.GetEnvironmentVariable(field.EnvVar));
+
+            if (value is null or { Length: 0 })
+                missing.Add(field.Label);
+        }
+
+        return missing;
+    }
+
+    private static string? FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+
+        return null;
+    }
 
     public static ProviderInfo? Find(string key) =>
         Known.FirstOrDefault(p => p.Matches(key));
@@ -133,7 +264,12 @@ public static class LlmProviders
 public sealed record ProviderCredential(
     string? ApiKey,
     string? BaseUrl,
-    string? DefaultModel);
+    string? DefaultModel,
+    IReadOnlyDictionary<string, string>? Extra = null)
+{
+    /// <summary>Extra values such as an account id, keyed by <see cref="ProviderField.Name"/>.</summary>
+    public IReadOnlyDictionary<string, string> Fields => Extra ?? new Dictionary<string, string>();
+}
 
 /// <summary>
 /// File-backed credential store. One credential per provider key, flat JSON map:

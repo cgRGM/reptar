@@ -122,7 +122,8 @@ public static class LlmCatalog
         [LlmProviders.Ollama] = "ollama",
         [LlmProviders.OpenRouter] = "openrouter",
         [LlmProviders.Gateway] = "openai",
-        [LlmProviders.CloudflareGateway] = "openai"
+        [LlmProviders.CloudflareGateway] = "openai",
+        [LlmProviders.CloudflareWorkersAi] = "cloudflare-workers-ai"
     };
 
     public static bool HasCuratedModels(string providerKey) =>

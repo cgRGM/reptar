@@ -138,7 +138,10 @@ public sealed class ReptarTerm : IDisposable
         /// <summary>The model list, scoped to configured providers.</summary>
         Models,
 
-        /// <summary>The provider list — what <c>/connect</c> opens with.</summary>
+        /// <summary>Choose how to sign in: with an account, or with an API key.</summary>
+        PickAuthMethod,
+
+        /// <summary>The provider list, filtered to the chosen auth method.</summary>
         PickProvider,
 
         /// <summary>The API-key prompt for one provider.</summary>
@@ -146,6 +149,12 @@ public sealed class ReptarTerm : IDisposable
     }
 
     private ProviderStage _providerStage = ProviderStage.Models;
+
+    /// <summary>Which auth method the provider list is filtered by.</summary>
+    private ProviderAuth _authMethod = ProviderAuth.ApiKey;
+
+    /// <summary>Auth-method selector shown first by <c>/connect</c>.</summary>
+    private TermSelector? _authSelector;
     private int _selectedProviderIdx;
 
     /// <summary>Searchable model list, built from configured providers only.</summary>
@@ -163,9 +172,13 @@ public sealed class ReptarTerm : IDisposable
     /// <summary>Which selector currently owns the composer slot, if any.</summary>
     private TermSelector? ActiveSelector => _overlay switch
     {
-        TermOverlay.Providers => _providerStage == ProviderStage.PickProvider
-            ? _providerSelector
-            : _providerStage == ProviderStage.Models ? _modelSelector : null,
+        TermOverlay.Providers => _providerStage switch
+        {
+            ProviderStage.PickAuthMethod => _authSelector,
+            ProviderStage.PickProvider => _providerSelector,
+            ProviderStage.Models => _modelSelector,
+            _ => null
+        },
         TermOverlay.Settings => _settingsSelector,
         TermOverlay.Tree => _treeSelector,
         _ => null
@@ -175,6 +188,15 @@ public sealed class ReptarTerm : IDisposable
     private string _keyInputProvider = "";
     private string? _keyInputModel = null;
     private string _keyInputBuffer = "";
+
+    /// <summary>Which provider field is being collected, or -1 while collecting the key.</summary>
+    private int _keyFieldIndex = -1;
+
+    /// <summary>Values collected so far for the provider being connected.</summary>
+    private readonly Dictionary<string, string> _keyFieldValues = new(StringComparer.Ordinal);
+
+    /// <summary>True when Enter was pressed on an empty required field.</summary>
+    private bool _keyFieldRequired;
 
     public sealed record CatalogModelItem(
         string ModelId,
@@ -373,7 +395,7 @@ public sealed class ReptarTerm : IDisposable
                 if (found is not null)
                 {
                     _session = found;
-                    _messages.AddRange(await LoadBranchAsync(found.Id).ConfigureAwait(false));
+                    ReplaceTranscript(await LoadBranchAsync(found.Id).ConfigureAwait(false));
                 }
             }
             if (_session is null)
@@ -615,16 +637,30 @@ public sealed class ReptarTerm : IDisposable
     }
 
     /// <summary>
-    /// The commands the slash dropdown should show right now. Empty when the input is not a bare
-    /// command name — once there is a space, the dropdown is done and Enter submits.
+    /// The commands the slash dropdown should show right now, ranked by name.
     /// </summary>
+    /// <remarks>
+    /// An empty result means the query matched no command name. The caller keeps the list open
+    /// and shows "no matches" rather than closing it, because a menu that disappears on a typo is
+    /// indistinguishable from a menu that is broken.
+    /// </remarks>
     private List<PaletteCommand> SlashMatches()
     {
-        if (!_input.StartsWith('/') || _input.Contains(' '))
+        if (!SlashCommands.IsCompleting(_input))
             return [];
 
-        return GetPaletteCommands();
+        var all = GetPaletteCommands();
+        var ranked = SlashCommands.Match(
+            _input,
+            [.. all.Select(command => new SlashCommand(command.Name, command.Hint, command.Desc))]);
+
+        // Map back in the ranked order.
+        var byName = all.ToDictionary(command => command.Name, StringComparer.Ordinal);
+        return [.. ranked.Select(command => byName[command.Name])];
     }
+
+    /// <summary>True when the dropdown is open, even if nothing matches.</summary>
+    private bool SlashListOpen => SlashCommands.IsCompleting(_input);
 
     private void ShowHelpMessage()
     {
@@ -653,6 +689,8 @@ public sealed class ReptarTerm : IDisposable
 
     private void OpenModelCatalog()
     {
+        var alreadyOpen = _overlay == TermOverlay.Providers && _providerStage == ProviderStage.Models;
+
         _overlay = TermOverlay.Providers;
         _providerStage = ProviderStage.Models;
         _keyInputActive = false;
@@ -661,6 +699,8 @@ public sealed class ReptarTerm : IDisposable
 
         if (_modelSelector is null || _catalog.Count == 0)
             RebuildModelSelector();
+        else if (!alreadyOpen)
+            _modelSelector.ClearQuery();   // a fresh open starts from the full list
     }
 
     /// <summary>
@@ -688,9 +728,7 @@ public sealed class ReptarTerm : IDisposable
         }
 
         _session = fork;
-        _messages.Clear();
-        _messages.AddRange(await _tree.LoadBranchAsync(fork.Id).ConfigureAwait(false));
-        _persistedCount = _messages.Count;
+        ReplaceTranscript(await _tree.LoadBranchAsync(fork.Id).ConfigureAwait(false));
 
         await RefreshSessionsListAsync().ConfigureAwait(false);
 
@@ -787,10 +825,15 @@ public sealed class ReptarTerm : IDisposable
 
     private void OpenSettingsMenu()
     {
+        var alreadyOpen = _overlay == TermOverlay.Settings;
+
         _overlay = TermOverlay.Settings;
         _input = "";
         _inputCursor = 0;
         RebuildSettingsSelector();
+
+        if (!alreadyOpen)
+            _settingsSelector?.ClearQuery();
     }
 
     /// <summary>
@@ -809,10 +852,10 @@ public sealed class ReptarTerm : IDisposable
             return;
         }
 
-        _providerStage = ProviderStage.PickProvider;
+        _providerStage = ProviderStage.PickAuthMethod;
         _keyInputActive = false;
         _selectedProviderIdx = 0;
-        RebuildProviderSelector();
+        RebuildAuthMethodSelector();
     }
 
     private void BeginKeyEntry(string providerKey, string? targetModel = null)
@@ -822,6 +865,30 @@ public sealed class ReptarTerm : IDisposable
         _keyInputProvider = providerKey;
         _keyInputModel = targetModel;
         _keyInputBuffer = "";
+        _keyFieldIndex = -1;
+        _keyFieldValues.Clear();
+    }
+
+    /// <summary>The provider fields still to collect for the one being connected.</summary>
+    private IReadOnlyList<ProviderField> PendingFields
+    {
+        get
+        {
+            var info = LlmProviders.Find(_keyInputProvider);
+            return info?.ExtraFields ?? [];
+        }
+    }
+
+    /// <summary>What the key prompt is currently asking for.</summary>
+    private string CurrentKeyPrompt
+    {
+        get
+        {
+            var fields = PendingFields;
+            return _keyFieldIndex >= 0 && _keyFieldIndex < fields.Count
+                ? fields[_keyFieldIndex].Label
+                : "api key";
+        }
     }
 
     /// <summary>
@@ -851,8 +918,10 @@ public sealed class ReptarTerm : IDisposable
             await AppendAsync(message).ConfigureAwait(false);
     }
 
-    /// <summary>Providers in display order, with the ones already configured marked.</summary>
-    private List<ProviderInfo> ConnectableProviders() => [.. LlmProviders.Known];
+    /// <summary>Providers in display order, filtered by the chosen auth method.</summary>
+    private List<ProviderInfo> ConnectableProviders() => _authMethod == ProviderAuth.Account
+        ? [.. LlmProviders.Known.Where(provider => provider.SupportsAccountSignIn)]
+        : [.. LlmProviders.Known];
 
     /// <summary>
     /// Rebuilds the model selector from the live catalog. Only configured providers appear, and
@@ -868,47 +937,103 @@ public sealed class ReptarTerm : IDisposable
             $"Model Name: {(model.DisplayName.Length > 0 ? model.DisplayName : model.ModelId)}",
             model));
 
-        _modelSelector = new TermSelector("", items, Math.Max(6, ComposerRow - 12))
+        // Reuse the instance: a refresh after connecting must not clear what you were typing.
+        if (_modelSelector is null)
         {
-            Notice = "Only showing models from configured providers. Use /login to add providers.",
-            Hint = "Type to search · Enter to select · Ctrl+S set as default · Esc cancel"
-        };
+            _modelSelector = new TermSelector("", items, Math.Max(6, ComposerRow - 12));
+        }
+        else
+        {
+            _modelSelector.SetItems(items);
+        }
+
+        _modelSelector.Notice = "Only showing models from configured providers. Use /connect to add one.";
+        _modelSelector.Hint = "Type to search · Enter to select · Ctrl+S set as default · Esc cancel";
     }
 
     private bool IsCurrentModel(string modelId) =>
         string.Equals(_client.Config.Model, modelId, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// The first step of <c>/connect</c>, matching pi: choose how you want to sign in, then pick
+    /// a provider. The two lists differ because subscription-backed providers are not the same
+    /// set as API-key ones.
+    /// </summary>
+    private void RebuildAuthMethodSelector()
+    {
+        var accountProviders = LlmProviders.Known.Count(provider => provider.SupportsAccountSignIn);
+
+        var items = new List<TermSelectorItem>
+        {
+            new("Sign in with an account",
+                $"{accountProviders} providers",
+                accountProviders == 0 ? "· not available yet" : "",
+                _authMethod == ProviderAuth.Account,
+                "Use a coding subscription you already pay for.",
+                ProviderAuth.Account),
+            new("Sign in with an API key",
+                $"{LlmProviders.Known.Length} providers",
+                "",
+                _authMethod == ProviderAuth.ApiKey,
+                "Paste a key from the provider's dashboard.",
+                ProviderAuth.ApiKey)
+        };
+
+        _authSelector = new TermSelector("Select authentication method:", items, Math.Max(4, ComposerRow - 10))
+        {
+            Hint = "↑↓ navigate · enter select · esc cancel"
+        };
+    }
+
     /// <summary>Rebuilds the provider selector with pi's status vocabulary.</summary>
+    /// <summary>
+    /// The provider list, as pi draws it: a name and whether it is configured. No model column —
+    /// the model is a separate decision, and putting it here made the list read like a model
+    /// picker with a provider prefix.
+    /// </summary>
     private void RebuildProviderSelector()
     {
-        var items = LlmProviders.Known.Select(provider =>
+        var providers = _authMethod == ProviderAuth.Account
+            ? LlmProviders.Known.Where(provider => provider.SupportsAccountSignIn)
+            : LlmProviders.Known;
+
+        var items = providers.Select(provider =>
         {
             var (source, detail) = LlmProviders.CredentialSource(provider.Key, _auth);
+            var saved = _auth.Get(provider.Key);
+            var missing = LlmProviders.MissingRequirements(provider, saved, saved?.ApiKey);
 
             var status = source switch
             {
-                "env" => $"✓ {detail}",
-                "saved" => "✓ stored",
-                _ => provider.RequiresApiKey ? "· not configured" : "✓ no key needed"
+                "env" when missing.Count == 0 => $"✓ {detail}",
+                "saved" when missing.Count == 0 => "✓ stored",
+                _ when !provider.RequiresApiKey && missing.Count == 0 => "✓ no key needed",
+                _ when missing.Count == 0 => "· not configured",
+                _ => $"· needs {string.Join(" + ", missing)}"
             };
 
-            var description = !string.IsNullOrEmpty(provider.KeyUrl)
-                ? $"Get a key at {provider.KeyUrl}"
-                : provider.Note ?? provider.DisplayName;
+            var description = _authMethod == ProviderAuth.Account
+                ? "Account sign-in is not implemented yet — use an API key for now."
+                : !string.IsNullOrEmpty(provider.KeyUrl)
+                    ? $"Get a key at {provider.KeyUrl}"
+                    : provider.Note ?? provider.DisplayName;
 
             return new TermSelectorItem(
                 provider.DisplayName,
-                provider.DefaultModel,
+                "",
                 status,
                 string.Equals(_client.Config.ProviderKey, provider.Key, StringComparison.OrdinalIgnoreCase),
                 description,
                 provider);
         });
 
-        _providerSelector = new TermSelector("Select provider to configure:", items, Math.Max(6, ComposerRow - 12))
-        {
-            Hint = "Type to search · Enter to configure · Esc cancel"
-        };
+        if (_providerSelector is null)
+            _providerSelector = new TermSelector("Select provider to configure:", items, Math.Max(6, ComposerRow - 12));
+        else
+            _providerSelector.SetItems(items);
+
+        _providerSelector.Hint = "Type to search · Enter to configure · Esc back";
+        _providerSelector.Status = "";
     }
 
     /// <summary>
@@ -953,10 +1078,12 @@ public sealed class ReptarTerm : IDisposable
                 Value: "showThinking")
         };
 
-        _settingsSelector = new TermSelector("Settings", items, Math.Max(6, ComposerRow - 14))
-        {
-            Hint = "Type to search · Enter/Space to change · Esc cancel"
-        };
+        if (_settingsSelector is null)
+            _settingsSelector = new TermSelector("Settings", items, Math.Max(6, ComposerRow - 14));
+        else
+            _settingsSelector.SetItems(items);
+
+        _settingsSelector.Hint = "Type to search · Enter/Space to change · Esc cancel";
     }
 
     /// <summary>
@@ -1162,11 +1289,14 @@ public sealed class ReptarTerm : IDisposable
         if (_slashDropdownOpen)
         {
             var commands = SlashMatches();
+
             if (commands.Count == 0)
             {
-                _slashDropdownOpen = false;
+                // Nothing matched, but the list stays open so the user can keep typing or
+                // backspace. Escape is the only thing that closes it here.
+                return false;
             }
-            else
+
             {
                 if (key.Key == ConsoleKey.UpArrow)
                 {
@@ -1310,7 +1440,7 @@ public sealed class ReptarTerm : IDisposable
                 }
                 else if (cmdPart is "/clear")
                 {
-                    _messages.Clear();
+                    ReplaceTranscript([]);
                 }
                 else if (cmdPart is "/new")
                 {
@@ -1496,11 +1626,11 @@ public sealed class ReptarTerm : IDisposable
     {
         // pi's trigger: a slash at the very start with no space yet. Once you type an argument
         // the list closes and Enter submits, which is what makes the flow feel like one gesture.
-        if (_input.StartsWith('/') && !_input.Contains(' '))
+        if (SlashCommands.IsCompleting(_input))
         {
             _slashDropdownOpen = true;
             _fileDropdownOpen = false;
-            _paletteFilter = _input[1..];
+            _paletteFilter = SlashCommands.Query(_input);
             _slashSelectedIdx = 0;
             return;
         }
@@ -1549,8 +1679,7 @@ public sealed class ReptarTerm : IDisposable
         {
             var target = _sessionsList[_selectedSessionIdx];
             _session = target;
-            _messages.Clear();
-            _messages.AddRange(await LoadBranchAsync(target.Id).ConfigureAwait(false));
+            ReplaceTranscript(await LoadBranchAsync(target.Id).ConfigureAwait(false));
             _overlay = TermOverlay.None;
             _input = "";
             _inputCursor = 0;
@@ -1688,9 +1817,7 @@ public sealed class ReptarTerm : IDisposable
 
         await _tree.SetLeafAsync(_session.Id, entryId).ConfigureAwait(false);
 
-        _messages.Clear();
-        _messages.AddRange(await _tree.LoadBranchAsync(_session.Id).ConfigureAwait(false));
-        _persistedCount = _messages.Count;
+        ReplaceTranscript(await _tree.LoadBranchAsync(_session.Id).ConfigureAwait(false));
 
         CloseOverlay();
 
@@ -1714,6 +1841,7 @@ public sealed class ReptarTerm : IDisposable
     {
         _overlay = TermOverlay.None;
         _providerStage = ProviderStage.Models;
+        _authMethod = ProviderAuth.ApiKey;
         _keyInputActive = false;
         _keyInputBuffer = "";
     }
@@ -1724,8 +1852,28 @@ public sealed class ReptarTerm : IDisposable
         if (selector.Selected is not { } item)
             return;
 
+        if (selector == _authSelector && item.Value is ProviderAuth method)
+        {
+            _authMethod = method;
+            _providerStage = ProviderStage.PickProvider;
+            RebuildProviderSelector();
+            _dirty = true;
+            return;
+        }
+
         if (selector == _providerSelector && item.Value is ProviderInfo provider)
         {
+            // Account sign-in is not implemented; say so instead of dropping into a key prompt
+            // that would look like the same flow under a different name.
+            if (_authMethod == ProviderAuth.Account)
+            {
+                _providerSelector.Status =
+                    $"{provider.DisplayName}: account sign-in is not implemented yet. " +
+                    "Go back and choose an API key.";
+                _dirty = true;
+                return;
+            }
+
             if (!provider.RequiresApiKey)
             {
                 ActivateProvider(provider.Key, provider.DefaultModel);
@@ -1863,223 +2011,125 @@ public sealed class ReptarTerm : IDisposable
                 break;
         }
 
+        // SetItems restores the selection by label, so the list stays where it was.
         RebuildSettingsSelector();
         _dirty = true;
     }
 
+    /// <summary>
+    /// One Enter in the key flow: collect the key, then each provider field in turn, then
+    /// activate. Each step is a single line, so the flow reads as a short sequence rather than a
+    /// form.
+    /// </summary>
+    private void AdvanceKeyEntry()
+    {
+        var provider = LlmProviders.Find(_keyInputProvider) ?? LlmProviders.Known[0];
+        var fields = PendingFields;
+
+        if (_keyFieldIndex < 0)
+        {
+            if (!string.IsNullOrWhiteSpace(_keyInputBuffer))
+                _keyFieldValues["api_key"] = _keyInputBuffer.Trim();
+
+            _keyInputBuffer = "";
+            _keyFieldRequired = false;
+
+            if (fields.Count > 0)
+            {
+                _keyFieldIndex = 0;
+                _dirty = true;
+                return;
+            }
+        }
+        else if (_keyFieldIndex < fields.Count)
+        {
+            var field = fields[_keyFieldIndex];
+
+            if (_keyInputBuffer.Trim().Length == 0)
+            {
+                _keyFieldRequired = true;
+                _dirty = true;
+                return;
+            }
+
+            _keyFieldValues[field.Name] = _keyInputBuffer.Trim();
+            _keyInputBuffer = "";
+            _keyFieldRequired = false;
+            _keyFieldIndex++;
+
+            if (_keyFieldIndex < fields.Count)
+            {
+                _dirty = true;
+                return;
+            }
+        }
+
+        var modelToSet = _keyInputModel
+            ?? _catalog.FirstOrDefault(m => m.ProviderKey == provider.Key)?.ModelId
+            ?? provider.DefaultModel;
+
+        _auth.Set(provider.Key, new ProviderCredential(
+            ApiKey: _keyFieldValues.GetValueOrDefault("api_key"),
+            BaseUrl: provider.HasUrlTemplate ? null : provider.DefaultBaseUrl,
+            DefaultModel: modelToSet,
+            Extra: _keyFieldValues
+                .Where(pair => pair.Key != "api_key")
+                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal)));
+
+        _keyFieldIndex = -1;
+        ActivateProvider(provider.Key, modelToSet);
+    }
+
+    /// <summary>
+    /// Keys for the provider overlay's key-entry stage. The list stages are handled by
+    /// <see cref="HandleSelectorKeyAsync"/> because they are <see cref="TermSelector"/>s.
+    /// </summary>
     private void HandleProvidersKey(TermKey key)
     {
-        // Stage 1: choose who to connect to.
-        if (_providerStage == ProviderStage.PickProvider)
-        {
-            var providers = ConnectableProviders();
-
-            if (key.Key == ConsoleKey.Escape || key.Ch is 'q' or 'Q')
-            {
-                _overlay = TermOverlay.None;
-                return;
-            }
-
-            if (key.Key == ConsoleKey.UpArrow && providers.Count > 0)
-            {
-                _selectedProviderIdx = (_selectedProviderIdx - 1 + providers.Count) % providers.Count;
-                return;
-            }
-
-            if (key.Key == ConsoleKey.DownArrow && providers.Count > 0)
-            {
-                _selectedProviderIdx = (_selectedProviderIdx + 1) % providers.Count;
-                return;
-            }
-
-            if (key.Key == ConsoleKey.Enter && providers.Count > 0)
-            {
-                var provider = providers[Math.Clamp(_selectedProviderIdx, 0, providers.Count - 1)];
-
-                // Local providers need no credential: activate immediately.
-                if (!provider.RequiresApiKey)
-                {
-                    ActivateProvider(provider.Key, provider.DefaultModel);
-                    return;
-                }
-
-                BeginKeyEntry(provider.Key);
-                return;
-            }
-
+        if (!_keyInputActive)
             return;
-        }
 
-        var models = GetFilteredCatalog();
-        if (_selectedCatalogIdx >= models.Count)
-            _selectedCatalogIdx = Math.Max(0, models.Count - 1);
-
-        var currentModel = models.Count > 0 ? models[_selectedCatalogIdx] : null;
-
-        // 1. If inline key input is active
-        if (_keyInputActive)
+        if (key.Key == ConsoleKey.Escape)
         {
-            if (key.Key == ConsoleKey.Escape)
-            {
-                _keyInputActive = false;
-                _keyInputBuffer = "";
-                _providerStage = ProviderStage.PickProvider;
-                return;
-            }
-
-            if (key.Key == ConsoleKey.Enter)
-            {
-                var provider = LlmProviders.Find(_keyInputProvider) ?? LlmProviders.Known[0];
-                var modelToSet = _keyInputModel ?? currentModel?.ModelId ?? provider.DefaultModel;
-
-                if (!string.IsNullOrWhiteSpace(_keyInputBuffer))
-                {
-                    _auth.Set(provider.Key, new ProviderCredential(
-                        ApiKey: _keyInputBuffer.Trim(),
-                        BaseUrl: provider.DefaultBaseUrl,
-                        DefaultModel: modelToSet
-                    ));
-                }
-
-                ActivateProvider(provider.Key, modelToSet);
-                return;
-            }
-
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (_keyInputBuffer.Length > 0)
-                    _keyInputBuffer = _keyInputBuffer[..^1];
-                return;
-            }
-
-            if (key.PastedText is { Length: > 0 } paste)
-            {
-                _keyInputBuffer += paste.Trim();
-                return;
-            }
-
-            if ((key.Ch is 'o' or 'O') && _keyInputBuffer.Length == 0)
-            {
-                var p = LlmProviders.Find(_keyInputProvider);
-                var url = p?.KeyUrl ?? (_keyInputProvider == LlmProviders.Ollama ? "ollama.com/download" : null);
-                if (url is not null)
-                    OpenBrowser(url);
-                return;
-            }
-
-            if (key.Ch is not '\0' && !char.IsControl(key.Ch))
-            {
-                _keyInputBuffer += key.Ch;
-            }
-            return;
-        }
-
-        // 2. Normal catalog browsing
-        if (key.Key == ConsoleKey.Escape || key.Ch is 'q' or 'Q')
-        {
-            _overlay = TermOverlay.None;
-            _input = "";
-            _inputCursor = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.Tab)
-        {
-            _providerCategoryIdx = (_providerCategoryIdx + 1) % _providerCategories.Count;
-            _selectedCatalogIdx = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.LeftArrow)
-        {
-            _providerCategoryIdx = (_providerCategoryIdx - 1 + _providerCategories.Count) % _providerCategories.Count;
-            _selectedCatalogIdx = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.RightArrow)
-        {
-            _providerCategoryIdx = (_providerCategoryIdx + 1) % _providerCategories.Count;
-            _selectedCatalogIdx = 0;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.UpArrow && models.Count > 0)
-        {
-            _selectedCatalogIdx = (_selectedCatalogIdx - 1 + models.Count) % models.Count;
-            return;
-        }
-
-        if (key.Key == ConsoleKey.DownArrow && models.Count > 0)
-        {
-            _selectedCatalogIdx = (_selectedCatalogIdx + 1) % models.Count;
-            return;
-        }
-
-        if (key.Ch is 'o' or 'O' && currentModel is not null)
-        {
-            var p = LlmProviders.Find(currentModel.ProviderKey);
-            var url = p?.KeyUrl ?? (currentModel.ProviderKey == LlmProviders.Ollama ? "ollama.com/download" : null);
-            if (url is not null)
-                OpenBrowser(url);
-
-            _keyInputActive = true;
-            _keyInputProvider = currentModel.ProviderKey;
-            _keyInputModel = currentModel.ModelId;
+            _keyInputActive = false;
             _keyInputBuffer = "";
+            _providerStage = ProviderStage.PickProvider;
+            RebuildProviderSelector();
             return;
         }
 
-        if (key.Ch is 'c' or 'C' && currentModel is not null)
+        if (key.Key == ConsoleKey.Enter)
         {
-            _keyInputActive = true;
-            _keyInputProvider = currentModel.ProviderKey;
-            _keyInputModel = currentModel.ModelId;
-            _keyInputBuffer = "";
-            return;
-        }
-
-        if (key.Key == ConsoleKey.Enter && currentModel is not null)
-        {
-            var (source, _) = LlmProviders.CredentialSource(currentModel.ProviderKey, _auth);
-            var isLocal = currentModel.ProviderKey == LlmProviders.Ollama;
-            var isConfigured = source != "none" || isLocal;
-
-            if (isConfigured)
-            {
-                _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(
-                    _options with { Provider = currentModel.ProviderKey, Model = currentModel.ModelId }));
-                _auth.SetDefault(currentModel.ProviderKey);
-                UpdateStatusRibbon();
-                _messages.Add(new ChatMessage("assistant", $"Switched active model to **{currentModel.ModelId}** ({currentModel.ProviderDisplayName})."));
-                _overlay = TermOverlay.None;
-            }
-            else
-            {
-                _keyInputActive = true;
-                _keyInputProvider = currentModel.ProviderKey;
-                _keyInputModel = currentModel.ModelId;
-                _keyInputBuffer = "";
-            }
+            AdvanceKeyEntry();
             return;
         }
 
         if (key.Key == ConsoleKey.Backspace)
         {
-            if (_providerFilterText.Length > 0)
-            {
-                _providerFilterText = _providerFilterText[..^1];
-                _selectedCatalogIdx = 0;
-            }
+            if (_keyInputBuffer.Length > 0)
+                _keyInputBuffer = _keyInputBuffer[..^1];
+            return;
+        }
+
+        if (key.PastedText is { Length: > 0 } paste)
+        {
+            _keyInputBuffer += paste.Trim();
+            return;
+        }
+
+        if ((key.Ch is 'o' or 'O') && _keyInputBuffer.Length == 0 && _keyFieldIndex < 0)
+        {
+            var provider = LlmProviders.Find(_keyInputProvider);
+            var url = provider?.KeyUrl ?? (_keyInputProvider == LlmProviders.Ollama ? "ollama.com/download" : null);
+            if (url is not null)
+                OpenBrowser(url);
             return;
         }
 
         if (key.Ch is not '\0' && !char.IsControl(key.Ch))
-        {
-            _providerFilterText += key.Ch;
-            _selectedCatalogIdx = 0;
-        }
+            _keyInputBuffer += key.Ch;
     }
+
 
     private async Task SendChatMessageAsync(string prompt)
     {
@@ -2451,9 +2501,7 @@ public sealed class ReptarTerm : IDisposable
 
         // The TUI keeps the raw transcript for scrollback; only the model-facing projection
         // shrinks. Persisting keeps the session reloadable.
-        _messages.Clear();
-        _messages.AddRange(projection);
-        _persistedCount = _messages.Count;
+        ReplaceTranscript(projection);
 
         _statusNote = $"compacted {result.TokensBefore:N0} → {result.EstimatedTokensAfter:N0} tokens";
         _messages.Add(new ChatMessage("assistant",
@@ -2528,9 +2576,28 @@ public sealed class ReptarTerm : IDisposable
     {
         if (_store is null) return;
         _session = await _store.CreateSessionAsync("New chat").ConfigureAwait(false);
-        _messages.Clear();
+        ReplaceTranscript([]);
         _input = "";
         await RefreshSessionsListAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Swaps the visible transcript and resets everything derived from it: scroll position, tool
+    /// cards, and the persistence cursor. Anything that replaces the conversation goes through
+    /// here so switching sessions cannot leave you scrolled up in a list of another session's
+    /// tool cards.
+    /// </summary>
+    private void ReplaceTranscript(IEnumerable<ChatMessage> messages)
+    {
+        _messages.Clear();
+        _messages.AddRange(messages);
+        _persistedCount = _messages.Count;
+        _scrollOffset = 0;
+        _toolCards.Clear();
+        _activePlanSteps.Clear();
+        _streamingText = "";
+        _thinkingText = "";
+        _dirty = true;
     }
 
     private async Task RefreshSessionsListAsync()
@@ -2617,7 +2684,7 @@ public sealed class ReptarTerm : IDisposable
             selector.Render(
                 _back,
                 _width,
-                _height - 3,
+                Layout.SelectorBottom,
                 ruleFg: "\x1b[38;2;60;65;95m",
                 textFg: "\x1b[37m",
                 dimFg: "\x1b[90m",
@@ -2680,7 +2747,21 @@ public sealed class ReptarTerm : IDisposable
 
         if (_overlay != TermOverlay.None)
         {
-            var title = _overlay == TermOverlay.Sessions ? "sessions" : "providers";
+            var title = _overlay switch
+            {
+                TermOverlay.Sessions => "sessions",
+                TermOverlay.Settings => "settings",
+                TermOverlay.Tree => "tree",
+                TermOverlay.Providers => _providerStage switch
+                {
+                    ProviderStage.PickAuthMethod => "connect",
+                    ProviderStage.PickProvider => "connect",
+                    ProviderStage.EnterKey => "connect",
+                    _ => "models"
+                },
+                _ => "menu"
+            };
+
             var label = $"/ {title}";
             _back.Print(23, 0, label, fg: "\x1b[38;2;16;185;129m", bold: true);
 
@@ -2702,13 +2783,8 @@ public sealed class ReptarTerm : IDisposable
     {
         var viewportTop = 2;
 
-        // The dropdown occupies rows between the composer and the footer, so the transcript has
-        // to give up that space rather than being painted over.
-        var dropdownRows = _overlay == TermOverlay.None && (_slashDropdownOpen || _fileDropdownOpen)
-            ? Math.Min(9, Math.Max(0, SlashMatches().Count)) + 2
-            : 0;
-
-        var viewportBottom = _height - 6 - dropdownRows;
+        // The transcript stops above whatever owns the bottom of the screen.
+        var viewportBottom = Layout.TranscriptBottom;
         var availableHeight = viewportBottom - viewportTop;
 
         if (_messages.Count == 0 && !_isStreaming && _overlay == TermOverlay.None)
@@ -2828,8 +2904,9 @@ public sealed class ReptarTerm : IDisposable
             {
                 case "user":
                     if (lines.Count > 0) lines.Add(new TranscriptLine("", textFg, false, 0));
-                    // pi marks the prompt with a single glyph rather than a "You:" label.
-                    lines.Add(new TranscriptLine("❯", userFg, true, 2));
+                    // A left bar, not the composer's `❯`: a submitted turn and the live prompt
+                    // should not look like the same thing.
+                    lines.Add(new TranscriptLine("▌ you", userFg, true, 2));
                     Emit(message.Content, textFg, false, 4);
                     break;
 
@@ -3065,6 +3142,11 @@ public sealed class ReptarTerm : IDisposable
 
             foreach (var model in models)
             {
+                // A model picker that offers embedding, image-generation, and TTS models is
+                // noise: picking one produces a confusing provider error rather than a reply.
+                if (!IsChatModel(model.Id))
+                    continue;
+
                 var specs = new List<string>();
                 if (model.ContextTokens > 0)
                     specs.Add($"{FormatTokens((int)Math.Min(int.MaxValue, model.ContextTokens))} ctx");
@@ -3092,8 +3174,31 @@ public sealed class ReptarTerm : IDisposable
         if (_providerCategoryIdx >= _providerCategories.Count)
             _providerCategoryIdx = 0;
 
+        // Selection is preserved by SetItems; only clamp when the old index is now out of range.
+        if (_selectedCatalogIdx >= _catalog.Count)
+            _selectedCatalogIdx = Math.Max(0, _catalog.Count - 1);
+
         RebuildModelSelector();
         RebuildProviderSelector();
+    }
+
+    /// <summary>
+    /// Whether a model id names a chat model. Excludes the families that cannot answer a prompt:
+    /// embeddings, image generation, speech, and the audio-only realtime models.
+    /// </summary>
+    private static bool IsChatModel(string modelId)
+    {
+        var id = modelId.ToLowerInvariant();
+
+        string[] excluded =
+        [
+            "embedding", "embed-", "-embed", "rerank",
+            "-image", "image-", "dall-e", "stable-diffusion", "imagen",
+            "tts", "-audio", "audio-", "whisper", "transcribe",
+            "realtime", "moderation", "clip", "-vision-preview"
+        ];
+
+        return !excluded.Any(token => id.Contains(token, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -3249,12 +3354,6 @@ public sealed class ReptarTerm : IDisposable
     {
         var cardTop = ComposerRow;
 
-        if (_providerStage == ProviderStage.PickProvider)
-        {
-            RenderProviderList(cardTop);
-            return;
-        }
-
         if (_providerStage == ProviderStage.EnterKey)
         {
             RenderInlineKeyEntry(cardTop);
@@ -3338,6 +3437,10 @@ public sealed class ReptarTerm : IDisposable
     /// portal hint sits underneath so you can open the provider's page without leaving the flow.
     /// </summary>
     /// <summary>
+    /// The API-key prompt, inline where the composer normally sits. The key is masked, and the
+    /// portal hint sits underneath so you can open the provider's page without leaving the flow.
+    /// </summary>
+    /// <summary>
     /// The provider list <c>/connect</c> opens with. Each row says whether it is already
     /// configured and where the credential came from, so you can see what you are changing.
     /// </summary>
@@ -3402,17 +3505,39 @@ public sealed class ReptarTerm : IDisposable
 
         // Guidance only: the field itself lives in the composer below, which the key prompt has
         // taken over. Anchored to the card so the two read as one block.
+        var fields = PendingFields;
+        var onField = _keyFieldIndex >= 0 && _keyFieldIndex < fields.Count;
+
         var lines = new List<(string Text, string Fg, bool Bold)>
         {
             ($"connect {provider.DisplayName}", "\x1b[97m", true)
         };
 
+        if (fields.Count > 0)
+        {
+            var step = _keyFieldIndex + 2;   // key is step 1
+            lines.Add(($"step {Math.Min(step, fields.Count + 1)}/{fields.Count + 1}: " +
+                       (onField ? fields[_keyFieldIndex].Label : "api key"), "\x1b[90m", false));
+        }
+
         if (!string.IsNullOrEmpty(provider.KeyUrl))
             lines.Add(($"o  open https://{provider.KeyUrl}", "\x1b[38;2;56;189;248m", false));
-        else if (!provider.RequiresApiKey)
+        else if (!provider.RequiresApiKey && fields.Count == 0)
             lines.Add(("this provider needs no key — enter to activate", "\x1b[90m", false));
 
-        lines.Add(("enter save · esc back", "\x1b[90m", false));
+        // Show the URL that will actually be used, with placeholders filled in.
+        if (provider.HasUrlTemplate)
+        {
+            var preview = LlmProviders.ResolveBaseUrl(provider, null, null);
+            var complete = !preview.Contains('{', StringComparison.Ordinal);
+            lines.Add((complete ? preview : "url needs the fields above",
+                complete ? "\x1b[90m" : "\x1b[38;2;251;191;36m", false));
+        }
+
+        if (_keyFieldRequired)
+            lines.Add(("this value is required", "\x1b[38;2;248;113;113m", false));
+
+        lines.Add(("enter next · esc back", "\x1b[90m", false));
 
         var y = cardTop - 1;
         for (var i = lines.Count - 1; i >= 0 && y >= 2; i--, y--)
@@ -3439,11 +3564,17 @@ public sealed class ReptarTerm : IDisposable
         {
             // pi replaces the editor with the login input; here the composer becomes the key
             // field, so the prompt has an obvious place to go.
-            var masked = new string('•', _keyInputBuffer.Length);
+            var onField = _keyFieldIndex >= 0;
+            var masked = onField
+                ? _keyInputBuffer
+                : new string('•', _keyInputBuffer.Length);
+
             if (masked.Length > 0)
                 _back.Print(4, row, masked, fg: "\x1b[97m", maxWidth: _width - 8);
             else
-                _back.Print(4, row, "paste the api key — input is hidden", fg: "\x1b[90m");
+                _back.Print(4, row,
+                    onField ? CurrentKeyPrompt + " — input is visible" : "paste the api key — input is hidden",
+                    fg: "\x1b[90m");
             return;
         }
 
@@ -3460,8 +3591,50 @@ public sealed class ReptarTerm : IDisposable
         }
     }
 
-    /// <summary>Row the composer occupies. Everything else anchors to it.</summary>
-    private int ComposerRow => _height - 4;
+    /// <summary>
+    /// Vertical geometry for this frame. Computed once per render so every band agrees about
+    /// where the others are.
+    /// </summary>
+    private TermLayout Layout => new(_height, DropdownRows, ActiveSelector?.Height ?? 0);
+
+    /// <summary>
+    /// Rows the slash / file dropdown needs. It sits *between* the composer and the footer, so
+    /// the composer moves up by exactly this much — otherwise the list lands on the footer,
+    /// which is what made the input appear to cover the list.
+    /// </summary>
+    private int DropdownRows
+    {
+        get
+        {
+            if (_overlay != TermOverlay.None)
+                return 0;
+
+            // Cap the band at a third of the screen so a short terminal still shows the
+            // transcript and the prompt.
+            var cap = Math.Max(3, (_height - 6) / 3);
+
+            if (_slashDropdownOpen)
+            {
+                // Always reserve at least the rule and one row, so "no matches" has somewhere
+                // to be shown instead of the band collapsing and the list vanishing.
+                var count = SlashMatches().Count;
+                return Math.Min(Math.Max(count, 1), cap) + 2;
+            }
+
+            if (_fileDropdownOpen)
+            {
+                var count = GetMatchingFiles().Count;
+                return Math.Min(Math.Max(count, 1), cap) + 2;
+            }
+
+            return 0;
+        }
+    }
+
+    private int FooterStatsRow => Layout.FooterStats;
+    private int FooterLocationRow => Layout.FooterLocation;
+    private int ComposerRow => Layout.Composer;
+    private int WorkingRow => Layout.Working;
 
     /// <summary>
     /// pi's working indicator: a spinner and a running timer on its own line above the prompt.
@@ -3469,7 +3642,7 @@ public sealed class ReptarTerm : IDisposable
     /// </summary>
     private void RenderWorkingIndicator()
     {
-        var row = _height - 5;
+        var row = WorkingRow;
         _back.FillRect(0, row, _width, 1, ' ');
 
         if (!_isStreaming)
@@ -3498,19 +3671,23 @@ public sealed class ReptarTerm : IDisposable
     /// </summary>
     private void RenderSlashDropdown()
     {
-        var commands = SlashMatches();
-        if (commands.Count == 0)
+        if (!SlashListOpen)
             return;
+
+        var commands = SlashMatches();
 
         const string dim = "\x1b[90m";
         const string selectedBg = "\x1b[48;2;20;45;35m";
 
-        var visible = Math.Min(commands.Count, 8);
-        var nameWidth = Math.Min(24, commands.Max(c => c.Name.Length));
+        var visible = Math.Max(1, DropdownRows - 2);
+        var nameWidth = commands.Count == 0 ? 12 : Math.Min(24, commands.Max(c => c.Name.Length));
         var first = Math.Max(0, Math.Min(_slashSelectedIdx - visible + 1, commands.Count - visible));
 
-        // The block sits between the composer and the footer.
-        var y = ComposerRow + 1;
+        // The block sits between the composer and the footer, in rows the layout reserved.
+        var y = Layout.DropdownTop;
+
+        // Clear the reserved band so nothing from the previous frame shows through.
+        _back.FillRect(0, y, _width, DropdownRows, ' ');
 
         _back.Print(0, y++, new string('─', Math.Max(4, _width - 2)), fg: "\x1b[38;2;60;65;95m");
 
@@ -3540,7 +3717,7 @@ public sealed class ReptarTerm : IDisposable
                 maxWidth: Math.Max(8, _width - x - 2));
         }
 
-        if (y < _height - 2)
+        if (y < FooterLocationRow)
             _back.Print(2, y, $"({_slashSelectedIdx + 1}/{commands.Count})", fg: dim);
     }
 
@@ -3550,17 +3727,24 @@ public sealed class ReptarTerm : IDisposable
     private void RenderFileDropdown()
     {
         var files = GetMatchingFiles();
-        if (files.Count == 0)
-            return;
 
-        var visible = Math.Min(files.Count, 8);
+        var visible = Math.Max(1, DropdownRows - 2);
 
-        var first = Math.Max(0, Math.Min(_fileSelectedIdx - visible + 1, files.Count - visible));
-        var y = ComposerRow + 1;
+        var first = Math.Max(0, Math.Min(_fileSelectedIdx - visible + 1, Math.Max(0, files.Count - visible)));
+        var y = Layout.DropdownTop;
+
+        _back.FillRect(0, y, _width, DropdownRows, ' ');
 
         _back.Print(0, y++, new string('─', Math.Max(4, _width - 2)), fg: "\x1b[38;2;60;65;95m");
 
-        for (var i = first; i < files.Count && i < first + visible && y < _height - 2; i++, y++)
+        if (files.Count == 0)
+        {
+            _back.Print(2, y++, $"no file matches \"{_fileQuery}\"", fg: "\x1b[38;2;251;191;36m");
+            _back.Print(2, y, "backspace to widen · esc to dismiss", fg: "\x1b[90m");
+            return;
+        }
+
+        for (var i = first; i < files.Count && i < first + visible && y < FooterLocationRow; i++, y++)
         {
             var file = files[i];
             var selected = i == _fileSelectedIdx;
@@ -3574,7 +3758,7 @@ public sealed class ReptarTerm : IDisposable
                 bold: selected, maxWidth: _width - 6);
         }
 
-        if (y < _height - 2)
+        if (y < FooterLocationRow)
             _back.Print(2, y, $"({_fileSelectedIdx + 1}/{files.Count})", fg: "\x1b[90m");
     }
 
@@ -3586,8 +3770,8 @@ public sealed class ReptarTerm : IDisposable
     {
         const string dim = "\x1b[90m";
 
-        var locationY = _height - 3;
-        var statsY = _height - 2;
+        var locationY = FooterLocationRow;
+        var statsY = FooterStatsRow;
 
         _back.FillRect(0, locationY, _width, 2, ' ');
 
@@ -3619,35 +3803,42 @@ public sealed class ReptarTerm : IDisposable
             : dim;
 
         var right = _client.Config.Model;
-        var rightWithProvider = $"({_client.Config.ProviderName}) {right}";
 
         if (AvailableThinkingLevels().Count > 1)
         {
             var label = _thinking == ThinkingLevel.Off ? "thinking off" : ThinkingLevels.Name(_thinking);
             right += $" • {label}";
-            rightWithProvider += $" • {label}";
         }
 
+        var rightWithProvider = $"({_client.Config.ProviderName}) {right}";
+
         var leftText = left.ToString();
+
+        // Fit the right side into what is left: full form, then without the provider, then
+        // truncated. A footer that wraps or overflows is worse than one that shortens a name.
+        var available = Math.Max(8, _width - 2 - leftText.Length - 3);
         var rightText = rightWithProvider;
 
-        // Drop the provider when it would push the model name out of view.
-        if (2 + leftText.Length + 2 + rightText.Length > _width)
+        if (rightText.Length > available)
             rightText = right;
 
-        var gap = Math.Max(2, _width - 2 - leftText.Length - 2 - rightText.Length);
+        if (rightText.Length > available)
+            rightText = rightText[..Math.Max(1, available - 1)] + "…";
+
+        _back.FillRect(0, statsY, _width, 1, ' ');
+
+        var contextX = 2 + (leftText.Length > 0 ? leftText.Length + 1 : 0);
+        var rightX = Math.Max(contextX + contextText.Length + 2, _width - rightText.Length - 1);
 
         if (leftText.Length > 0)
             _back.Print(2, statsY, leftText, fg: dim);
 
-        var contextX = 2 + leftText.Length + (leftText.Length > 0 ? 1 : 0);
-        _back.Print(contextX, statsY, contextText, fg: contextColor, maxWidth: Math.Max(4, _width - contextX - 4));
+        // The context column gets whatever space the right side does not need.
+        var contextWidth = Math.Max(6, rightX - contextX - 1);
+        _back.Print(contextX, statsY, contextText, fg: contextColor, maxWidth: contextWidth);
 
-        if (rightText.Length + 2 < _width)
-            _back.Print(Math.Max(contextX + contextText.Length + 2, _width - rightText.Length - 2),
-                statsY, rightText, fg: dim, maxWidth: rightText.Length + 1);
-
-        _ = gap;
+        if (rightX + rightText.Length <= _width)
+            _back.Print(rightX, statsY, rightText, fg: dim, maxWidth: rightText.Length + 1);
     }
 
     private void RenderFloatingPalette()
