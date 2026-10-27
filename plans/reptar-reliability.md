@@ -126,7 +126,7 @@ The operator authorizes Cloudflare/VPS staging and Alchemy deployment for this p
 - [x] Isolated source baseline and fresh-worktree unit/CLI/host baseline reproduced.
 - [x] Existing release gates inventoried and evidence limits stated.
 - [x] R1 runner ownership accepted: PR #10, `babd9929837f6e345724c4e9d9a509e514df2f5d`; final-head Linux CI/security and native/Worker smokes passed. Explicit port-reservation/runtime-identity and broader harness limitations remain documented.
-- [ ] R2 artifact/client/external scaffold boundaries accepted.
+- [x] R2 artifact/client/external scaffold boundaries accepted: PR #11 (`433a0d1969f2f0b84e367aae9d8d459a4b2fd49b`) and PR #12 (`6f2b69e9c531224908e2eb53049f24913e711e3e`), final-head Linux CI/security green. Native published query/bodyless/compression/stream-fault and generated-client gates added; remote Worker streaming/TLS/proxy combinations are not inferred.
 - [ ] R3 stateful failure invariants accepted.
 - [ ] R4 prevention/warning controls accepted.
 - [ ] R5 benchmark protocol checks accepted.

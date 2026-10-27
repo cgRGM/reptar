@@ -28,7 +28,9 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
     // Flows with the caller's async context. When set, all commands use the
     // single writer connection and the active transaction; reads see
     // uncommitted writes, which is what a read/write transaction needs.
-    private static readonly AsyncLocal<SqliteTransaction?> AmbientTransaction = new();
+    // Scope the ambient slot to this client. A process-wide slot can attach
+    // another database's transaction to this client's connection.
+    private readonly AsyncLocal<SqliteTransaction?> AmbientTransaction = new();
 
     private const int MaxBatchSize = 64;
     private const int MaxTransientRetries = 3;
@@ -1468,7 +1470,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
-    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1)
+    private SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1)
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -1478,7 +1480,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return command;
     }
 
-    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2)
+    private SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2)
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -1490,7 +1492,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return command;
     }
 
-    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3)
+    private SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3)
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -1504,7 +1506,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return command;
     }
 
-    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3, (string Name, object? Value) p4)
+    private SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value) p1, (string Name, object? Value) p2, (string Name, object? Value) p3, (string Name, object? Value) p4)
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -1520,7 +1522,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return command;
     }
 
-    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value)[] parameters)
+    private SqliteCommand BuildCommand(SqliteConnection connection, string sql, (string Name, object? Value)[] parameters)
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
@@ -1533,7 +1535,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         return command;
     }
 
-    private static SqliteCommand BuildCommand(SqliteConnection connection, string sql, object? param)
+    private SqliteCommand BuildCommand(SqliteConnection connection, string sql, object? param)
     {
         var command = connection.CreateCommand();
         command.CommandText = sql;
