@@ -138,39 +138,71 @@ jobs:
           dotnet build examples/agent-cli/app.cs
           dotnet build examples/ai-gateway/app.cs
 
+      - name: AOT warning gate negative controls
+        run: python3 scripts/test-aot-warning-gate.py
+
+      - name: Published Native AOT metadata and binding contracts
+        run: |
+          set -o pipefail
+          dotnet publish scripts/fixtures/aot-contracts/aot-contracts.csproj -c Release -r linux-x64 --self-contained \
+            -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+            -o "$RUNNER_TEMP/reptar-aot-contracts-native" 2>&1 | tee "$RUNNER_TEMP/reptar-aot-contracts-publish.log"
+          python3 scripts/test-aot-contracts.py "$RUNNER_TEMP/reptar-aot-contracts-native/app"
+
       - name: Published Native AOT agent offline smoke
         run: |
+          set -o pipefail
           dotnet publish examples/agent-cli/app.cs -c Release -r linux-x64 --self-contained \
             -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
-            -o "$RUNNER_TEMP/reptar-agent-native"
+            -o "$RUNNER_TEMP/reptar-agent-native" 2>&1 | tee "$RUNNER_TEMP/reptar-agent-publish.log"
           python3 scripts/test-agent-native.py "$RUNNER_TEMP/reptar-agent-native/app"
 
       - name: Published Native AOT HTTP boundary and stream fault smoke
         run: |
+          set -o pipefail
           dotnet publish scripts/fixtures/native-boundaries/app.cs -c Release -r linux-x64 --self-contained \
             -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
-            -o "$RUNNER_TEMP/reptar-http-native"
+            -o "$RUNNER_TEMP/reptar-http-native" 2>&1 | tee "$RUNNER_TEMP/reptar-http-publish.log"
           python3 scripts/test-native-boundaries.py "$RUNNER_TEMP/reptar-http-native/app"
 
       - name: Published Native AOT session crash and concurrent-process durability
         run: |
+          set -o pipefail
           dotnet publish scripts/fixtures/session-durability/app.cs -c Release -r linux-x64 --self-contained \
             -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
-            -o "$RUNNER_TEMP/reptar-session-native"
+            -o "$RUNNER_TEMP/reptar-session-native" 2>&1 | tee "$RUNNER_TEMP/reptar-session-publish.log"
           python3 scripts/test-session-durability.py "$RUNNER_TEMP/reptar-session-native/app"
 
       - name: Published Native AOT queue and cron shutdown lifecycle
         run: |
+          set -o pipefail
           dotnet publish scripts/fixtures/background-lifecycle/app.cs -c Release -r linux-x64 --self-contained \
             -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
-            -o "$RUNNER_TEMP/reptar-background-native"
+            -o "$RUNNER_TEMP/reptar-background-native" 2>&1 | tee "$RUNNER_TEMP/reptar-background-publish.log"
           python3 scripts/test-background-lifecycle.py "$RUNNER_TEMP/reptar-background-native/app"
+
+      - name: Publish Native AOT Rooms for the two-host realtime gate
+        run: |
+          set -o pipefail
+          dotnet publish examples/realtime-rooms/app.cs -c Release -r linux-x64 --self-contained \
+            -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+            -o "$RUNNER_TEMP/reptar-rooms-native" 2>&1 | tee "$RUNNER_TEMP/reptar-rooms-publish.log"
+
+      - name: Reviewed Native AOT diagnostic instances
+        run: |
+          python3 scripts/check-aot-warnings.py \
+            "$RUNNER_TEMP/reptar-aot-contracts-publish.log" \
+            "$RUNNER_TEMP/reptar-agent-publish.log" \
+            "$RUNNER_TEMP/reptar-http-publish.log" \
+            "$RUNNER_TEMP/reptar-session-publish.log" \
+            "$RUNNER_TEMP/reptar-background-publish.log" \
+            "$RUNNER_TEMP/reptar-rooms-publish.log"
 
       - name: Doctor (strict)
         run: bun reptar doctor --strict
 
       - name: Two-host realtime smoke
-        run: bun reptar test:realtime
+        run: REPTAR_ROOMS_NATIVE_BINARY="$RUNNER_TEMP/reptar-rooms-native/app" bun reptar test:realtime
 
       - name: Scaffold end-to-end
         run: bun scripts/test-scaffold.ts

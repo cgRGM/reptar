@@ -127,7 +127,7 @@ The operator authorizes Cloudflare/VPS staging and Alchemy deployment for this p
 - [x] Existing release gates inventoried and evidence limits stated.
 - [x] R1 runner ownership accepted: PR #10, `babd9929837f6e345724c4e9d9a509e514df2f5d`; final-head Linux CI/security and native/Worker smokes passed. Explicit port-reservation/runtime-identity and broader harness limitations remain documented.
 - [x] R2 artifact/client/external scaffold boundaries accepted: PR #11 (`433a0d1969f2f0b84e367aae9d8d459a4b2fd49b`) and PR #12 (`6f2b69e9c531224908e2eb53049f24913e711e3e`), final-head Linux CI/security green. Native published query/bodyless/compression/stream-fault and generated-client gates added; remote Worker streaming/TLS/proxy combinations are not inferred.
-- [ ] R3 stateful failure invariants accepted.
+- [ ] R3 stateful failure invariants accepted. Session/transaction package merged as PR #13 (`edd87b229fc915709ee50edc84bc9882e8dcd8e4`); native queue/cron ownership package merged as PR #14 (`240f93e02cf1e9ba8d7a53d23e000fa770e637ca`), both after final-head CI/security. See named evidence/limits in `plans/reliability/r3-*.md`; realtime fault review remains open.
 - [ ] R4 prevention/warning controls accepted.
 - [ ] R5 benchmark protocol checks accepted.
 - [ ] R6 upgrade/recovery and first operational proving run accepted.

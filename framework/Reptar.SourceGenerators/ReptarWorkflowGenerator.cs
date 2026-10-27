@@ -29,7 +29,7 @@ public sealed class ReptarWorkflowGenerator : IIncrementalGenerator
     private static readonly DiagnosticDescriptor UnhandledMessageRule = new(
         "REPTARWF001",
         "Workflow message has no consumer",
-        "Workflow '{0}': message '{1}' produced by step '{2}' is not consumed by any step. Add a consuming step, or mark the producer with IsOutput = true",
+        "Workflow '{0}': message '{1}' produced by step '{2}' is not consumed by any step. Add a consuming step, or mark the producer with IsOutput = true.",
         "Reptar.Agents",
         DiagnosticSeverity.Warning,
         isEnabledByDefault: true,

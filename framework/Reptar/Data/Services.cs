@@ -140,7 +140,15 @@ public interface IDbClient
 }
 
 [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors | System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)]
-public sealed record DbCount(int Count);
+public sealed record DbCount(int Count)
+{
+#if !NETWASM
+    [System.Runtime.CompilerServices.ModuleInitializer]
+    internal static void RegisterMapper() =>
+        EntityMapper<DbCount>.Factory ??= _ => row =>
+            new DbCount(Convert.ToInt32(row.GetValue(0), System.Globalization.CultureInfo.InvariantCulture));
+#endif
+}
 
 public sealed record DbStatement(string Sql, object? Param = null);
 

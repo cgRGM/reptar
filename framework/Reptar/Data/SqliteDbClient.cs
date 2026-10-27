@@ -1173,6 +1173,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     public Task<int> InsertAsync(TableDef table, object values)
     {
+        EnsureNativeWriteShape(values);
         if (values is IReptarEntity entity)
         {
             var rawParams = entity.ToDbParameters();
@@ -1272,6 +1273,7 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
     public Task<int> UpdateAsync(TableDef table, object values, object id)
     {
+        EnsureNativeWriteShape(values);
         var primaryKey = table.SinglePrimaryKey
             ?? throw new InvalidOperationException(
                 $"Table '{table.Name}' has no single primary key.");
@@ -1443,6 +1445,15 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
         }
     }
 
+    private static void EnsureNativeWriteShape(object values)
+    {
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported &&
+            values is not IReptarEntity && values is not IDictionary)
+            throw new NotSupportedException(
+                $"Unsupported SQL parameter shape {values.GetType()} in Native AOT table writes. " +
+                "Use a dictionary or a source-generated IReptarEntity.");
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -1599,6 +1610,14 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
             }
 
             return command;
+        }
+
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+        {
+            command.Dispose();
+            throw new NotSupportedException(
+                $"Unsupported SQL parameter shape {param.GetType()} in Native AOT. " +
+                "Use named tuples, a dictionary, or a source-generated IReptarEntity instead of an anonymous object.");
         }
 
         foreach (var property in param.GetType().GetProperties())
