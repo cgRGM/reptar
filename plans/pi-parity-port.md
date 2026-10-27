@@ -1375,3 +1375,64 @@ Three handlers could no longer run once the lists became selectors: `HandleSessi
 | Scroll position | resets on session change | same |
 
 `Ctrl+P` is the remaining divergence, and it needs `scoped-models` (a subset of models chosen for cycling) before it can match.
+
+---
+
+## 33. Wrap-up: what this is, and what it is not
+
+### What shipped
+
+Two packages and one reference client.
+
+**`framework/Reptar.AI`** — the engine. 24 new files:
+
+| Concern | Types |
+| --- | --- |
+| Loop | `AgentLoop`, `AgentSession`, `AgentRunRegistry`, `AgentEventJson` |
+| Messages | `AgentMessages`, `AgentUsage` |
+| Context | `ContextCompaction`, `ToolOutput` |
+| Durability | `DurableAgent`, `SessionTreeStore` |
+| SDK | `AgentSdk`, `AgentSettings`, `ToolSelection` |
+| Codemode | `ScriptValue`, `ScriptParser`, `ScriptInterpreter`, `CodeMode` |
+| Integrations | `McpClient`, `ClientIdentity`, `CacheWarmer`, `ModelAliases` |
+| Resources | `SkillsDirectory` (diagnostics), `PromptTemplates`, `ProjectTrust`, `AgentResources` |
+| Diagnostics | `AgentLog` |
+| Models | `ThinkingLevels`, `LlmCatalog` (capabilities, output limits) |
+
+**`framework/Reptar.Term`** — the terminal layer, 2,927 lines: buffered diffed rendering, raw-mode input parsing, a line editor, searchable selectors, layout geometry, ANSI markdown.
+
+**`examples/agent-cli`** — a reference client: the agent TUI, a line-mode REPL, an RPC server and C# client, a web SPA, and a self-test.
+
+**Docs** — `ai/agent-runtime` and `ai/term-package`, plus `plans/pi-parity-port.md` (this file).
+
+### What is verified
+
+- 831 unit tests, including contract tests for the loop's guarantees, compaction arithmetic, layout non-overlap, selector state preservation, and reflection-free settings.
+- End-to-end against a live local model (Ollama, `llama3.1:8b`): tool calls, error recovery, file mutation, streaming, and the full event stream.
+- RPC round trip from both a C# client and a raw JSONL script.
+- Web API endpoints against a running server.
+
+### What is not verified
+
+1. **Anthropic prompt caching.** The three-breakpoint implementation is the most load-bearing unverified thing here. `cache_read_input_tokens > 0` on turn 2 is the one check that would confirm it, and Ollama cannot answer it.
+2. **Provider attribution headers.** Names come from pi's source; whether OpenRouter credits the app is only visible in their dashboard.
+3. **Thinking budgets against a real reasoning model.** The arithmetic is tested; acceptance is not.
+4. **The TUI at scale.** Every layout round was fixed from a screenshot, never from watching it work.
+
+### What pi has that this does not
+
+| pi | Status |
+| --- | --- |
+| Extensions (TypeScript modules in-process) | Not ported — a different architecture, and the largest remaining gap |
+| OAuth / subscription sign-in | Structure exists (`ProviderAuth.Account`), flow does not |
+| Session tree in the web client | Store and RPC support it; the SPA does not expose it |
+| `context_edit` entries | Compaction rewrites the projection instead, which covers the common case |
+| Provider breadth (~40 providers) | 9 registered, all OpenAI-wire-compatible |
+
+### The honest assessment
+
+The framework is a real agent engine: the loop is faithful to pi's scheduler, the durability is genuine commit-before-reveal, and the codemode interpreter is a working substitute for a JS engine under AOT. It runs, it recovers from tool errors, and it mutates files correctly.
+
+The terminal UI works but is not as polished as pi's, and the gap is not architectural — it is the accumulated small decisions about spacing, colour, and motion that only come from using it daily.
+
+The most valuable next step is not more code. It is a week of using it on real work, with `REPTAR_AGENT_LOG` on, and fixing what annoys you.

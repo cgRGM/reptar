@@ -3070,15 +3070,22 @@ public sealed class ReptarTerm : IDisposable
             {
                 case "user":
                     if (lines.Count > 0) lines.Add(new TranscriptLine("", textFg, false, 0));
-                    // A left bar, not the composer's `❯`: a submitted turn and the live prompt
-                    // should not look like the same thing.
-                    lines.Add(new TranscriptLine("▌ you", userFg, true, 2));
-                    Emit(message.Content, textFg, false, 4);
+
+                    // The user's turn is a bar down the whole block, not a one-line label. A
+                    // header alone left the reply reading as a continuation of the prompt,
+                    // because both were white text at the same indent.
+                    foreach (var wrapped in WrapText(message.Content, Math.Max(10, _width - 8)))
+                        lines.Add(new TranscriptLine("▌ " + wrapped, userFg, false, 2));
+
                     break;
 
                 case "assistant":
                     if (message.Content.Length == 0) break;
                     if (lines.Count > 0) lines.Add(new TranscriptLine("", textFg, false, 0));
+
+                    // A quiet marker so a reply is identifiable at a glance without a label on
+                    // every block; the markdown below it carries the rest.
+                    lines.Add(new TranscriptLine("◆", agentFg, false, 2));
                     RenderMarkdown(message.Content, codeFence, Emit, lines, textFg, dimFg);
                     break;
 
