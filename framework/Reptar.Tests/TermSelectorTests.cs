@@ -218,7 +218,8 @@ public sealed class TermSelectorTests
     public void clearing_the_query_restores_the_full_list()
     {
         var selector = Providers();
-        selector.Type('z');
+        // 'z' matches Amazon; use a character absent from every searchable field.
+        selector.Type('x');
         Assert.Empty(selector.Visible);
 
         selector.ClearQuery();
