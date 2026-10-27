@@ -24,7 +24,7 @@ using static Reptar.ReptarApi;
 // RoomsRoutes.Configure; this file only wires the local SQLite host.
 // ---------------------------------------------------------------------------
 
-var database = Db.Sqlite("rooms.db");
+var database = Db.Sqlite(Environment.GetEnvironmentVariable("REPTAR_ROOMS_DB") ?? "rooms.db");
 
 var app = ReptarApp.Create(new ReptarConfig
 {

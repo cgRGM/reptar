@@ -11,9 +11,15 @@
  * gets caught here instead of on a deployed worker.
  */
 
-import { spawn, spawnSync } from "node:child_process";
-import { existsSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
+
+import {
+  assertPortAvailable,
+  spawnOwnedProcess,
+} from "./testing/owned-process";
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const roomsDir = path.join(repoRoot, "examples/realtime-rooms");
@@ -35,7 +41,7 @@ const waitForHealth = async (
   while (Date.now() - startedAt < timeoutMs) {
     try {
       // eslint-disable-next-line no-await-in-loop -- Poll until this host becomes ready.
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: AbortSignal.timeout(1500) });
       if (response.ok) {
         return true;
       }
@@ -60,63 +66,16 @@ const runSmoke = (wsUrl: string, host: string): boolean => {
         BENCH_WS_URL: wsUrl,
       },
       stdio: "inherit",
+      timeout: 90_000,
     }
   );
   return result.status === 0;
 };
 
-/** Kill a spawned tree: the muxer, its children, and anything on the port. */
-const killTree = (pid: number | undefined, port: number): void => {
-  if (pid) {
-    try {
-      process.kill(pid, "SIGKILL");
-    } catch {
-      // Parent may already have exited.
-    }
-    try {
-      spawnSync("pkill", ["-P", String(pid)]);
-    } catch {
-      // Children may already have exited.
-    }
-  }
-  // Kill the wrangler parent too; otherwise it respawns workerd on the port
-  // after the listener is killed.
-  try {
-    spawnSync("pkill", ["-f", `wrangler.*--port ${port}`], {
-      stdio: "ignore",
-    });
-  } catch {
-    // pkill unavailable
-  }
-
-  // Belt and braces: kill whatever still listens on the port (the orphaned
-  // runfile app process survives its muxer).
-  try {
-    const listeners = spawnSync(
-      "lsof",
-      ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-t"],
-      { encoding: "utf-8" }
-    );
-    for (const line of listeners.stdout.trim().split("\n")) {
-      const listenerPid = Number(line);
-      if (
-        Number.isInteger(listenerPid) &&
-        listenerPid > 0 &&
-        listenerPid !== process.pid
-      ) {
-        try {
-          process.kill(listenerPid, "SIGKILL");
-        } catch {
-          // Listener may have exited during teardown.
-        }
-      }
-    }
-  } catch {
-    // lsof is optional on minimal Linux hosts.
-  }
-};
-
-const runWorkersSmoke = async (port: number): Promise<boolean> => {
+const runWorkersSmoke = async (
+  port: number,
+  statePath: string
+): Promise<boolean> => {
   console.log("\n[workers host] building NetWasm worker...");
   const build = spawnSync(
     process.execPath,
@@ -129,7 +88,7 @@ const runWorkersSmoke = async (port: number): Promise<boolean> => {
   }
 
   console.log("[workers host] applying local D1 migration...");
-  spawnSync(
+  const migration = spawnSync(
     "bunx",
     [
       "wrangler",
@@ -137,20 +96,37 @@ const runWorkersSmoke = async (port: number): Promise<boolean> => {
       "execute",
       "reptar-rooms-local",
       "--local",
+      "--persist-to",
+      statePath,
       "--file",
       "migrations/0001_room_messages.sql",
     ],
     { cwd: workerDir, stdio: "ignore" }
   );
 
-  // A previous smoke run can leave wrangler/workerd holding the port; clear
-  // it before starting so the health check measures this run, not a stale one.
-  killTree(undefined, port);
+  if (migration.status !== 0) {
+    throw new Error("Disposable local D1 migration failed.");
+  }
+  await assertPortAvailable(port);
   console.log(`[workers host] starting wrangler dev on :${port}...`);
-  const wrangler = spawn("bunx", ["wrangler", "dev", "--port", String(port)], {
-    cwd: workerDir,
-    stdio: "ignore",
-  });
+  const wrangler = await spawnOwnedProcess(
+    "bunx",
+    [
+      "wrangler",
+      "dev",
+      "--local",
+      "--ip",
+      "127.0.0.1",
+      "--port",
+      String(port),
+      "--persist-to",
+      statePath,
+    ],
+    {
+      cwd: workerDir,
+      stdio: "ignore",
+    }
+  );
 
   try {
     const healthy = await waitForHealth(
@@ -166,25 +142,24 @@ const runWorkersSmoke = async (port: number): Promise<boolean> => {
     );
     return runSmoke(`ws://127.0.0.1:${port}`, `http://127.0.0.1:${port}`);
   } finally {
-    killTree(wrangler.pid, port);
+    await wrangler.stop();
   }
 };
 
-const runKestrelSmoke = async (port: number): Promise<boolean> => {
-  const dbPath = path.join(roomsDir, "rooms.db");
-  for (const suffix of ["", "-shm", "-wal"]) {
-    rmSync(`${dbPath}${suffix}`, { force: true });
-  }
-
-  killTree(undefined, port);
+const runKestrelSmoke = async (
+  port: number,
+  dbPath: string
+): Promise<boolean> => {
+  await assertPortAvailable(port);
   console.log(`\n[kestrel host] starting dotnet run app.cs on :${port}...`);
-  const server = spawn(dotnet(), ["run", "app.cs"], {
+  const server = await spawnOwnedProcess(dotnet(), ["run", "app.cs"], {
     cwd: roomsDir,
     env: {
       ...process.env,
       // IPv4-only listen dodges the macOS accept() stall (see LEARNINGS §2.3)
-      HOST: "0.0.0.0",
+      HOST: "127.0.0.1",
       PORT: String(port),
+      REPTAR_ROOMS_DB: dbPath,
     },
     stdio: "ignore",
   });
@@ -203,7 +178,7 @@ const runKestrelSmoke = async (port: number): Promise<boolean> => {
     );
     return runSmoke(`ws://127.0.0.1:${port}`, `http://127.0.0.1:${port}`);
   } finally {
-    killTree(server.pid, port);
+    await server.stop();
   }
 };
 
@@ -211,6 +186,9 @@ export const runRealtimeSmoke = async (options: {
   kestrelOnly?: boolean;
   workersOnly?: boolean;
 }): Promise<boolean> => {
+  if (options.kestrelOnly && options.workersOnly) {
+    throw new Error("Choose at most one realtime smoke host filter.");
+  }
   let workersPassed = true;
   let kestrelPassed = true;
 
@@ -223,10 +201,34 @@ export const runRealtimeSmoke = async (options: {
   );
 
   if (!options.kestrelOnly) {
-    workersPassed = await runWorkersSmoke(workersPort);
+    await assertPortAvailable(workersPort);
   }
   if (!options.workersOnly) {
-    kestrelPassed = await runKestrelSmoke(kestrelPort);
+    await assertPortAvailable(kestrelPort);
+  }
+  if (
+    !options.kestrelOnly &&
+    !options.workersOnly &&
+    workersPort === kestrelPort
+  ) {
+    throw new Error("Realtime smoke hosts must use distinct ports.");
+  }
+  const stateRoot = mkdtempSync(path.join(tmpdir(), "reptar-realtime-"));
+  try {
+    if (!options.kestrelOnly) {
+      workersPassed = await runWorkersSmoke(
+        workersPort,
+        path.join(stateRoot, "worker")
+      );
+    }
+    if (!options.workersOnly) {
+      kestrelPassed = await runKestrelSmoke(
+        kestrelPort,
+        path.join(stateRoot, "rooms.db")
+      );
+    }
+  } finally {
+    rmSync(stateRoot, { force: true, recursive: true });
   }
 
   console.log("\n──────────────────────────────");
