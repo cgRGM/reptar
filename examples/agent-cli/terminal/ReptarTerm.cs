@@ -115,6 +115,7 @@ public sealed class ReptarTerm : IDisposable
 
     /// <summary>Prompt templates discovered under .reptar/prompts/.</summary>
     private readonly List<PromptTemplate> _templates = [];
+    private AgentExtensionHost? _extensions;
 
     /// <summary>One rendered tool call: name, arguments, live output, terminal status.</summary>
     private sealed class ToolCard
@@ -448,6 +449,17 @@ public sealed class ReptarTerm : IDisposable
         if (trusted)
             _templates.AddRange(PromptTemplates.Load(_options.WorkspaceRoot));
 
+        // Extensions are executable, so an untrusted project contributes none of its own. Personal
+        // extensions still load: they are the user's own code, not the repository's.
+        _extensions = await AgentExtensionHost
+            .LoadAsync(
+                trusted ? _options.WorkspaceRoot : null,
+                _app.GetAiTools(onlyExplicit: true))
+            .ConfigureAwait(false);
+
+        foreach (var error in _extensions.Errors)
+            AgentLog.Write($"extension: {error}");
+
         if (_settings.Settings.Thinking is { Length: > 0 } savedThinking &&
             ThinkingLevels.Parse(savedThinking) is { } level)
         {
@@ -668,6 +680,20 @@ public sealed class ReptarTerm : IDisposable
             new("help", "/help", "Show tips and shortcuts", () => { ShowHelpMessage(); }),
             new("exit", "/exit", "Quit ReptarTerm", () => { _running = false; }),
         };
+
+        // Extension commands sit alongside built-ins: an extension should not feel bolted on.
+        if (_extensions is not null)
+        {
+            foreach (var command in _extensions.Commands)
+            {
+                var captured = command;
+                all.Add(new PaletteCommand(
+                    captured.Name,
+                    "/" + captured.Name,
+                    captured.Description,
+                    () => _ = RunExtensionCommandAsync(captured.Name)));
+            }
+        }
 
         // Prompt templates appear in the same dropdown as built-ins, so a project command is as
         // discoverable as /help.
@@ -1058,6 +1084,31 @@ public sealed class ReptarTerm : IDisposable
             _providerSelector!.Status = "Sign-in failed: " + ex.Message;
             _dirty = true;
         }
+    }
+
+    /// <summary>
+    /// Runs an extension command and prints whatever it returns.
+    /// </summary>
+    private async Task RunExtensionCommandAsync(string name)
+    {
+        if (_extensions is null)
+            return;
+
+        try
+        {
+            var result = await _extensions
+                .RunCommandAsync(name, [])
+                .ConfigureAwait(false);
+
+            if (result is { } value && value.ToDisplay() is { Length: > 0 } text && text != "null")
+                _messages.Add(new ChatMessage("assistant", text));
+        }
+        catch (Exception ex)
+        {
+            _messages.Add(new ChatMessage("assistant", $"extension '{name}' failed: {ex.Message}"));
+        }
+
+        _dirty = true;
     }
 
     private void OpenSettingsMenu()
@@ -2579,23 +2630,12 @@ public sealed class ReptarTerm : IDisposable
                     _app,
                     _client,
                     history,
+                    // Extension tools are declared to the model alongside the workspace tools.
+                    tools: [.. _app.GetAiTools(onlyExplicit: true), .. _extensions?.Tools ?? []],
                     systemPrompt: systemPrompt,
                     maxSteps: _options.MaxSteps,
                     onEvent: evt => sink.TryWrite(evt),
-                    configure: config => config with
-                    {
-                        GetSteeringMessages = () =>
-                        {
-                            lock (_steeringGate)
-                            {
-                                if (_steeringQueue.Count == 0)
-                                    return [];
-                                return [_steeringQueue.Dequeue()];
-                            }
-                        },
-                        Retry = new AgentRetryPolicy { MaxAttempts = 3 },
-                        PrepareNextTurn = (turn, ct) => CompactIfNeededAsync(turn, sink, ct)
-                    },
+                    configure: config => ConfigureRun(config, sink),
                     cancellationToken: token).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -2892,6 +2932,55 @@ public sealed class ReptarTerm : IDisposable
             for (var i = Math.Max(0, _persistedCount - projection.Count); i < _messages.Count; i++)
                 await AppendAsync(_messages[i]).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// Applies the run's steering, retry, compaction, and extension wiring.
+    /// </summary>
+    /// <remarks>
+    /// Extension hooks are applied last so they wrap everything above: a gate installed here must
+    /// be able to refuse a call the rest of the configuration would have allowed.
+    /// </remarks>
+    private AgentLoopConfig ConfigureRun(AgentLoopConfig config, ChannelWriter<AgentEvent> sink)
+    {
+        var configured = config with
+        {
+            // Extension tools are dispatched here; anything unclaimed falls through to the app.
+            ToolExecutor = RunToolWithExtensionsAsync,
+            GetSteeringMessages = () =>
+            {
+                lock (_steeringGate)
+                {
+                    if (_steeringQueue.Count == 0)
+                        return [];
+                    return [_steeringQueue.Dequeue()];
+                }
+            },
+            Retry = new AgentRetryPolicy { MaxAttempts = 3 },
+            PrepareNextTurn = (turn, ct) => CompactIfNeededAsync(turn, sink, ct)
+        };
+
+        return _extensions?.Apply(configured) ?? configured;
+    }
+
+    /// <summary>Runs a tool, preferring an extension that claims it.</summary>
+    private async Task<AiToolResult> RunToolWithExtensionsAsync(
+        AgentToolInvocation invocation,
+        CancellationToken cancellationToken)
+    {
+        if (_extensions is not null)
+        {
+            var claimed = await _extensions
+                .ExecuteToolAsync(invocation.ToolName, invocation.ArgumentsJson, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (claimed is not null)
+                return claimed;
+        }
+
+        return await _app
+            .ExecuteAiToolAsync(invocation.ToolName, invocation.ArgumentsJson)
+            .ConfigureAwait(false);
     }
 
     /// <summary>

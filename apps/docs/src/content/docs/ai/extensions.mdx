@@ -1,0 +1,176 @@
+---
+title: Extensions
+description: Add tools, commands, and lifecycle hooks to a Reptar agent at runtime.
+---
+
+An extension adds behaviour to an agent without recompiling it: a tool the model can call, a `/` command, or a handler that runs on every tool call. Extensions load from disk when a session starts.
+
+```reptar title="~/.reptar/extensions/hello.reptar"
+register_command("hello", "Greets someone", (args) => "hello, world")
+```
+
+Start the agent and run `/hello`.
+
+## Why extensions are not TypeScript
+
+pi, the agent this runtime follows, loads extensions as TypeScript modules through `jiti`. Reptar targets Native AOT, which has no runtime code loading: `Assembly.LoadFrom` does not exist, and there is no JavaScript engine to host. A compiled C# plugin cannot be loaded either.
+
+Rather than ship a JS engine to keep the syntax, extensions are **scripts interpreted in-process** by the same engine that powers [codemode](/ai/agent-runtime#code-mode). That keeps the property that matters — register at load time, handle during a run — and stays AOT-safe. The cost is a smaller language, described under [The script dialect](#the-script-dialect).
+
+If you need a full language, write an [MCP server](/ai/agent-runtime#mcp); it runs out of process and can be written in anything.
+
+## Where extensions load from
+
+| Location                        | Scope                            |
+| ------------------------------- | -------------------------------- |
+| `~/.reptar/extensions/`         | Every session for this user      |
+| `<project>/.reptar/extensions/` | Sessions started in that project |
+
+Files ending in `.reptar` or `.csx` load, in name order, at most 64 of them, each up to 256 KB. A project extension **replaces** a personal extension of the same file name, so a repository can override your default.
+
+Set `REPTAR_HOME` to relocate the personal directory.
+
+An extension that fails to load does not stop the others: the error is collected and reported, and the rest load normally.
+
+## The three things you can register
+
+Only these three functions exist while the file runs. Registration is the entire load-time contract — nothing else should happen at load, because extensions are also loaded by invocations that never start a session.
+
+### `register_tool(name, description, parameters, handler)`
+
+Contributes a tool the model can call.
+
+```reptar
+register_tool(
+  "word_count",
+  "Counts the words in a piece of text.",
+  {type: "object", properties: {text: {type: "string"}}, required: ["text"]},
+  (args, ctx) => {
+    return {content: "words: " + str(len(args.text.split(" ")))}
+  }
+)
+```
+
+The third argument is a JSON Schema. The handler receives the parsed arguments and a context object, and returns either a string or an object:
+
+| Return                            | Result                                  |
+| --------------------------------- | --------------------------------------- |
+| `"text"`                          | Successful result with that content     |
+| `{content: "text"}`               | Successful result with that content     |
+| `{content: "text", error: "why"}` | Failed result; the model sees the error |
+
+Returning `{error: ...}` is preferred over throwing: a failure the model can read is recoverable, and throwing discards any partial output.
+
+Handlers run on the interpreter that defined them, so they keep access to the built-ins (`len`, `str`, `num`, `json`, `log`, `text`, and the string/array methods) and to the agent's own tools by name.
+
+### `register_command(name, description, handler)`
+
+Contributes a `/` command. The handler receives the arguments as an array.
+
+```reptar
+register_command("greet", "Greets someone", (args) => {
+  let name = args[0]
+  if (name == null) {
+    name = "world"
+  }
+  return "hello, " + str(name)
+})
+```
+
+### `on(event, handler)`
+
+Subscribes to a lifecycle event. Three events are supported.
+
+| Event | Fires | Payload | Return value |
+| --- | --- | --- | --- |
+| `tool_call` | Before a tool runs | `{tool, arguments}` | `{block: true, reason: "..."}` to refuse |
+| `tool_result` | After a tool runs | `{tool, content, error, isError}` | `{content: "..."}` to replace the result |
+| `turn_end` | After each model turn | `{stopReason, toolCalls}` | Ignored; observation only |
+
+```reptar title="~/.reptar/extensions/safety.reptar"
+on("tool_call", (event) => {
+  if (event.tool == "run_command") {
+    return {block: true, reason: "shell access is disabled in this project"}
+  }
+})
+```
+
+## What the hooks guarantee
+
+These are the behaviours worth relying on, each pinned by a test:
+
+- **A blocking hook wins.** If any `tool_call` handler returns `block: true`, the call does not run, and a host-provided gate cannot override it.
+- **A hook that throws blocks the call.** A gate that cannot decide must not silently allow it.
+- **Hooks compose with the host.** A host that already set its own `BeforeToolCall` keeps it; both run. Extensions are not a replacement for host logic.
+- **A failing `tool_result` or `turn_end` handler is ignored.** Redaction that fails must not destroy the tool's output, and an observer must not end a run.
+- **An unknown event name is rejected at load time**, not silently never fired.
+
+## The script dialect
+
+The language is deliberately small. It supports `let`/`const`, `if`, `while`, `for`, `foreach`, `return`, `break`, `continue`, object and array literals, member access, indexing, and lambdas written `(args) => expr` or `(args) => { ... }`.
+
+Operators: `==`, `!=`, `<=`, `>=`, `&&`, `||`, `+`, `-`, `*`, `/`, `%`, `<`, `>`, `!`, `=`, `+=`, `-=`, `++`, `--`.
+
+:::caution[Not in the dialect] `??`, `?.`, `?:`, and `async`/`await` do not exist. Write the explicit check instead:
+
+```reptar
+let name = args[0]
+if (name == null) {
+  name = "world"
+}
+```
+
+:::
+
+Two behaviours that surprise people coming from JavaScript:
+
+- **Member access on a missing key returns `null`; it does not throw.** `event.missing.deeper` is `null`, not an error.
+- **Assigning to an undeclared name throws.** That is usually the real cause of "unknown variable".
+
+Each handler invocation gets a fresh step budget (5,000 statements), so a long-lived extension does not exhaust it across a session.
+
+## From C\#
+
+For an application embedding the runtime, load the host once and wrap the loop config.
+
+```csharp
+using Reptar;
+using Reptar.AI;
+
+var extensions = await AgentExtensionHost.LoadAsync(projectRoot);
+foreach (var error in extensions.Errors)
+    Console.Error.WriteLine($"extension: {error}");
+
+// Extension tools are dispatched alongside your own.
+var config = extensions.Apply(new AgentLoopConfig { /* ... */ });
+```
+
+`Apply` returns a config whose hooks run the extension handlers and then delegate to whatever you had already set. When nothing is loaded it returns the config unchanged.
+
+| Member | Purpose |
+| --- | --- |
+| `LoadAsync(projectRoot)` | Discover and run every extension; never throws |
+| `Tools` | `AiToolDefinition` list for every registered tool |
+| `Commands` | Registered `/` commands |
+| `Errors` | Load failures, one line each |
+| `IsEmpty` | True when nothing loaded |
+| `ExecuteToolAsync(name, json)` | Run an extension tool; `null` if unclaimed |
+| `RunCommandAsync(name, args)` | Run an extension command; `null` if unclaimed |
+| `Apply(config)` | Wrap a loop config with the extension hooks |
+
+`ExecuteToolAsync` returns `null` rather than failing when no extension claims the name, so a host can chain it in front of its own executor:
+
+```csharp
+var result = await extensions.ExecuteToolAsync(name, argumentsJson)
+             ?? await myOwnExecutor(name, argumentsJson);
+```
+
+## When an extension is the wrong tool
+
+| You want | Use |
+| --- | --- |
+| A tool in a language you already have | An [MCP server](/ai/agent-runtime#mcp) |
+| Code that runs before any session exists | A C# module mounted at build time |
+| Logic with no runtime configurability | Plain C# in the host application |
+
+Extensions are for behaviour that should be **added without recompiling** — project-specific safety rules, a house tool, a command that formats output your way.
