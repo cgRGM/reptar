@@ -380,6 +380,7 @@ public sealed class RpcMode
     {
         _session.Abort();
         _session.Messages.Clear();
+        _persistedCount = 0;
 
         if (_store is not null)
         {
@@ -824,6 +825,7 @@ public sealed class RpcMode
             {
                 _row = found;
                 _session.Messages.AddRange(await LoadBranchAsync(found.Id).ConfigureAwait(false));
+                _persistedCount = _session.Messages.Count;
                 return;
             }
         }

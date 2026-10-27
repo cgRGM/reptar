@@ -187,6 +187,15 @@ public sealed record AgentMessageRow(
 /// </summary>
 public sealed class AgentSessionStore(IDbClient db, TableDef sessions, TableDef messages)
 {
+    static AgentSessionStore()
+    {
+        // Resuming can query before any row constructor has run in this process.
+        EntityMapper<AgentSessionRow>.DirectMap = AgentSessionRow.Map;
+        EntityMapper<AgentSessionRow>.Factory = _ => AgentSessionRow.Map;
+        EntityMapper<AgentMessageRow>.DirectMap = AgentMessageRow.Map;
+        EntityMapper<AgentMessageRow>.Factory = _ => AgentMessageRow.Map;
+    }
+
     public TableDef Sessions => sessions;
     public TableDef Messages => messages;
 

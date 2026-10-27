@@ -140,6 +140,18 @@ public sealed class SessionTreeStore
 {
     private readonly IDbClient _db;
 
+    static SessionTreeStore()
+    {
+        // A restart can read entries before constructing the first new row.
+        EntityMapper<SessionEntryRow>.DirectMap = SessionEntryRow.Map;
+        EntityMapper<SessionEntryRow>.Factory = _ => SessionEntryRow.Map;
+        // These scalar projection shapes need explicit mappers under Native AOT.
+        EntityMapper<LeafRow>.DirectMap = record => new LeafRow(record.IsDBNull(0) ? null : record.GetString(0));
+        EntityMapper<LeafRow>.Factory = _ => EntityMapper<LeafRow>.DirectMap!;
+        EntityMapper<SeqRow>.DirectMap = record => new SeqRow(record.GetInt64(0));
+        EntityMapper<SeqRow>.Factory = _ => EntityMapper<SeqRow>.DirectMap!;
+    }
+
     public SessionTreeStore(IDbClient db)
     {
         _db = db;
@@ -229,7 +241,7 @@ public sealed class SessionTreeStore
     {
         var rows = await _db.QueryAsync<LeafRow>(
             $"select leaf_id from \"{State.Name}\" where session_id = @sessionId",
-            new { sessionId }).ConfigureAwait(false);
+            ("sessionId", sessionId)).ConfigureAwait(false);
 
         return rows.Count > 0 ? rows[0].LeafId : null;
     }
@@ -240,7 +252,7 @@ public sealed class SessionTreeStore
     {
         var rows = await _db.QueryAsync<SeqRow>(
             $"select coalesce(max(seq), 0) + 1 as value from \"{Entries.Name}\" where session_id = @sessionId",
-            new { sessionId }).ConfigureAwait(false);
+            ("sessionId", sessionId)).ConfigureAwait(false);
 
         return rows.Count > 0 ? rows[0].Value : 1;
     }
@@ -293,7 +305,7 @@ public sealed class SessionTreeStore
     public Task<List<SessionEntryRow>> EntriesAsync(string sessionId) =>
         _db.QueryAsync<SessionEntryRow>(
             $"select * from \"{Entries.Name}\" where session_id = @sessionId order by seq",
-            new { sessionId });
+            ("sessionId", sessionId));
 
     /// <summary>
     /// The session as a tree, roots first. More than one root is possible when a branch was
@@ -433,7 +445,7 @@ public sealed class SessionTreeStore
 
         var rows = await _db.QueryAsync<AgentMessageRow>(
             $"select * from \"{flatMessages.Name}\" where session_id = @sessionId order by rowid",
-            new { sessionId }).ConfigureAwait(false);
+            ("sessionId", sessionId)).ConfigureAwait(false);
 
         if (rows.Count == 0)
             return 0;

@@ -357,7 +357,7 @@ agent_sessions: id (PK), title, created_at
 agent_messages: id (PK), session_id (indexed), role, content, tool_calls, created_at
 ```
 
-Sessions are shared across the terminal and web modes (same `--db` file), and row mapping uses **manually registered zero-reflection mappers**, so the whole app stays Native AOT clean.
+Sessions are shared across the terminal and web modes (same `--db` file). Session stores explicitly register row mappers before their first query, including after process restart; session-tree queries use reflection-free named tuple bindings.
 
 ## Build (single binary)
 
@@ -368,7 +368,15 @@ dotnet publish app.cs -c Release -r linux-x64 --self-contained \
 ./publish/app --self-test   # 7/7
 ```
 
-Measured on osx-arm64: **12 MB** binary, **~10–20 ms** cold start. The `deploy/Dockerfile` produces the linux-x64 container variant.
+From the repository root, verify the published executable rather than only its JIT build:
+
+```bash
+python3 scripts/test-agent-native.py examples/agent-cli/publish/app
+```
+
+This offline smoke checks the seven workspace tools, prompt/tree/fork/leaf commands, unknown cursor/leaf rejection, cursor continuity and a second turn after process restart, plus web health/status/steer/abort and an Echo SSE reply. It uses temporary databases/workspaces and no real provider credentials. CI publishes and tests the Linux executable; the integration also verified an osx-arm64 executable of approximately **16.2 MiB**. The `deploy/Dockerfile` produces the linux-x64 container variant.
+
+Publishing still emits trim/AOT analyzer warnings. The smoke establishes the listed offline paths, not every provider/tool/model combination. Real-provider cache reuse and large-session TUI visuals remain unverified.
 
 ## AOT rule of thumb
 
