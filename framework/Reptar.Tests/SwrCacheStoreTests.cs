@@ -1,5 +1,6 @@
 namespace Reptar.Tests;
 
+[Collection("ResponseCache")]
 public sealed class SwrCacheStoreTests
 {
     [Fact]

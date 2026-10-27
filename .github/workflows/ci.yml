@@ -159,6 +159,13 @@ jobs:
             -o "$RUNNER_TEMP/reptar-session-native"
           python3 scripts/test-session-durability.py "$RUNNER_TEMP/reptar-session-native/app"
 
+      - name: Published Native AOT queue and cron shutdown lifecycle
+        run: |
+          dotnet publish scripts/fixtures/background-lifecycle/app.cs -c Release -r linux-x64 --self-contained \
+            -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+            -o "$RUNNER_TEMP/reptar-background-native"
+          python3 scripts/test-background-lifecycle.py "$RUNNER_TEMP/reptar-background-native/app"
+
       - name: Doctor (strict)
         run: bun reptar doctor --strict
 

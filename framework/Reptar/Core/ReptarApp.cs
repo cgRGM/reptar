@@ -912,7 +912,10 @@ public sealed class ReptarApp
         }
     }
 
-    public async Task<ScheduledResult> HandleScheduledAsync(ScheduledEvent evt)
+    public Task<ScheduledResult> HandleScheduledAsync(ScheduledEvent evt) =>
+        HandleScheduledAsync(evt, CancellationToken.None);
+
+    public async Task<ScheduledResult> HandleScheduledAsync(ScheduledEvent evt, CancellationToken cancellationToken)
     {
         var errors = new List<string>();
         var handlers = _scheduledHandlers
@@ -924,11 +927,13 @@ public sealed class ReptarApp
 
         foreach (var handler in handlers)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var request = new ReptarRequest
             {
                 Method = "SCHEDULED",
                 Path = "/scheduled",
                 Query = "",
+                Aborted = cancellationToken,
                 Headers = new Dictionary<string, string>
                 {
                     ["x-cron"] = evt.Cron,
@@ -939,11 +944,16 @@ public sealed class ReptarApp
             var ctx = new Ctx(request, Services)
             {
                 RequestId = Ids.New("cron"),
+                RequestAborted = cancellationToken,
             };
 
             try
             {
                 await handler(ctx, evt);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception exception)
             {
@@ -956,7 +966,10 @@ public sealed class ReptarApp
         return new ScheduledResult(errors.Count == 0, errors.ToArray());
     }
 
-    public async Task<QueueBatchResult> HandleQueueBatchAsync(QueueBatch batch)
+    public Task<QueueBatchResult> HandleQueueBatchAsync(QueueBatch batch) =>
+        HandleQueueBatchAsync(batch, CancellationToken.None);
+
+    public async Task<QueueBatchResult> HandleQueueBatchAsync(QueueBatch batch, CancellationToken cancellationToken)
     {
         if (!_queueHandlers.TryGetValue(batch.Queue, out var handler))
         {
@@ -969,11 +982,13 @@ public sealed class ReptarApp
 
         foreach (var message in batch.Messages)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             var request = new ReptarRequest
             {
                 Method = "QUEUE",
                 Path = $"/queue/{batch.Queue}",
                 Query = "",
+                Aborted = cancellationToken,
                 Headers = new Dictionary<string, string>
                 {
                     ["x-queue-name"] = batch.Queue,
@@ -986,12 +1001,19 @@ public sealed class ReptarApp
             var ctx = new Ctx(request, Services)
             {
                 RequestId = message.Id,
+                RequestAborted = cancellationToken,
             };
 
             try
             {
                 await handler(ctx, message);
                 observer?.Completed(batch.Queue, message.Id);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // No acknowledgement/retry-budget consumption for an interrupted batch.
+                // Already performed effects can be redelivered: handlers must be idempotent.
+                throw;
             }
             catch (RetryIn retry)
             {
