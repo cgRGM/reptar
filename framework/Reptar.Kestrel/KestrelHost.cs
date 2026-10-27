@@ -66,6 +66,8 @@ public static class KestrelHost
             ];
         });
 
+        builder.Services.AddSingleton<IResponseCompressionProvider, ReptarResponseCompressionProvider>();
+
         var port = int.TryParse(Environment.GetEnvironmentVariable("PORT"), out var configuredPort)
             ? configuredPort
             : 8787;
@@ -187,8 +189,8 @@ public static class KestrelHost
             }
 
             var requestPath = http.Request.Path.Value ?? "/";
-            var maxBodyBytes = app.GetMaxBodyBytes(http.Request.Method, requestPath);
-            var request = app.IsStreamingBody(http.Request.Method, requestPath)
+            var (maxBodyBytes, streamingBody) = app.GetRequestBodyOptions(http.Request.Method, requestPath);
+            var request = streamingBody
                 ? ToStreamingReptarRequest(http, maxBodyBytes)
                 : await ToReptarRequest(http, maxBodyBytes);
             var response = await app.HandleAsync(request);

@@ -13,6 +13,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import fixturesJson from "../out/fixtures.json";
+import { buildRequestHeaders } from "./request-headers";
 import { buildScenarios } from "./scenarios";
 import type { Fixtures, Scenario } from "./scenarios";
 
@@ -100,6 +101,12 @@ const connections = Number(argValue("--connections") ?? "100");
 const reps = Number(argValue("--reps") ?? "3");
 const cooldown = Number(argValue("--cooldown") ?? "2");
 const ohaBin = process.env.OHA_BIN ?? argValue("--oha") ?? "oha";
+// Compare framework work, not a client's implicit compression preferences.
+// Measure negotiated compression separately with --accept-encoding / BENCH_ACCEPT_ENCODING.
+const acceptEncoding =
+  argValue("--accept-encoding") ??
+  process.env.BENCH_ACCEPT_ENCODING ??
+  "identity";
 const pid = Number(argValue("--pid") ?? "0");
 const only = argValue("--only");
 const skip = new Set((argValue("--skip") ?? "").split(",").filter(Boolean));
@@ -204,7 +211,8 @@ const runOha = (scenario: Scenario, seconds: number): OhaResult => {
     ohaArgs.push("-m", scenario.method);
   }
 
-  for (const [name, value] of Object.entries(scenario.headers ?? {})) {
+  const headers = buildRequestHeaders(scenario.headers, acceptEncoding);
+  for (const [name, value] of headers) {
     ohaArgs.push("-H", `${name}: ${value}`);
   }
 
@@ -354,6 +362,7 @@ mkdirSync(outDir, { recursive: true });
 const payload = {
   baseUrl,
   config: {
+    acceptEncoding,
     connections,
     cooldown,
     duration,
@@ -371,6 +380,8 @@ writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`);
 
 const markdown = [
   `## ${label}`,
+  "",
+  `Request Accept-Encoding: \`${acceptEncoding}\`.`,
   "",
   "| Tier | Scenario | Req/s | p50 | p95 | p99 | Errors | CPU ms/req | RSS |",
   "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",

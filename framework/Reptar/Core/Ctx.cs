@@ -8,6 +8,7 @@ public sealed partial class Ctx
 {
     private readonly ServiceSet _services;
     private string? _requestId;
+    private RequestTraceState? _traceState;
 
     internal Ctx(ReptarRequest request, ServiceSet services)
     {
@@ -64,14 +65,32 @@ public sealed partial class Ctx
     /// <summary>Matched route template (e.g. /posts/:id), or the raw path on 404.</summary>
     public string? RoutePattern { get; internal set; }
 
-    /// <summary>W3C trace id parsed from traceparent, or a generated id.</summary>
-    public string? TraceId { get; internal set; }
+    /// <summary>W3C trace id parsed from traceparent, or generated on first use.</summary>
+    public string? TraceId
+    {
+        get => _traceState?.TraceId;
+        internal set => (_traceState ??= new RequestTraceState()).TraceId = value;
+    }
 
-    /// <summary>W3C span id for this request.</summary>
-    public string? SpanId { get; internal set; }
+    /// <summary>W3C span id, generated on first use within an HTTP request.</summary>
+    public string? SpanId
+    {
+        get => _traceState?.SpanId;
+        internal set => (_traceState ??= new RequestTraceState()).SpanId = value;
+    }
 
     /// <summary>W3C parent span id parsed from the incoming traceparent.</summary>
-    public string? ParentSpanId { get; internal set; }
+    public string? ParentSpanId
+    {
+        get => _traceState?.ParentSpanId;
+        internal set => (_traceState ??= new RequestTraceState()).ParentSpanId = value;
+    }
+
+    internal bool HasTraceIdentifiers => _traceState?.HasIdentifiers ?? false;
+    internal RequestTraceState TraceState => _traceState
+        ?? throw new InvalidOperationException("HTTP trace state has not been initialized.");
+
+    internal void InitializeTrace(TraceParent? parent) => _traceState = new RequestTraceState(parent);
 
     public async Task<SessionUser?> UserAsync()
     {
