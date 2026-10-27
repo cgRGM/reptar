@@ -1,7 +1,8 @@
 #if !NETWASM
+using Reptar.AI;
 using System.Text;
 
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// A zero-dependency line editor for the agent prompt, modeled on pi's editor:

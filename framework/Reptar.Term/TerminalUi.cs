@@ -1,7 +1,7 @@
 #if !NETWASM
 using System.Text;
 
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// Zero-dependency terminal UI toolkit: an arrow-key selection prompt with

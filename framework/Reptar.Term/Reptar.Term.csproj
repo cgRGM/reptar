@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>Reptar.Term</RootNamespace>
+    <AssemblyName>Reptar.Term</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- AgentImage and Fuzzy: the terminal layer carries clipboard images and matches names. -->
+    <ProjectReference Include="../Reptar.AI/Reptar.AI.csproj" />
+  </ItemGroup>
+</Project>

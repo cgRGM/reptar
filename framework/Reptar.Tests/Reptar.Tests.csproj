@@ -16,11 +16,14 @@
 
   <ItemGroup>
     <Using Include="Xunit" />
+    <!-- The example's app files are compiled here, so they need the same globals app.cs sets. -->
+    <Using Include="Reptar.Term" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Reptar\Reptar.csproj" />
     <ProjectReference Include="..\Reptar.AI\Reptar.AI.csproj" />
+    <ProjectReference Include="..\Reptar.Term\Reptar.Term.csproj" />
     <ProjectReference Include="..\Reptar.Lambda\Reptar.Lambda.csproj" />
     <ProjectReference Include="..\Reptar.Kestrel\Reptar.Kestrel.csproj" />
     <ProjectReference Include="..\Reptar.SourceGenerators\Reptar.SourceGenerators.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
@@ -32,6 +35,7 @@
     <Compile Include="..\..\examples\blog\features\posts.cs" Link="BlogExample\features\posts.cs" />
     <Compile Include="..\..\examples\blog\features\blog.cs" Link="BlogExample\features\blog.cs" />
     <Compile Include="..\..\examples\blog\local-r2.cs" Link="BlogExample\local-r2.cs" />
+    <!-- The terminal layer is a package now; only the app files stay in the example. -->
     <Compile Include="..\..\examples\agent-cli\terminal\*.cs" Link="AgentCli\Terminal\%(Filename)%(Extension)" />
   </ItemGroup>
 

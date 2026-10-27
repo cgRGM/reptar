@@ -1,7 +1,7 @@
 #if !NETWASM
 using System.Text;
 
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// Minimal ANSI escape helpers for the terminal UI. All calls are no-ops

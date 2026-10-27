@@ -1,7 +1,8 @@
 #if !NETWASM
+using Reptar.AI;
 using System.Text;
 
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>One row in a <see cref="TermSelector"/>.</summary>
 /// <param name="Label">Primary text — the model id, provider name, or setting name.</param>

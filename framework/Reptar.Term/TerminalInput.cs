@@ -1,8 +1,9 @@
 #if !NETWASM
+using Reptar.AI;
 using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// One key event parsed from the terminal's byte stream: a control key, a

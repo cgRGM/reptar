@@ -465,8 +465,10 @@ public sealed class ReptarTerm : IDisposable
             if (_runTask is { IsCompleted: true })
                 await FinishAgentRunAsync().ConfigureAwait(false);
 
-            // 3. Handle one keystroke, if any. Never blocks the loop.
-            var keyRead = TerminalInput.ReadKey();
+            // 3. Handle one keystroke, if any. Poll with a zero timeout: the default is -1,
+            //    which blocks until a key arrives and freezes the whole loop — no spinner, no
+            //    streamed text, no timer, until the user types something.
+            var keyRead = TerminalInput.ReadKey(timeoutMs: 0);
             if (keyRead is { } key)
             {
                 _dirty = true;
@@ -538,11 +540,14 @@ public sealed class ReptarTerm : IDisposable
                 Render();
             }
 
-            if (_isStreaming)
-                _dirty = true;   // the working indicator animates
+            // The working indicator animates, so keep repainting while a run is in flight.
+            // Idle frames cost nothing because _dirty stays false.
+            var streaming = _isStreaming;
+            if (streaming)
+                _dirty = true;
 
             if (keyRead is null)
-                await Task.Delay(16, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(streaming ? 16 : 40, cancellationToken).ConfigureAwait(false);
         }
 
         AbortAgent();

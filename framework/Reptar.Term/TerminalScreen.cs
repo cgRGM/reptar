@@ -1,5 +1,5 @@
 #if !NETWASM
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// Pinned-footer support over a DECSTBM scroll region: the terminal scrolls
