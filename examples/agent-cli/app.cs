@@ -66,6 +66,11 @@ await store.EnsureCreatedAsync();
 var tree = new SessionTreeStore(app.Db);
 await tree.EnsureCreatedAsync();
 
+// Todos: mounted as ordinary tools so the model can plan multi-step work, and readable by the
+// UI for the status-line count.
+var todos = TodoModule.Create();
+todos.Mount(app);
+
 // Chat API + session persistence + embedded web companion.
 Chat.Configure(app, store, workspaceRoot);
 
@@ -86,7 +91,7 @@ if (flags.Contains("--self-test"))
 // Provider management: status table and interactive connect (pi /login,
 // opencode `auth login` parity) before any mode handling.
 // -----------------------------------------------------------------------
-var agent = new TerminalAgent(app, tree, new TerminalAgentOptions
+var agent = new TerminalAgent(app, tree, todos, new TerminalAgentOptions
 {
     WorkspaceRoot = workspaceRoot,
     Provider = ValueOf("provider"),

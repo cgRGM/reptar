@@ -95,6 +95,16 @@ height-3   composer, or the selector's last row
 
 **Images.** `TerminalImage.Detect()` picks the kitty or iTerm2 protocol from the environment, and `TerminalImage.Render` builds the escape sequence — chunked for kitty, a single OSC 1337 payload for iTerm2. There is no sixel path, because it needs palette quantization and a terminal with no inline image support should get `TerminalImage.Placeholder`, not mojibake.
 
+## Markdown
+
+`MarkdownRenderer` turns markdown into styled runs — headings, bullets, ordered lists, quotes, rules, fenced blocks, and **inline** emphasis, code spans, strike-through and links. Inline mattering is the point: `**bold**` becomes a run drawn bold, rather than having its markers stripped. The output is plain data, so a caller can window, scroll, or test it without a terminal.
+
+## Todos
+
+`TodoModule` gives the model `todos_add` / `todos_complete` / `todos_remove` / `todos_get_remaining` / `todos_get_all`, and `Mount(app)` registers them as ordinary tools.
+
+The UI keeps them out of the transcript: a count sits in the status line (`☰ 2/5`), and `/todo` opens the full list as a searchable picker. A long todo list that occupies screen space competes with the conversation; a count and a keypress does not.
+
 ## Piped input
 
 Every widget falls back to plain numbered input when stdin is not a terminal, so the same binary works in a script or CI:
