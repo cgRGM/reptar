@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.ResponseCompression;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
 
 namespace Reptar.Hosting;
 
@@ -91,7 +92,16 @@ public static class KestrelHost
             }
         });
 
-        var web = builder.Build();
+        builder.Services.Configure<HostOptions>(options =>
+            options.ShutdownTimeout = TimeSpan.FromSeconds(EnvInt("REPTAR_BACKGROUND_SHUTDOWN_SECS", 30)));
+        ReptarWorkers? workers = null;
+        if (app.QueueNames.Count > 0 || app.CronExpressions.Count > 0)
+        {
+            builder.Services.AddHostedService<ReptarWorkers>(services =>
+                workers = new ReptarWorkers(app, services.GetRequiredService<IHostApplicationLifetime>()));
+        }
+
+        await using var web = builder.Build();
 
         // One-line identity banner: in multi-agent/multi-process repos,
         // knowing exactly which build is on which port (and its pid) is the
@@ -197,13 +207,8 @@ public static class KestrelHost
             await WriteResponse(http, response);
         });
 
-        await app.StartModulesAsync();
-
-        // Background workers: the queue poller drains the configured
-        // consumer adapter and the cron scheduler evaluates OnScheduled
-        // expressions. Workers never needs these — the platform invokes you.
-        var backgroundCts = new CancellationTokenSource();
-        web.Lifetime.ApplicationStopping.Register(() => backgroundCts.Cancel());
+        // Hosted workers stop intake on ApplicationStopping and drain before
+        // module/database disposal. Workers uses the platform invocation instead.
 
         if (app.Queues is IQueueConsumer && app.QueueNames.Count > 0)
         {
@@ -211,7 +216,6 @@ public static class KestrelHost
                 $"Reptar queue poller: {app.QueueNames.Count} queue(s), " +
                 $"interval {EnvInt("REPTAR_QUEUE_POLL_SECS", 2)}s, " +
                 $"batch {EnvInt("REPTAR_QUEUE_BATCH", 25)}");
-            _ = Task.Run(() => PollQueuesAsync(app, backgroundCts.Token), CancellationToken.None);
         }
 
         if (app.CronExpressions.Count > 0)
@@ -219,17 +223,58 @@ public static class KestrelHost
             Console.WriteLine(
                 $"Reptar cron scheduler: {app.CronExpressions.Count} schedule(s), " +
                 $"tick {EnvInt("REPTAR_CRON_TICK_SECS", 15)}s");
-            _ = Task.Run(() => RunCronAsync(app, backgroundCts.Token), CancellationToken.None);
         }
 
         try
         {
+            await app.StartModulesAsync();
             await web.RunAsync();
         }
         finally
         {
-            backgroundCts.Cancel();
-            await app.DisposeAsync();
+            if (workers?.ExecuteTask is { IsCompleted: false } unfinished)
+            {
+                // A noncooperative handler outlived the host deadline. Do not
+                // dispose its database beneath it; report stop failure and defer
+                // cleanup until it actually exits (or the process is terminated).
+                Console.Error.WriteLine("[Shutdown] Background drain expired; resource disposal deferred.");
+                _ = DisposeAfterWorkersAsync(app, unfinished);
+            }
+            else
+            {
+                await app.DisposeAsync();
+            }
+        }
+    }
+
+    private static async Task DisposeAfterWorkersAsync(ReptarApp app, Task unfinished)
+    {
+        try { await unfinished; }
+        catch (Exception error) { Console.Error.WriteLine($"[Shutdown] Background task ended: {error.Message}"); }
+        try { await app.DisposeAsync(); }
+        catch (Exception error) { Console.Error.WriteLine($"[Shutdown] Deferred cleanup failed: {error.Message}"); }
+    }
+
+    private sealed class ReptarWorkers(ReptarApp app, IHostApplicationLifetime lifetime) : BackgroundService
+    {
+        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        {
+            using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lifetime.ApplicationStopping);
+            var tasks = new List<Task>(2);
+            if (app.Queues is IQueueConsumer && app.QueueNames.Count > 0)
+                tasks.Add(PollQueuesAsync(app, cancellation.Token));
+            if (app.CronExpressions.Count > 0)
+                tasks.Add(RunCronAsync(app, cancellation.Token));
+            await Task.WhenAll(tasks);
+        }
+
+        public override async Task StopAsync(CancellationToken cancellationToken)
+        {
+            await base.StopAsync(cancellationToken);
+            if (ExecuteTask is { IsCompleted: false })
+                throw new TimeoutException("Reptar background workers did not drain before the host shutdown deadline.");
+            if (ExecuteTask?.Exception is { } failure)
+                throw new InvalidOperationException("Reptar background worker failed.", failure);
         }
     }
 
@@ -260,7 +305,7 @@ public static class KestrelHost
                         continue;
 
                     idle = false;
-                    await HandleBatchAsync(app, consumer, queue, batch);
+                    await HandleBatchAsync(app, consumer, queue, batch, ct);
                 }
             }
             catch (OperationCanceledException)
@@ -289,9 +334,10 @@ public static class KestrelHost
         ReptarApp app,
         IQueueConsumer consumer,
         string queue,
-        QueueBatch batch)
+        QueueBatch batch,
+        CancellationToken cancellationToken)
     {
-        var result = await app.HandleQueueBatchAsync(batch);
+        var result = await app.HandleQueueBatchAsync(batch, cancellationToken);
 
         if (result.Success)
         {
@@ -353,7 +399,7 @@ public static class KestrelHost
                         continue;
 
                     lastFired[cron] = key;
-                    await app.HandleScheduledAsync(new ScheduledEvent(cron, now.ToString("O")));
+                    await app.HandleScheduledAsync(new ScheduledEvent(cron, now.ToString("O")), ct);
                 }
             }
             catch (OperationCanceledException)

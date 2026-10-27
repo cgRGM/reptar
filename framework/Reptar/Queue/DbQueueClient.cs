@@ -68,7 +68,7 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
             var exists = await _db.ExistsAsync(
                 Table(),
                 "state = 'pending' and dedup_key = @dedupKey",
-                new { dedupKey });
+                ("dedupKey", dedupKey));
             if (exists)
                 return;
         }
@@ -84,15 +84,15 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
              values
                  (@id, @queue, @body, 'pending', @visibleAt, 0, @maxAttempts, @dedupKey, @createdAt)
              """,
-            new
+            new Dictionary<string, object?>
             {
-                id,
-                queue = queueName,
-                body = messageJson,
-                visibleAt = _clock.IsoIn(TimeSpan.FromSeconds(delaySeconds)),
-                maxAttempts = options?.AttemptsHint ?? _options.MaxAttempts,
-                dedupKey,
-                createdAt = now,
+                ["id"] = id,
+                ["queue"] = queueName,
+                ["body"] = messageJson,
+                ["visibleAt"] = _clock.IsoIn(TimeSpan.FromSeconds(delaySeconds)),
+                ["maxAttempts"] = options?.AttemptsHint ?? _options.MaxAttempts,
+                ["dedupKey"] = dedupKey,
+                ["createdAt"] = now,
             });
 
         _observer?.Enqueued(queueName, id, options);
@@ -108,7 +108,12 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
              order by created_at
              limit @max
              """,
-            new { queue, now = _clock.IsoNow(), max = Math.Min(maxMessages, _options.BatchSize) },
+            new Dictionary<string, object?>
+            {
+                ["queue"] = queue,
+                ["now"] = _clock.IsoNow(),
+                ["max"] = Math.Min(maxMessages, _options.BatchSize),
+            },
             row => new JobRow(
                 Convert.ToString(row["id"]) ?? "",
                 Convert.ToString(row["body"]) ?? "",
@@ -131,7 +136,7 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
         {
             await _db.ExecuteAsync(
                 $"update {JobsTable} set state = 'completed', completed_at = @completedAt where id = @id",
-                new { id = message.Id, completedAt = _clock.IsoNow() });
+                new Dictionary<string, object?> { ["id"] = message.Id, ["completedAt"] = _clock.IsoNow() });
 
             _observer?.Completed(queue, message.Id);
         }
@@ -149,7 +154,7 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
         {
             var row = await _db.QueryMappedAsync(
                 $"select attempts, max_attempts, last_error from {JobsTable} where id = @id",
-                new { id = message.Id },
+                ("id", message.Id),
                 r => (Attempts: ToInt(r["attempts"]), MaxAttempts: ToInt(r["max_attempts"]),
                     LastError: Convert.ToString(r["last_error"])));
 
@@ -163,7 +168,10 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
             {
                 await _db.ExecuteAsync(
                     $"update {JobsTable} set state = 'dead', attempts = @attempts, last_error = @lastError where id = @id",
-                    new { attempts = attempts + 1, id = message.Id, lastError = "max attempts reached" });
+                    new Dictionary<string, object?>
+                    {
+                        ["attempts"] = attempts + 1, ["id"] = message.Id, ["lastError"] = "max attempts reached",
+                    });
                 _observer?.DeadLettered(queue, message.Id, attempts + 1);
                 continue;
             }
@@ -174,12 +182,12 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
 
             await _db.ExecuteAsync(
                 $"update {JobsTable} set attempts = @attempts, visible_at = @visibleAt, last_error = @lastError where id = @id",
-                new
+                new Dictionary<string, object?>
                 {
-                    attempts = attempts + 1,
-                    id = message.Id,
-                    visibleAt = _clock.IsoIn(TimeSpan.FromSeconds(delaySeconds)),
-                    lastError = $"attempt {attempts + 1} failed",
+                    ["attempts"] = attempts + 1,
+                    ["id"] = message.Id,
+                    ["visibleAt"] = _clock.IsoIn(TimeSpan.FromSeconds(delaySeconds)),
+                    ["lastError"] = $"attempt {attempts + 1} failed",
                 });
 
             _observer?.Retried(queue, message.Id, attempts + 1, delaySeconds);
@@ -200,7 +208,7 @@ public sealed class DbQueueClient : IQueueClient, IQueueConsumer
         var cutoff = _clock.IsoIn(TimeSpan.FromMinutes(-_options.CompletedRetentionMinutes));
         await _db.ExecuteAsync(
             $"delete from {JobsTable} where state = 'completed' and completed_at < @cutoff",
-            new { cutoff });
+            ("cutoff", cutoff));
     }
 
     private static int ToInt(object? value) => value is null ? 0 : Convert.ToInt32(value);

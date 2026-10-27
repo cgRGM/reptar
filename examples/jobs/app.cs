@@ -16,6 +16,7 @@ var database = Db.Sqlite("jobs.db");
 var app = ReptarApp.Create(new ReptarConfig
 {
     Database = database,
+    Json = new SourceGenJsonCodec(JobsJsonContext.Default),
     Queues = mode switch
     {
         // Sync needs no explicit client: it is the native default and
@@ -33,11 +34,11 @@ var app = ReptarApp.Create(new ReptarConfig
 
 app.Get("/stats", async ctx =>
 {
-    var processed = await ctx.Db.QuerySingleOrDefaultAsync<DbCount>(
-        "select count(*) as count from bench_results");
+    var processed = await ctx.Db.QuerySingleOrDefaultAsync<long>(
+        "select count(*) from bench_results");
     return ctx.JsonRaw(new JsonObject
     {
-        ["processed"] = processed?.Count ?? 0,
+        ["processed"] = processed,
         ["mode"] = mode,
     }.ToJsonString());
 });
@@ -78,14 +79,14 @@ app.OnQueue<BenchJob>("jobs", async (ctx, msg, job) =>
 
     await ctx.Db.ExecuteAsync(
         "insert or ignore into bench_results (id, job_id, processed_at) values (@id, @jobId, @at)",
-        new { id = Ids.New("res"), jobId = job.Id, at = DateTimeOffset.UtcNow.ToString("O") });
+        ("id", Ids.New("res")), ("jobId", job.Id), ("at", DateTimeOffset.UtcNow.ToString("O")));
 });
 
 app.OnScheduled("*/1 * * * *", async (ctx, evt) =>
 {
     await ctx.Db.ExecuteAsync(
         "insert or replace into bench_results (id, job_id, processed_at) values ('tick', @jobId, @at)",
-        new { jobId = $"cron-{evt.Cron}", at = evt.ScheduledTime });
+        ("jobId", $"cron-{evt.Cron}"), ("at", evt.ScheduledTime));
 });
 
 await app.Db.ExecuteAsync(
