@@ -12,7 +12,8 @@ namespace Reptar;
 public class LocalStorage : IStorage, IR2Client
 {
     private const string MetaDirectoryName = ".reptar-meta";
-    private const string MetaFormatVersion = "v1";
+    private const string MetaFormatVersion = "v2";
+    private const string LegacyMetaFormatVersion = "v1";
 
     private readonly string _fullRoot;
     private readonly string _fullRootWithSeparator;
@@ -163,6 +164,12 @@ public class LocalStorage : IStorage, IR2Client
             ?? Files.ContentTypeFor(sourceKey);
         var cacheControl = options.CacheControl
             ?? (options.PreserveMetadata ? sourceMetadata?.CacheControl : null);
+        var contentDisposition = options.ContentDisposition
+            ?? (options.PreserveMetadata ? sourceMetadata?.ContentDisposition : null);
+        var contentEncoding = options.ContentEncoding
+            ?? (options.PreserveMetadata ? sourceMetadata?.ContentEncoding : null);
+        var contentLanguage = options.ContentLanguage
+            ?? (options.PreserveMetadata ? sourceMetadata?.ContentLanguage : null);
         var metadata = options.Metadata
             ?? (options.PreserveMetadata ? sourceMetadata?.Metadata : null);
 
@@ -173,6 +180,9 @@ public class LocalStorage : IStorage, IR2Client
             {
                 Overwrite = true,
                 CacheControl = cacheControl,
+                ContentDisposition = contentDisposition,
+                ContentEncoding = contentEncoding,
+                ContentLanguage = contentLanguage,
                 Metadata = metadata,
             });
 
@@ -221,6 +231,12 @@ public class LocalStorage : IStorage, IR2Client
             ?? Files.ContentTypeFor(sourceKey);
         var cacheControl = options.CacheControl
             ?? (options.PreserveMetadata ? sourceMetadata?.CacheControl : null);
+        var contentDisposition = options.ContentDisposition
+            ?? (options.PreserveMetadata ? sourceMetadata?.ContentDisposition : null);
+        var contentEncoding = options.ContentEncoding
+            ?? (options.PreserveMetadata ? sourceMetadata?.ContentEncoding : null);
+        var contentLanguage = options.ContentLanguage
+            ?? (options.PreserveMetadata ? sourceMetadata?.ContentLanguage : null);
         var metadata = options.Metadata
             ?? (options.PreserveMetadata ? sourceMetadata?.Metadata : null);
 
@@ -231,6 +247,9 @@ public class LocalStorage : IStorage, IR2Client
             {
                 Overwrite = true,
                 CacheControl = cacheControl,
+                ContentDisposition = contentDisposition,
+                ContentEncoding = contentEncoding,
+                ContentLanguage = contentLanguage,
                 Metadata = metadata,
             });
 
@@ -473,6 +492,12 @@ public class LocalStorage : IStorage, IR2Client
 
             if (!string.IsNullOrWhiteSpace(meta.CacheControl))
                 metadata["cache-control"] = meta.CacheControl;
+            if (!string.IsNullOrWhiteSpace(meta.ContentDisposition))
+                metadata["content-disposition"] = meta.ContentDisposition;
+            if (!string.IsNullOrWhiteSpace(meta.ContentEncoding))
+                metadata["content-encoding"] = meta.ContentEncoding;
+            if (!string.IsNullOrWhiteSpace(meta.ContentLanguage))
+                metadata["content-language"] = meta.ContentLanguage;
         }
 
         return new StorageObject(
@@ -500,6 +525,9 @@ public class LocalStorage : IStorage, IR2Client
         var hasMetadata = options.Metadata is { Count: > 0 };
         if (string.IsNullOrWhiteSpace(contentType) &&
             string.IsNullOrWhiteSpace(options.CacheControl) &&
+            string.IsNullOrWhiteSpace(options.ContentDisposition) &&
+            string.IsNullOrWhiteSpace(options.ContentEncoding) &&
+            string.IsNullOrWhiteSpace(options.ContentLanguage) &&
             !hasMetadata)
         {
             // Clear metadata from a previous write so an overwrite cannot
@@ -520,6 +548,9 @@ public class LocalStorage : IStorage, IR2Client
             MetaFormatVersion,
             Encode(contentType ?? ""),
             Encode(options.CacheControl ?? ""),
+            Encode(options.ContentDisposition ?? ""),
+            Encode(options.ContentEncoding ?? ""),
+            Encode(options.ContentLanguage ?? ""),
         };
 
         if (hasMetadata)
@@ -538,13 +569,41 @@ public class LocalStorage : IStorage, IR2Client
             return null;
 
         var lines = await File.ReadAllLinesAsync(metaPath);
-        if (lines.Length < 3 || lines[0] != MetaFormatVersion)
+        if (lines.Length < 3)
             return null;
 
-        var contentType = Decode(lines[1]);
-        var cacheControl = Decode(lines[2]);
+        string contentType;
+        string cacheControl;
+        string contentDisposition;
+        string contentEncoding;
+        string contentLanguage;
+        int metadataStart;
+
+        if (lines[0] == LegacyMetaFormatVersion)
+        {
+            contentType = Decode(lines[1]);
+            cacheControl = Decode(lines[2]);
+            contentDisposition = "";
+            contentEncoding = "";
+            contentLanguage = "";
+            metadataStart = 3;
+        }
+        else if (lines[0] == MetaFormatVersion && lines.Length >= 6)
+        {
+            contentType = Decode(lines[1]);
+            cacheControl = Decode(lines[2]);
+            contentDisposition = Decode(lines[3]);
+            contentEncoding = Decode(lines[4]);
+            contentLanguage = Decode(lines[5]);
+            metadataStart = 6;
+        }
+        else
+        {
+            return null;
+        }
+
         var metadata = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        for (var i = 3; i < lines.Length; i++)
+        for (var i = metadataStart; i < lines.Length; i++)
         {
             var separator = lines[i].IndexOf(':');
             if (separator <= 0)
@@ -553,7 +612,13 @@ public class LocalStorage : IStorage, IR2Client
             metadata[Decode(lines[i][..separator])] = Decode(lines[i][(separator + 1)..]);
         }
 
-        return new LocalMetadata(contentType, cacheControl, metadata);
+        return new LocalMetadata(
+            contentType,
+            cacheControl,
+            contentDisposition,
+            contentEncoding,
+            contentLanguage,
+            metadata);
     }
 
     private static string Encode(string value) =>
@@ -579,6 +644,9 @@ public class LocalStorage : IStorage, IR2Client
     private sealed record LocalMetadata(
         string ContentType,
         string CacheControl,
+        string ContentDisposition,
+        string ContentEncoding,
+        string ContentLanguage,
         Dictionary<string, string> Metadata);
 }
 #endif

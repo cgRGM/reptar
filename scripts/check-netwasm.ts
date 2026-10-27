@@ -42,14 +42,14 @@ const RULES: Rule[] = [
     id: "netwasm/channels",
     message:
       "System.Threading.Channels is not available under NetWasm. Gate with #if !NETWASM and do the work inline during events, or use Durable Object alarms / Queues.",
-    pattern: /using\s+System\.Threading\.Channels|Channel\s*<|Channel\.Create/,
+    pattern: /using\s+System\.Threading\.Channels|Channel\s*<|Channel\.Create/u,
     severity: "error",
   },
   {
     id: "netwasm/process-api",
     message:
       "OS process APIs are absent under NetWasm. Gate with #if !NETWASM and return a null/placeholder on Workers.",
-    pattern: /System\.Diagnostics\.Process|Process\.GetCurrentProcess/,
+    pattern: /System\.Diagnostics\.Process|Process\.GetCurrentProcess/u,
     severity: "error",
   },
   {
@@ -57,42 +57,42 @@ const RULES: Rule[] = [
     message:
       "There is no filesystem under NetWasm/Workers. Use ctx.Storage (R2) or ctx.Db for persistence; gate local-only IO with #if !NETWASM.",
     pattern:
-      /using\s+System\.IO|System\.IO\.File|File\.Open|File\.Read|File\.Write|File\.Delete|File\.Exists|File\.Copy|new\s+FileStream|Directory\.Create|Directory\.Enumerate|Directory\.GetFiles|Directory\.Delete/,
+      /using\s+System\.IO|System\.IO\.File|File\.Open|File\.Read|File\.Write|File\.Delete|File\.Exists|File\.Copy|new\s+FileStream|Directory\.Create|Directory\.Enumerate|Directory\.GetFiles|Directory\.Delete/u,
     severity: "error",
   },
   {
     id: "netwasm/console-stdin",
     message:
       "Interactive stdin does not exist under NetWasm. Gate CLI-only code with #if !NETWASM.",
-    pattern: /Console\.ReadLine|Console\.ReadKey/,
+    pattern: /Console\.ReadLine|Console\.ReadKey/u,
     severity: "error",
   },
   {
     id: "netwasm/task-run-loop",
     message:
       "Background tasks freeze between events on Workers — a Task.Run drain loop will never be scheduled. Do work inline during the event (and hold it open via wsMessageDone for WebSocket pipelines), or use DO alarms/Queues.",
-    pattern: /Task\.Run\s*\(/,
+    pattern: /Task\.Run\s*\(/u,
     severity: "warning",
   },
   {
     id: "netwasm/thread-sleep",
     message:
       "Thread.Sleep blocks the single-threaded Worker isolate for every concurrent request. Use await Task.Delay (or Bun.sleep in scripts) instead.",
-    pattern: /Thread\.Sleep/,
+    pattern: /Thread\.Sleep/u,
     severity: "warning",
   },
   {
     id: "netwasm/anonymous-json",
     message:
       "ctx.Json(new { ... }) requires the anonymous type to be serializable under NetWasm — the app's source-generated JsonSerializerContext has no metadata for it and will throw NotSupportedException at runtime. Prefer ctx.JsonRaw(...) with a hand-built string, or a registered record type.",
-    pattern: /\.Json\s*\(\s*new\s*\{/,
+    pattern: /\.Json\s*\(\s*new\s*\{/u,
     severity: "warning",
   },
   {
     id: "netwasm/dictionary-json",
     message:
       "ctx.Json(new Dictionary<string, object?> ...) throws under NetWasm: source generation cannot provide metadata for object? values. Serialize known fields by hand (ctx.JsonRaw) or use a registered record.",
-    pattern: /\.Json\s*\(\s*new\s+Dictionary\s*<\s*string\s*,\s*object\s*\??>/,
+    pattern: /\.Json\s*\(\s*new\s+Dictionary\s*<\s*string\s*,\s*object\s*\??>/u,
     severity: "warning",
   },
   {
@@ -100,7 +100,7 @@ const RULES: Rule[] = [
     message:
       "Runtime reflection is incompatible with Native AOT/NetWasm (and against Reptar's zero-reflection rule). Use source generation, records, or the JsonCodec.",
     pattern:
-      /(?:GetType\s*\(\s*\)|typeof\s*\([^)]+\)|Type)\s*\.\s*GetProperty\s*\(|\.GetProperty\s*\([^)]*\)\s*\.GetValue|\.GetMethod\s*\(|Activator\.CreateInstance|\.GetFields\s*\(|\.GetProperties\s*\(|typeof\s*\(\s*\w+\s*\)\s*\.Assembly/,
+      /(?:GetType\s*\(\s*\)|typeof\s*\([^)]+\)|Type)\s*\.\s*GetProperty\s*\(|\.GetProperty\s*\([^)]*\)\s*\.GetValue|\.GetMethod\s*\(|Activator\.CreateInstance|\.GetFields\s*\(|\.GetProperties\s*\(|typeof\s*\(\s*\w+\s*\)\s*\.Assembly/u,
     severity: "error",
   },
 ];
@@ -193,7 +193,7 @@ const scanFile = (file: string): Finding[] => {
     }
     // Strip string literals before matching so JSON payloads containing
     // e.g. "Process" don't false-positive.
-    const codeOnly = trimmed.replaceAll(/"(?:[^"\\]|\\.)*"/g, '""');
+    const codeOnly = trimmed.replaceAll(/"(?:[^"\\]|\\.)*"/gu, '""');
     for (const rule of RULES) {
       if (rule.pattern.test(codeOnly)) {
         findings.push({
@@ -223,8 +223,8 @@ export const runCheck = (
   for (const finding of findings) {
     const tag =
       finding.severity === "error"
-        ? `\x1B[31m${finding.severity}\x1B[0m`
-        : `\x1B[33m${finding.severity}\x1B[0m`;
+        ? `\u001B[31m${finding.severity}\u001B[0m`
+        : `\u001B[33m${finding.severity}\u001B[0m`;
     console.log(
       `${tag} ${finding.rule}  ${path.relative(process.cwd(), finding.file)}:${finding.line}`
     );

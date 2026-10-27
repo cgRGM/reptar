@@ -125,9 +125,8 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
         await using var command = BuildCommand(connection, sql, param);
         await using var reader = await command.ExecuteReaderAsync();
 
-        if (EntityMapper<T>.Factory is { } factory)
+        if (EntityMapper<T>.ResolveForSql(sql, reader) is { } map)
         {
-            var map = factory(reader);
             var results = new List<T>();
             while (await reader.ReadAsync())
                 results.Add(map(reader));
@@ -314,9 +313,23 @@ public sealed class MySqlDbClient : IDbClient, IDisposable, IAsyncDisposable
 
         if (limit > 0)
         {
-            sql.Append($" LIMIT {limit}");
-            if (offset > 0)
-                sql.Append($" OFFSET {offset}");
+            if (SqlPagination.SupportsNamedParams(param))
+            {
+                sql.Append(" LIMIT @__limit");
+
+                if (offset > 0)
+                    sql.Append(" OFFSET @__offset");
+
+                param = SqlPagination.MergeNamed(param, limit, offset);
+            }
+            else
+            {
+                // Exotic parameter shapes keep the legacy literal paging.
+                sql.Append($" LIMIT {limit}");
+
+                if (offset > 0)
+                    sql.Append($" OFFSET {offset}");
+            }
         }
 
         return QueryAsync<T>(sql.ToString(), param);

@@ -1,7 +1,8 @@
-export interface Endpoint<I, O, S extends number> {
+export interface Endpoint<I, O, S extends number, R = unknown> {
   input: I;
   output: O;
   status: S;
+  responses?: R;
 }
 
 export interface RouteTree {
@@ -10,18 +11,22 @@ export interface RouteTree {
 
 type SuccessStatus = 200 | 201 | 202 | 203 | 204 | 205 | 206;
 
-export type ClientResponse<O = unknown, S extends number = number> = Response &
-  (S extends SuccessStatus
-    ? {
-        json: () => Promise<O>;
-        ok: true;
-        status: S;
-      }
-    : {
-        json: () => Promise<O>;
-        ok: false;
-        status: S;
-      });
+type ResponseBody<O, S extends number, R> = S extends 204 | 205 | 304
+  ? never
+  : R extends Record<S, infer Body>
+    ? Body
+    : O;
+
+export type ClientResponse<
+  O = unknown,
+  S extends number = number,
+  R = unknown,
+> = Omit<Response, "json" | "ok" | "status"> &
+  (number extends S
+    ? { json: () => Promise<O>; ok: boolean; status: S }
+    : S extends SuccessStatus
+      ? { json: () => Promise<ResponseBody<O, S, R>>; ok: true; status: S }
+      : { json: () => Promise<ResponseBody<O, S, R>>; ok: false; status: S });
 
 type HasKeys<T> = [T] extends [undefined | null | Record<string, never>]
   ? false
@@ -30,17 +35,17 @@ type HasKeys<T> = [T] extends [undefined | null | Record<string, never>]
     : true;
 
 export type Client<T> = {
-  [K in keyof T]: T[K] extends Endpoint<infer I, infer O, infer S>
+  [K in keyof T]: T[K] extends Endpoint<infer I, infer O, infer S, infer R>
     ? HasKeys<I> extends true
-      ? (args: I) => Promise<ClientResponse<O, S>>
-      : (args?: I) => Promise<ClientResponse<O, S>>
+      ? (args: I) => Promise<ClientResponse<O, S, R>>
+      : (args?: I) => Promise<ClientResponse<O, S, R>>
     : T[K] extends object
       ? Client<T[K]>
       : never;
 };
 
 export interface ClientOptions {
-  fetch?: typeof fetch;
+  fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   credentials?: RequestCredentials;
   headers?: Record<string, string>;
   init?: RequestInit;
@@ -49,7 +54,7 @@ export interface ClientOptions {
 interface RequestArgs {
   json?: unknown;
   param?: Record<string, string>;
-  query?: Record<string, string | number | boolean | undefined>;
+  query?: Record<string, string | number | boolean | null | undefined>;
 }
 
 const buildUrl = (
@@ -87,7 +92,7 @@ const buildUrl = (
     const search = new URLSearchParams();
 
     for (const [key, value] of Object.entries(args.query)) {
-      if (value !== undefined) {
+      if (value !== undefined && value !== null) {
         search.set(key, String(value));
       }
     }

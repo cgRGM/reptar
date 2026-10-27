@@ -20,92 +20,183 @@ import type {
 export type AppType = {
   auth: {
     anonymous: {
-      $post: Endpoint<undefined, SessionUser | ErrorBody, 201 | 404>;
+      $post: Endpoint<
+        undefined,
+        SessionUser | ErrorBody,
+        201 | 404,
+        { 201: SessionUser; 404: ErrorBody }
+      >;
     };
     "api-keys": {
-      $get: Endpoint<undefined, unknown, 200>;
-      $post: Endpoint<{ json: CreateApiKeyInput }, unknown, 200>;
+      $get: Endpoint<undefined, unknown, 200, { 200: unknown }>;
+      $post: Endpoint<
+        { json: CreateApiKeyInput },
+        unknown,
+        200,
+        { 200: unknown }
+      >;
       ":id": {
-        $delete: Endpoint<{ param: { id: string } }, unknown, 200>;
+        $delete: Endpoint<
+          { param: { id: string } },
+          unknown,
+          200,
+          { 200: unknown }
+        >;
       };
     };
     callback: {
       ":provider": {
-        $get: Endpoint<{ param: { provider: string } }, unknown, 200>;
+        $get: Endpoint<
+          { param: { provider: string } },
+          unknown,
+          200,
+          { 200: unknown }
+        >;
       };
     };
     "change-password": {
-      $post: Endpoint<{ json: ChangePasswordInput }, unknown, 200>;
+      $post: Endpoint<
+        { json: ChangePasswordInput },
+        unknown,
+        200,
+        { 200: unknown }
+      >;
     };
     session: {
-      $get: Endpoint<undefined, SessionResponse, 200>;
+      $get: Endpoint<undefined, SessionResponse, 200, { 200: SessionResponse }>;
     };
     sessions: {
-      $get: Endpoint<undefined, unknown, 200>;
+      $get: Endpoint<undefined, unknown, 200, { 200: unknown }>;
       revoke: {
-        $post: Endpoint<{ json: RevokeSessionInput }, unknown, 200>;
+        $post: Endpoint<
+          { json: RevokeSessionInput },
+          unknown,
+          200,
+          { 200: unknown }
+        >;
       };
       "revoke-others": {
-        $post: Endpoint<undefined, unknown, 200>;
+        $post: Endpoint<undefined, unknown, 200, { 200: unknown }>;
       };
     };
     signin: {
       $post: Endpoint<
         { json: SignInInput },
         SessionUser | ValidationError | ErrorBody,
-        200 | 400 | 401
+        200 | 400 | 401,
+        { 200: SessionUser; 400: ValidationError; 401: ErrorBody }
       >;
     };
     signout: {
-      $post: Endpoint<undefined, void, 204>;
+      $post: Endpoint<undefined, void, 204, { 204: never }>;
     };
     signup: {
       $post: Endpoint<
         { json: SignUpInput },
         SessionUser | ValidationError | ErrorBody,
-        201 | 400 | 409
+        201 | 400 | 409,
+        { 201: SessionUser; 400: ValidationError; 409: ErrorBody }
       >;
     };
     social: {
-      $post: Endpoint<{ json: BuiltInSocialInput }, unknown, 200>;
+      $post: Endpoint<
+        { json: BuiltInSocialInput },
+        unknown,
+        200,
+        { 200: unknown }
+      >;
     };
   };
   health: {
-    $get: Endpoint<undefined, unknown, 200>;
+    $get: Endpoint<undefined, unknown, 200, { 200: unknown }>;
   };
   images: {
     ":key": {
       $get: Endpoint<
         { param: { key: string } },
         ErrorBody,
-        200 | 206 | 304 | 400 | 404
+        200 | 206 | 304 | 400 | 404,
+        {
+          200: unknown;
+          206: unknown;
+          304: never;
+          400: ErrorBody;
+          404: ErrorBody;
+        }
       >;
     };
   };
   me: {
-    $get: Endpoint<undefined, SessionResponse | ErrorBody, 200 | 401>;
+    $get: Endpoint<
+      undefined,
+      SessionResponse | ErrorBody,
+      200 | 401,
+      { 200: SessionResponse; 401: ErrorBody }
+    >;
   };
   posts: {
-    $get: Endpoint<undefined, Post[], 200>;
-    $post: Endpoint<{ json: CreatePost }, Post | ValidationError, 201 | 400>;
+    $get: Endpoint<undefined, Post[], 200, { 200: Post[] }>;
+    $post: Endpoint<
+      { json: CreatePost },
+      Post | ValidationError,
+      201 | 400,
+      { 201: Post; 400: ValidationError }
+    >;
     ":id": {
-      $delete: Endpoint<{ param: { id: string } }, ErrorBody, 204 | 404>;
-      $get: Endpoint<{ param: { id: string } }, Post | ErrorBody, 200 | 404>;
+      $delete: Endpoint<
+        { param: { id: string } },
+        ErrorBody,
+        204 | 404,
+        { 204: never; 404: ErrorBody }
+      >;
+      $get: Endpoint<
+        { param: { id: string } },
+        Post | ErrorBody,
+        200 | 404,
+        { 200: Post; 404: ErrorBody }
+      >;
       $put: Endpoint<
         { json: UpdatePost; param: { id: string } },
         Post | ValidationError | ErrorBody,
-        200 | 400 | 404
+        200 | 400 | 404,
+        { 200: Post; 400: ValidationError; 404: ErrorBody }
       >;
     };
     mine: {
-      $get: Endpoint<undefined, Post[] | ErrorBody, 200 | 401>;
+      $get: Endpoint<
+        undefined,
+        Post[] | ErrorBody,
+        200 | 401,
+        { 200: Post[]; 401: ErrorBody }
+      >;
     };
   };
   upload: {
     $post: Endpoint<
       undefined,
       UploadResult | ErrorBody,
-      201 | 400 | 401 | 413 | 415
+      201 | 400 | 401 | 413 | 415,
+      {
+        201: UploadResult;
+        400: ErrorBody;
+        401: ErrorBody;
+        413: ErrorBody;
+        415: ErrorBody;
+      }
     >;
+    stream: {
+      $put: Endpoint<
+        undefined,
+        UploadResult | ErrorBody,
+        201 | 400 | 401 | 413 | 415,
+        {
+          201: UploadResult;
+          400: ErrorBody;
+          401: ErrorBody;
+          413: ErrorBody;
+          415: ErrorBody;
+        }
+      >;
+    };
   };
 };

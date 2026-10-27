@@ -1,10 +1,25 @@
+using System.Collections.Concurrent;
 using System.Text;
 
 namespace Reptar;
 
 public static class SqlParamParser
 {
-    public static (string Sql, List<string> ParamNames) ParseNamedParameters(
+    // Rewrites are deterministic per SQL string, and every driver rewrites the
+    // same statements on each execution (D1 normalizes per query, PostgreSQL
+    // per statement in a batch). Caching keeps the hot path free of the
+    // StringBuilder/List allocations. Callers treat the returned list as
+    // read-only.
+    private static readonly ConcurrentDictionary<string, (string Sql, List<string> ParamNames)> NamedCache = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, (string Sql, List<string> ParamNames)> PostgresCache = new(StringComparer.Ordinal);
+
+    public static (string Sql, List<string> ParamNames) ParseNamedParameters(string sql) =>
+        NamedCache.GetOrAdd(sql, static statement => ParseNamedParametersCore(statement));
+
+    public static (string Sql, List<string> ParamNames) ParsePostgresParameters(string sql) =>
+        PostgresCache.GetOrAdd(sql, static statement => ParsePostgresParametersCore(statement));
+
+    private static (string Sql, List<string> ParamNames) ParseNamedParametersCore(
         string sql)
     {
         var rewritten = new StringBuilder(sql.Length);
@@ -109,7 +124,7 @@ public static class SqlParamParser
         return (rewritten.ToString(), names);
     }
 
-    public static (string Sql, List<string> ParamNames) ParsePostgresParameters(
+    private static (string Sql, List<string> ParamNames) ParsePostgresParametersCore(
         string sql)
     {
         var rewritten = new StringBuilder(sql.Length);

@@ -1,0 +1,81 @@
+# Reptar framework security rules for Semgrep (Community Edition compatible).
+#
+# These rules target APPLICATION code (templates/, examples/, apps/ — see the
+# `paths` block in each rule) because framework internals legitimately use the
+# audited escape hatches. Each rule maps to a finding in
+# plans/security-deep-dive-2026-10.md.
+
+rules:
+  # ── Data layer escape hatches (F-26) ────────────────────────────────────
+  - id: reptar-sqlfilter-raw-usage
+    languages: [csharp]
+    severity: WARNING
+    message: >-
+      SqlFilter.Raw bypasses typed column tokens. Ensure the fragment is a developer constant and binds every value via @ parameters.
+    paths:
+      include: [templates/, examples/, apps/]
+    pattern: SqlFilter.Raw(...)
+
+  - id: reptar-string-orderby
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      SqlOrderBy built from a string defeats the typed token system; request data in ORDER BY is a SQL injection path. Use ColumnRef.Asc()/Desc().
+    paths:
+      include: [templates/, examples/, apps/]
+    pattern-either:
+      - pattern: $Q.OrderBy($X + $Y)
+      - pattern: $Q.OrderBy(ctx.Req.Param(...))
+      - pattern: $Q.OrderBy(ctx.Req.QueryValue(...))
+      - pattern: $Q.OrderBy(ctx.Req.Header(...))
+
+  # ── Open redirect (F-03) ────────────────────────────────────────────────
+  - id: reptar-redirect-from-request-data
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      ctx.Redirect with a request-derived URL is an open redirect unless the target is validated as a site-relative path.
+    paths:
+      include: [templates/, examples/, apps/]
+    pattern-either:
+      - pattern: ctx.Redirect(ctx.Req.QueryValue(...))
+      - pattern: ctx.Redirect(ctx.Req.Param(...))
+      - pattern: ctx.Redirect(ctx.Req.Header(...))
+
+  # ── Set-Cookie injection (F-19) ──────────────────────────────────────────
+  - id: reptar-cookie-value-from-request-data
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      Request-derived cookie values must be validated/encoded before CookieJar.Set (the jar rejects control characters, but semantic poisoning — attacker-controlled redirect targets, identifiers — is on the app).
+    paths:
+      include: [templates/, examples/, apps/]
+    pattern-either:
+      - pattern: ctx.Cookies.Set(..., ctx.Req.Param(...), ...)
+      - pattern: ctx.Cookies.Set(..., ctx.Req.QueryValue(...), ...)
+      - pattern: ctx.Cookies.Set(..., ctx.Req.Header(...), ...)
+      - pattern: ctx.Cookies.Set(..., input.$FIELD, ...)
+
+  # ── Raw HTML output (S-8) ────────────────────────────────────────────────
+  - id: reptar-raw-html-from-request-data
+    languages: [csharp]
+    severity: ERROR
+    message: >-
+      ctx.Html with request-derived content is an XSS sink. Encode user content (WebUtility.HtmlEncode) or return JSON.
+    paths:
+      include: [templates/, examples/, apps/]
+    pattern-either:
+      - pattern: ctx.Html(ctx.Req.Param(...))
+      - pattern: ctx.Html(ctx.Req.QueryValue(...))
+      - pattern: ctx.Html(ctx.Req.BodyText)
+      - pattern: ctx.Html(input.$FIELD)
+
+  # ── Unauthenticated workspace tools (F-56) ───────────────────────────────
+  - id: reptar-workspace-tools-mounted
+    languages: [csharp]
+    severity: INFO
+    message: >-
+      UseWorkspaceTools is mounted. Default access is loopback + in-process dispatch only; if this app is reachable from other clients, it must set options.Authorize (review intentionally).
+    paths:
+      include: [templates/, examples/, apps/]
+    pattern: app.UseWorkspaceTools(...)

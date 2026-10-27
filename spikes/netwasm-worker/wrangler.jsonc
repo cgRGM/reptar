@@ -4,6 +4,7 @@
   "compatibility_date": "2026-10-22",
   "assets": {
     "directory": "./public",
+    "binding": "ASSETS",
   },
   "rules": [
     {
@@ -36,6 +37,14 @@
       {
         "binding": "QUEUE",
         "queue": "reptar-events",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "reptar-events",
+        "max_batch_size": 10,
+        "max_batch_timeout": 2,
+        "max_retries": 3,
       },
     ],
   },

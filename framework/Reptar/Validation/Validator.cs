@@ -390,8 +390,26 @@ public sealed class StringRules : PropertyRules
         var dot = text.LastIndexOf('.');
         return dot > at + 1 &&
             dot < text.Length - 1 &&
-            !text.Contains(' ') &&
-            !text.Contains('\t');
+            !ContainsBlockedEmailChar(text);
+    }
+
+    // Rejects whitespace, control characters, non-ASCII, and the angle
+    // brackets and quotes used to smuggle email-looking strings into HTML or
+    // header contexts (a@b.c"><script>). Use Refine() for internationalized
+    // addresses that need broader rules.
+    private static bool ContainsBlockedEmailChar(string text)
+    {
+        foreach (var c in text)
+        {
+            if (c <= ' ' ||
+                c > (char)126 ||
+                c is '<' or '>' or '"' or '\'' or '\\')
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
 

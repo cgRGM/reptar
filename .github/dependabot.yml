@@ -1,0 +1,34 @@
+version: 2
+
+updates:
+  # Bun lockfile at the repo root (Dependabot resolves bun.lock via npm).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Framework projects (no solution file; the directory scan covers all
+  # csproj under framework/).
+  - package-ecosystem: "nuget"
+    directory: "/framework"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Scaffold templates ship pinned package versions to new apps.
+  - package-ecosystem: "nuget"
+    directory: "/templates"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ci)"

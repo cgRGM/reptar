@@ -14,6 +14,9 @@ export const r2putoptions = (
   bytes,
   contentType,
   cacheControl,
+  contentDisposition,
+  contentEncoding,
+  contentLanguage,
   metadataJson,
   onlyIfAbsent
 ) =>
@@ -22,6 +25,9 @@ export const r2putoptions = (
     bytes,
     contentType,
     cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
     metadataJson,
     onlyIfAbsent
   );
@@ -40,19 +46,40 @@ export const r2exists = (key) => globalThis.__REPTAR_R2_EXISTS(key);
 
 export const r2delete = (key) => globalThis.__REPTAR_R2_DELETE(key);
 
-export const r2deleteMany = (keys) =>
-  globalThis.__REPTAR_R2_DELETE_MANY(keys);
+export const r2deleteMany = (keys) => globalThis.__REPTAR_R2_DELETE_MANY(keys);
+
+export const r2multipartcreate = (
+  key,
+  contentType,
+  cacheControl,
+  contentDisposition,
+  contentEncoding,
+  contentLanguage,
+  metadataJson
+) =>
+  globalThis.__REPTAR_R2_MULTIPART_CREATE(
+    key,
+    contentType,
+    cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
+    metadataJson
+  );
+
+export const r2multipartpart = (key, uploadId, partNumber, bytes) =>
+  globalThis.__REPTAR_R2_MULTIPART_PART(key, uploadId, partNumber, bytes);
+
+export const r2multipartcomplete = (key, uploadId, parts) =>
+  globalThis.__REPTAR_R2_MULTIPART_COMPLETE(key, uploadId, parts);
+
+export const r2multipartabort = (key, uploadId) =>
+  globalThis.__REPTAR_R2_MULTIPART_ABORT(key, uploadId);
 
 export const httpFetch = (url, method, headersJson, body) =>
   globalThis.__REPTAR_HTTP_FETCH(url, method, headersJson, body);
 
-export const httpFetchBytes = (
-  url,
-  method,
-  headersJson,
-  body,
-  contentType
-) =>
+export const httpFetchBytes = (url, method, headersJson, body, contentType) =>
   globalThis.__REPTAR_HTTP_FETCH_BYTES(
     url,
     method,
@@ -80,5 +107,4 @@ export const envGet = (name) => globalThis.__REPTAR_ENV_GET(name);
 export const respond = (requestId, json) =>
   globalThis.__REPTAR_RESPOND(requestId, json);
 
-export const telemetry = (json) =>
-  globalThis.__REPTAR_TELEMETRY(json);
+export const telemetry = (json) => globalThis.__REPTAR_TELEMETRY(json);

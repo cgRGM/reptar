@@ -5,7 +5,7 @@ import starlightLlmsTxt from "starlight-llms-txt";
 
 // Machine-readable identity for AI agents and social previews.
 // Facts only — no fabricated contact or license claims.
-const OG_IMAGE_URL = "https://reptar-docs.rocktown-labs.workers.dev/og.png";
+const OG_IMAGE_URL = "https://reptar-docs.rocktownlabs.app/og.png";
 const JSON_LD = JSON.stringify({
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
@@ -16,14 +16,14 @@ const JSON_LD = JSON.stringify({
     url: "https://github.com/RocktownLabs",
   },
   description:
-    "High-performance, single-binary C# 13 web framework for Native AOT and Cloudflare Workers (NetWasm), with zero runtime reflection, typed RPC codegen, and built-in AI tooling.",
+    "Single-binary C# web framework targeting Native AOT and Cloudflare Workers (NetWasm), with source-generated JSON, typed RPC codegen, and built-in AI tooling.",
   isAccessibleForFree: true,
   name: "Reptar",
   operatingSystem: "Cloudflare Workers, AWS Lambda, Docker, Linux, macOS",
   programmingLanguage: "C#",
-  sameAs: ["https://github.com/RocktownLabs/reptar"],
+  sameAs: ["https://github.com/cgRGM/reptar"],
   softwareVersion: "0.1",
-  url: "https://reptar-docs.rocktown-labs.workers.dev/",
+  url: "https://reptar-docs.rocktownlabs.app/",
 });
 
 // https://astro.build/config
@@ -56,13 +56,13 @@ export default defineConfig({
               description:
                 "Source repository for the framework, examples, and benchmarks.",
               label: "GitHub repository",
-              url: "https://github.com/RocktownLabs/reptar",
+              url: "https://github.com/cgRGM/reptar",
             },
             {
               description:
                 "Installable agent skill covering routes, TableDef schemas, migrations, and RPC codegen.",
               label: "Reptar agent skill (SKILL.md)",
-              url: "https://github.com/RocktownLabs/reptar/blob/main/packages/rpc/skills/reptar/SKILL.md",
+              url: "https://github.com/cgRGM/reptar/blob/master/packages/rpc/skills/reptar/SKILL.md",
             },
           ],
         }),
@@ -79,6 +79,10 @@ export default defineConfig({
               slug: "overview/deployment-targets",
             },
             { label: "RealWorld & Benchmarks", slug: "overview/realworld" },
+            {
+              label: "Verified Release Benchmarks",
+              slug: "overview/release-benchmarks",
+            },
             { label: "ReptarBase (BaaS Engine)", slug: "overview/baas" },
           ],
           label: "Overview",
@@ -237,7 +241,7 @@ export default defineConfig({
       ],
       social: [
         {
-          href: "https://github.com/RocktownLabs/reptar",
+          href: "https://github.com/cgRGM/reptar",
           icon: "github",
           label: "GitHub",
         },
@@ -248,5 +252,10 @@ export default defineConfig({
   server: {
     port: 4322,
   },
-  site: "https://reptar-docs.rocktown-labs.workers.dev",
+  site: "https://reptar-docs.rocktownlabs.app",
+  vite: {
+    // Keep native module loading relative to satteri's own optional packages.
+    // Bundling its loader into prerender chunks breaks Linux binding lookup.
+    ssr: { external: ["satteri"] },
+  },
 });

@@ -96,13 +96,17 @@ Guaranteed-delivery asynchronous message queues for background processing:
 
 ```csharp
 // Send a typed message payload to a queue
-await c.Queues.SendAsync("order-fulfillment", new
-{
-    orderId = "ord_01",
-    userId = "usr_01",
-    timestamp = c.Clock.IsoNow()
-});
+await c.Queues.SendAsync("order-fulfillment", new { orderId = "o1" });
+
+// Delayed delivery (up to 24h) maps to Cloudflare's delaySeconds
+await c.Queues.SendAsync("order-fulfillment", new { orderId = "o2" },
+    new QueueSendOptions(DelaySeconds: 3600));
+
+// Native batch send maps to sendBatch
+await c.Queues.SendBatchAsync("order-fulfillment", [body1, body2]);
 ```
+
+Handlers registered with `app.OnQueue` run inside the Worker's `queue()` event: return normally to ack, throw to retry, or `throw new RetryIn(seconds)` to retry after a Cloudflare-native delay (`message.retry({ delaySeconds })`). Consumer batching, `max_retries`, `dead_letter_queue`, and `max_concurrency` are configured in `wrangler.jsonc`. See [Queues & Background Jobs](/features/queues) for the full adapter matrix — the same `SendAsync`/`OnQueue` code also runs against SQS, Azure Storage Queues, Pub/Sub, or your own SQL database on native targets.
 
 ---
 

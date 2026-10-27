@@ -11,7 +11,7 @@ export interface NetWasmPageOpenOptions {
   stdout?: (line: string) => void;
 }
 export interface NetWasmPageModule {
-  "handle"(requestJson: string): void;
+  "handle"(requestJson: string): Promise<void>;
   close(): Promise<void>;
   readonly failure: Promise<unknown>;
 }

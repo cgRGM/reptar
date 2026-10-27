@@ -186,8 +186,11 @@ public static class KestrelHost
                 return;
             }
 
-            var maxBodyBytes = app.GetMaxBodyBytes(http.Request.Method, http.Request.Path.Value ?? "/");
-            var request = await ToReptarRequest(http, maxBodyBytes);
+            var requestPath = http.Request.Path.Value ?? "/";
+            var maxBodyBytes = app.GetMaxBodyBytes(http.Request.Method, requestPath);
+            var request = app.IsStreamingBody(http.Request.Method, requestPath)
+                ? ToStreamingReptarRequest(http, maxBodyBytes)
+                : await ToReptarRequest(http, maxBodyBytes);
             var response = await app.HandleAsync(request);
             await WriteResponse(http, response);
         });
@@ -509,6 +512,102 @@ public static class KestrelHost
 
     private static readonly Dictionary<string, string> EmptyCookies = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Read-only request stream that enforces a byte limit without buffering.
+    /// Throws <see cref="PayloadTooLargeException"/> so the pipeline returns 413.
+    /// </summary>
+    private sealed class LimitedReadStream(Stream inner, long limit) : Stream
+    {
+        private long _read;
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            var remaining = limit - _read;
+            if (remaining <= 0)
+                return ProbeEof();
+
+            var toRead = (int)Math.Min(count, remaining + 1);
+            var read = inner.Read(buffer, offset, toRead);
+            _read += read;
+
+            if (_read > limit)
+                throw new PayloadTooLargeException(limit);
+
+            return read;
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            var remaining = limit - _read;
+            if (remaining <= 0)
+                return await ProbeEofAsync(cancellationToken);
+
+            var toRead = (int)Math.Min(buffer.Length, remaining + 1);
+            var read = await inner.ReadAsync(buffer[..toRead], cancellationToken);
+            _read += read;
+
+            if (_read > limit)
+                throw new PayloadTooLargeException(limit);
+
+            return read;
+        }
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken) =>
+            ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+        private int ProbeEof()
+        {
+            var probe = new byte[1];
+            return inner.Read(probe, 0, 1) == 0
+                ? 0
+                : throw new PayloadTooLargeException(limit);
+        }
+
+        private async ValueTask<int> ProbeEofAsync(CancellationToken cancellationToken)
+        {
+            var probe = new byte[1];
+            return await inner.ReadAsync(probe, cancellationToken) == 0
+                ? 0
+                : throw new PayloadTooLargeException(limit);
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            // The host owns the request body.
+        }
+
+        public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private static async ValueTask<(byte[]? Body, bool TooLarge)> ReadBodyAsync(
         HttpRequest request,
         long maxBodyBytes)
@@ -578,10 +677,31 @@ public static class KestrelHost
         return (memory.ToArray(), false);
     }
 
-    private static async Task<ReptarRequest> ToReptarRequest(HttpContext http, long maxBodyBytes = 0)
+    private static async Task<ReptarRequest> ToReptarRequest(
+        HttpContext http,
+        long maxBodyBytes = 0)
     {
         var (body, bodyTooLarge) = await ReadBodyAsync(http.Request, maxBodyBytes);
+        return CreateRequest(http, body, bodyTooLarge, null);
+    }
 
+    private static ReptarRequest ToStreamingReptarRequest(
+        HttpContext http,
+        long maxBodyBytes)
+    {
+        Stream bodyStream = maxBodyBytes > 0
+            ? new LimitedReadStream(http.Request.Body, maxBodyBytes)
+            : http.Request.Body;
+
+        return CreateRequest(http, null, false, bodyStream);
+    }
+
+    private static ReptarRequest CreateRequest(
+        HttpContext http,
+        byte[]? body,
+        bool bodyTooLarge,
+        Stream? bodyStream)
+    {
         var cookies = EmptyCookies;
 
         if (http.Request.Headers.TryGetValue("Cookie", out var cookieHeader))
@@ -620,55 +740,14 @@ public static class KestrelHost
             },
             Cookies = cookies,
             Body = body,
+            BodyStream = bodyStream,
             BodyTooLarge = bodyTooLarge,
             Aborted = http.RequestAborted,
         };
     }
 
-    private static ReptarRequest ToWebSocketReptarRequest(HttpContext http)
-    {
-        var cookies = EmptyCookies;
-
-        if (http.Request.Headers.TryGetValue("Cookie", out var cookieHeader))
-        {
-            var headerStr = cookieHeader.ToString();
-            if (!string.IsNullOrEmpty(headerStr))
-            {
-                cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var segment in headerStr.Split(
-                    ';',
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                {
-                    var separator = segment.IndexOf('=');
-
-                    if (separator > 0)
-                        cookies[segment[..separator]] = segment[(separator + 1)..];
-                }
-            }
-        }
-
-        return new ReptarRequest
-        {
-            Method = http.Request.Method,
-            Path = http.Request.Path.Value ?? "/",
-            Query = http.Request.QueryString.HasValue
-                ? http.Request.QueryString.Value!.TrimStart('?')
-                : "",
-            RemoteIp = http.Connection.RemoteIpAddress?.ToString(),
-            HeaderLookup = name => http.Request.Headers.TryGetValue(name, out var v) ? v.ToString() : null,
-            HeadersFactory = () =>
-            {
-                var dict = new Dictionary<string, string>(http.Request.Headers.Count, StringComparer.OrdinalIgnoreCase);
-                foreach (var (key, value) in http.Request.Headers)
-                    dict[key] = value.ToString();
-                return dict;
-            },
-            Cookies = cookies,
-            Body = [],
-            BodyTooLarge = false,
-            Aborted = http.RequestAborted,
-        };
-    }
+    private static ReptarRequest ToWebSocketReptarRequest(HttpContext http) =>
+        CreateRequest(http, [], false, null);
 
     private static async Task WriteResponse(HttpContext http, ReptarResponse response)
     {

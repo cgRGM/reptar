@@ -6,6 +6,43 @@ public static class Auth
 {
     private static AuthOptions _options = new();
 
+    static Auth()
+    {
+        // Auth's internal database shapes must not depend on app-owned JSON
+        // registrations or reflection metadata surviving Native AOT trimming.
+        // Column lookup normalizes snake_case/camelCase because SQLite returns
+        // the selected alias while D1 returns camelCase JSON keys.
+        EntityMapper<UserRow>.Factory ??= _ => row => new UserRow(
+            (string)Column(row, "id"), (string)Column(row, "email"), (string)Column(row, "name"),
+            Column(row, "password_hash") as string, Convert.ToInt32(Column(row, "is_anonymous")),
+            (string)Column(row, "role"), (string)Column(row, "created_at"), Column(row, "image") as string,
+            Convert.ToInt32(Column(row, "email_verified")));
+        EntityMapper<SessionUser>.Factory ??= _ => row => new SessionUser(
+            (string)Column(row, "id"), (string)Column(row, "email"), (string)Column(row, "name"),
+            (string)Column(row, "role"), Column(row, "image") as string, Convert.ToInt32(Column(row, "email_verified")));
+        EntityMapper<OAuthAccountRow>.Factory ??= _ => row => new OAuthAccountRow(
+            (string)Column(row, "id"), (string)Column(row, "user_id"), (string)Column(row, "provider"),
+            (string)Column(row, "provider_user_id"), (string)Column(row, "created_at"));
+    }
+
+    private static object? Column(System.Data.IDataRecord row, string name)
+    {
+        var normalized = name.Replace("_", "");
+        for (var index = 0; index < row.FieldCount; index++)
+        {
+            if (string.Equals(
+                    row.GetName(index).Replace("_", ""),
+                    normalized,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return row.GetValue(index);
+            }
+        }
+
+        throw new IndexOutOfRangeException(
+            $"Auth row is missing required column '{name}'.");
+    }
+
     public static void Configure(AuthOptions options) => _options = options;
 
     public static readonly TableDef Users = DefineTable("users",
@@ -56,7 +93,13 @@ public static class Auth
         string Role,
         string CreatedAt,
         string? Image = null,
-        int EmailVerified = 0);
+        int EmailVerified = 0) : IReptarEntity
+    {
+        public (string Name, object? Value)[] ToDbParameters() => [
+            ("id", Id), ("email", Email), ("name", Name), ("password_hash", PasswordHash),
+            ("is_anonymous", IsAnonymous), ("role", Role), ("created_at", CreatedAt),
+            ("image", Image), ("email_verified", EmailVerified)];
+    }
 
     [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
     public sealed record SessionRow(
@@ -64,7 +107,12 @@ public static class Auth
         string UserId,
         string TokenHash,
         string ExpiresAt,
-        string CreatedAt);
+        string CreatedAt) : IReptarEntity
+    {
+        public (string Name, object? Value)[] ToDbParameters() => [
+            ("id", Id), ("user_id", UserId), ("token_hash", TokenHash),
+            ("expires_at", ExpiresAt), ("created_at", CreatedAt)];
+    }
 
     [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
     public sealed record OAuthAccountRow(
@@ -72,7 +120,12 @@ public static class Auth
         string UserId,
         string Provider,
         string ProviderUserId,
-        string CreatedAt);
+        string CreatedAt) : IReptarEntity
+    {
+        public (string Name, object? Value)[] ToDbParameters() => [
+            ("id", Id), ("user_id", UserId), ("provider", Provider),
+            ("provider_user_id", ProviderUserId), ("created_at", CreatedAt)];
+    }
 
     [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.All)]
     public sealed record ApiKeyRow(
@@ -82,7 +135,12 @@ public static class Auth
         string KeyHash,
         string Prefix,
         string? ExpiresAt,
-        string CreatedAt);
+        string CreatedAt) : IReptarEntity
+    {
+        public (string Name, object? Value)[] ToDbParameters() => [
+            ("id", Id), ("user_id", UserId), ("name", Name), ("key_hash", KeyHash),
+            ("prefix", Prefix), ("expires_at", ExpiresAt), ("created_at", CreatedAt)];
+    }
 
     public sealed record SignUpInput(string Email, string Password, string Name);
     public sealed record SignInInput(string Email, string Password);
@@ -126,7 +184,7 @@ public static class Auth
         {
             var email = input.Email.Trim().ToLowerInvariant();
 
-            if (await ctx.Db.ExistsAsync(Users, "email = @email", new { email }))
+            if (await ctx.Db.ExistsAsync(Users, "email = @email", new Dictionary<string, object?> { ["email"] = email }))
                 return ctx.Conflict("Email already in use.");
 
             var user = new UserRow(
@@ -167,7 +225,7 @@ public static class Auth
 
             var user = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
                 "SELECT * FROM users WHERE email = @email",
-                new { email });
+                new Dictionary<string, object?> { ["email"] = email });
 
             if (user is null || user.PasswordHash is null || !await ctx.Crypto.VerifyPassword(input.Password, user.PasswordHash))
             {
@@ -195,7 +253,7 @@ public static class Auth
                 await ctx.Db.DeleteWhereAsync(
                     Sessions,
                     "token_hash = @hash",
-                    new { hash = await ctx.Crypto.Sha256(token) });
+                    new Dictionary<string, object?> { ["hash"] = await ctx.Crypto.Sha256(token) });
             }
 
             ctx.Cookies.Delete(_options.CookieName, _options.CookieDomain, _options.SecureCookies);
@@ -324,7 +382,7 @@ public static class Auth
             // sign-in and is bound to the provider identity, not the email.
             var account = await ctx.Db.QuerySingleOrDefaultAsync<OAuthAccountRow>(
                 "SELECT id, user_id as UserId, provider, provider_user_id as ProviderUserId, created_at as CreatedAt FROM oauth_accounts WHERE provider = @provider AND provider_user_id = @puid",
-                new { provider = provider.ProviderName, puid = userInfo.ProviderUserId });
+                new Dictionary<string, object?> { ["provider"] = provider.ProviderName, ["puid"] = userInfo.ProviderUserId });
 
             string userId;
 
@@ -336,7 +394,7 @@ public static class Auth
             {
                 var existing = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
                     "SELECT * FROM users WHERE email = @email",
-                    new { email });
+                    new Dictionary<string, object?> { ["email"] = email });
 
                 if (existing is not null && !userInfo.EmailVerified)
                 {
@@ -415,7 +473,7 @@ public static class Auth
 
             await ctx.Db.DeleteWhereAsync(Sessions,
                 "id = @id AND user_id = @userId",
-                new { id = input.SessionId, userId = user.Id });
+                new Dictionary<string, object?> { ["id"] = input.SessionId, ["userId"] = user.Id });
 
             return ctx.Json(new AuthSuccessResponse(true));
         });
@@ -431,7 +489,7 @@ public static class Auth
                 var currentHash = await ctx.Crypto.Sha256(currentToken);
                 await ctx.Db.DeleteWhereAsync(Sessions,
                     "user_id = @userId AND token_hash != @currentHash",
-                    new { userId = user.Id, currentHash });
+                    new Dictionary<string, object?> { ["userId"] = user.Id, ["currentHash"] = currentHash });
             }
 
             return ctx.Json(new AuthSuccessResponse(true));
@@ -445,7 +503,7 @@ public static class Auth
 
             var userRow = await ctx.Db.QuerySingleOrDefaultAsync<UserRow>(
                 "SELECT * FROM users WHERE id = @id",
-                new { id = user.Id });
+                new Dictionary<string, object?> { ["id"] = user.Id });
 
             if (userRow is null || userRow.PasswordHash is null ||
                 !await ctx.Crypto.VerifyPassword(input.CurrentPassword, userRow.PasswordHash))
@@ -517,7 +575,7 @@ public static class Auth
 
             await ctx.Db.DeleteWhereAsync(ApiKeys,
                 "id = @id AND user_id = @userId",
-                new { id, userId = user.Id });
+                new Dictionary<string, object?> { ["id"] = id, ["userId"] = user.Id });
 
             return ctx.Json(new AuthSuccessResponse(true));
         });
@@ -611,7 +669,7 @@ public static class Auth
                 JOIN users u ON u.id = s.user_id
                 WHERE s.token_hash = @hash AND s.expires_at > @now
                 """,
-                new { hash, now = ctx.Clock.IsoNow() });
+                new Dictionary<string, object?> { ["hash"] = hash, ["now"] = ctx.Clock.IsoNow() });
 
             if (sessionUser is not null)
                 return sessionUser;
@@ -624,7 +682,7 @@ public static class Auth
                 JOIN users u ON u.id = k.user_id
                 WHERE k.key_hash = @hash AND (k.expires_at IS NULL OR k.expires_at > @now)
                 """,
-                new { hash, now = ctx.Clock.IsoNow() });
+                new Dictionary<string, object?> { ["hash"] = hash, ["now"] = ctx.Clock.IsoNow() });
 
             if (apiKeyUser is not null)
                 return apiKeyUser;
@@ -695,7 +753,7 @@ public static class Auth
     public static Task<SessionUser?> FindUserById(Ctx ctx, string id) =>
         ctx.Db.QuerySingleOrDefaultAsync<SessionUser>(
             "SELECT id, email, name, role, image, email_verified FROM users WHERE id = @id",
-            new { id });
+            new Dictionary<string, object?> { ["id"] = id });
 
     private static async Task StartSession(Ctx ctx, string userId)
     {

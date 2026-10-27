@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
   pull_request:
   workflow_dispatch:
 
@@ -17,7 +17,7 @@ jobs:
   verify:
     name: Verify framework, scaffold, and contracts
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     services:
       postgres:
@@ -29,10 +29,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U reptar -d reptar_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+          --health-cmd "pg_isready -U reptar -d reptar_test" --health-interval 5s --health-timeout 5s --health-retries 10
 
       mysql:
         image: mysql:8.4
@@ -44,10 +41,7 @@ jobs:
         ports:
           - 3306:3306
         options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -ureptar -preptar"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -ureptar -preptar" --health-interval 5s --health-timeout 5s --health-retries 20
 
     steps:
       - name: Checkout
@@ -77,6 +71,28 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Production dependency audit
+        run: bun audit --production
+
+      - name: Lint source
+        run: bunx oxlint
+
+      # Fail fast on cross-platform native renderer / Markdown issues.
+      - name: Documentation site build
+        run: |
+          bun run build
+          test -f dist/llms.txt
+          test -f dist/llms-full.txt
+          test -f dist/llms-small.txt
+          test -f dist/index.md
+          test -f dist/client/codegen.md
+          test -f dist/overview/release-benchmarks.md
+        working-directory: apps/docs
+
+      - name: Documentation markdown actions check
+        run: bun run check:markdown
+        working-directory: apps/docs
+
       - name: Initialize local SQLite database
         run: bun reptar db migrate
 
@@ -84,6 +100,21 @@ jobs:
       # flake in one checkout (see plans/phase1-remediation-log.md).
       - name: Framework tests
         run: bun reptar test
+
+      - name: Host boundary and CLI regression tests
+        run: bun test packages/host/src packages/rpc/src/client.test.ts scripts/diff-composite.test.ts scripts/inspect-db.test.ts apps/docs/worker/index.test.ts
+
+      - name: Rebuild all deployed Worker artifacts
+        run: |
+          bun reptar build:worker
+          bun reptar build:realworld
+          bun reptar build:worker:rooms
+
+      - name: Host contract and artifact hashes
+        run: bun reptar check:host
+
+      - name: Worker size budget
+        run: bun reptar check:worker
 
       - name: Provider matrix (SQLite, Postgres, MySQL, D1)
         env:
@@ -119,29 +150,23 @@ jobs:
       - name: Generated contracts typecheck
         run: bun rpc:check
 
+      - name: RPC package typecheck
+        run: bunx tsc --noEmit -p packages/rpc
+
       - name: create-reptar typecheck
         run: |
           cd packages/create-reptar
           bun run check-types
 
+      - name: Native AOT published-artifact gate
+        run: bash examples/switchyard/test-native.sh
+
       - name: Documentation snippet check
         run: bun run docs:check:snippets
-
-      - name: Documentation site build
-        run: |
-          bun run build
-          test -f dist/llms.txt
-          test -f dist/llms-full.txt
-          test -f dist/llms-small.txt
-          test -f dist/index.md
-          test -f dist/client/codegen.md
-        working-directory: apps/docs
-
-      - name: Documentation markdown actions check
-        run: bun run check:markdown
-        working-directory: apps/docs
 
       - name: Generated API reference drift check
         run: |
           bun reptar codegen
+          # Compare the same canonical formatting enforced by pre-commit.
+          bunx oxfmt --write apps/docs/src/content/docs/api/
           git diff --exit-code apps/docs/src/content/docs/api/

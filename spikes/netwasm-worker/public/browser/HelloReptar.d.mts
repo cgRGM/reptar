@@ -12,6 +12,8 @@ export interface NetWasmPageOpenOptions {
 }
 export interface NetWasmPageModule {
   "handle"(requestJson: string): Promise<void>;
+  "handleQueue"(batchJson: string): Promise<void>;
+  "handleScheduled"(scheduledJson: string): Promise<void>;
   close(): Promise<void>;
   readonly failure: Promise<unknown>;
 }

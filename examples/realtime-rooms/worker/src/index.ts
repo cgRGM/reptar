@@ -21,9 +21,12 @@ interface Env {
 // socket and request shares one context. The NetWasm hub boots once
 // inside the DO and owns all room state.
 const hostOptions: ReptarHostOptions<Env> = {
-  // The Wasm app boots by fetching /browser/deployment.json through the
-  // static-assets binding, so it must be handed to the host.
-  assets: (env) => env.ASSETS,
+  // The DO fetches only small host metadata (deployment/interop manifests).
+  // The application wasm is compiled from the imported module, so it is not
+  // fetched through ASSETS (see @reptar/host patchNetWasmHost).
+  assets: () => ({
+    fetch: (request: Request) => fetch(request),
+  }),
   bindings: (env) =>
     ({
       db: env.DB as unknown as D1DatabaseLike,
@@ -39,6 +42,14 @@ export const RoomsHub = createReptarDurableObjectHost<Env>(hostOptions);
 
 export default {
   fetch: (request: Request, env: Env): Promise<Response> => {
+    const url = new URL(request.url);
+
+    // Serve host metadata artifacts from the Worker before entering the DO.
+    // The DO host's `assets` hook routes its /browser/* requests back here.
+    if (url.pathname.startsWith("/browser/")) {
+      return env.ASSETS.fetch(request);
+    }
+
     // Route everything through the hub DO so REST stats and WebSocket
     // fanout observe the same room state. Production sharding would use
     // idFromName(roomId) per room instead of a single "hub" instance.

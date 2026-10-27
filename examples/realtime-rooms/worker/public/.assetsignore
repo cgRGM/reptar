@@ -1,3 +1,3 @@
-# Imported as a CompiledWasm module by src/index.ts; do not upload a duplicate
-# static asset.
+# Imported as a CompiledWasm module by src/index.ts; the Worker host compiles
+# it from the module and skips the static-asset fetch.
 browser/*.wasm

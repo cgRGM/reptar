@@ -1,4 +1,4 @@
-# Reptar documentation — https://reptar-docs.rocktown-labs.workers.dev
+# Reptar documentation — https://reptar-docs.rocktownlabs.app
 #
 # Machine-readable AI context is served at:
 #   /llms.txt        — index with sections and links
@@ -52,4 +52,4 @@ Allow: /
 User-agent: CCBot
 Allow: /
 
-Sitemap: https://reptar-docs.rocktown-labs.workers.dev/sitemap-index.xml
+Sitemap: https://reptar-docs.rocktownlabs.app/sitemap-index.xml

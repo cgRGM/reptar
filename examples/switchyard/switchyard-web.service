@@ -1,0 +1,16 @@
+[Unit]
+Description=Switchyard typed-client frontend (VPS lab)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/switchyard-lab/reptar/examples/switchyard
+ExecStart=%h/.bun/bin/bun serve.ts
+Restart=on-failure
+RestartSec=3
+Environment=SWITCHYARD_API=http://127.0.0.1:8795
+Environment=SWITCHYARD_WEB_PORT=8796
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

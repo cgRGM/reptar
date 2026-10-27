@@ -22,6 +22,23 @@ public sealed record FileCheckResult(
         ctx.Error(ErrorStatus, ErrorCode, ErrorMessage);
 }
 
+/// <summary>
+/// Streaming variant of <see cref="FileCheckResult"/>. The body includes the
+/// magic-byte prefix that was consumed during validation.
+/// </summary>
+public sealed record FileStreamCheckResult(
+    bool Ok,
+    Stream? Body,
+    string ContentType,
+    string Extension,
+    int ErrorStatus = 200,
+    string ErrorCode = "",
+    string ErrorMessage = "")
+{
+    public ReptarResponse ToError(Ctx ctx) =>
+        ctx.Error(ErrorStatus, ErrorCode, ErrorMessage);
+}
+
 public static class Files
 {
     public static SniffedMediaType? Sniff(ReadOnlySpan<byte> data)
@@ -234,6 +251,57 @@ public static class Files
         return new FileCheckResult(true, data, contentType, extension);
     }
 
+    /// <summary>
+    /// Validates a streaming upload by peeking at its magic bytes, then returns
+    /// a stream that replays those bytes before the rest of the body. The route
+    /// should use <c>StreamBody(maxBytes)</c> to enforce the total size.
+    /// </summary>
+    public static async Task<FileStreamCheckResult> CheckStreamAsync(
+        Stream? stream,
+        params string[]? types)
+    {
+        if (stream is null)
+        {
+            return new FileStreamCheckResult(
+                false,
+                null,
+                "",
+                "",
+                400,
+                "bad_request",
+                "File is required.");
+        }
+
+        var header = new byte[12];
+        var read = 0;
+        while (read < header.Length)
+        {
+            var current = await stream.ReadAsync(header.AsMemory(read));
+            if (current == 0)
+                break;
+            read += current;
+        }
+
+        var check = Check(header.AsSpan(0, read).ToArray(), long.MaxValue, types);
+        if (!check.Ok)
+        {
+            return new FileStreamCheckResult(
+                false,
+                null,
+                "",
+                "",
+                check.ErrorStatus,
+                check.ErrorCode,
+                check.ErrorMessage);
+        }
+
+        return new FileStreamCheckResult(
+            true,
+            new PrefixedStream(header.AsSpan(0, read).ToArray(), stream),
+            check.ContentType,
+            check.Extension);
+    }
+
     private static bool MatchesAnyType(string contentType, string[] allowedTypes)
     {
         foreach (var raw in allowedTypes)
@@ -257,10 +325,113 @@ public static class Files
     }
 }
 
+/// <summary>
+/// Replays a validated magic-byte prefix before continuing with the original
+/// request stream. Does not dispose the inner stream; the host owns it.
+/// </summary>
+internal sealed class PrefixedStream : Stream
+{
+    private readonly byte[] _prefix;
+    private readonly Stream _inner;
+    private int _offset;
+
+    public PrefixedStream(byte[] prefix, Stream inner)
+    {
+        _prefix = prefix;
+        _inner = inner;
+    }
+
+    public override bool CanRead => true;
+    public override bool CanSeek => false;
+    public override bool CanWrite => false;
+    public override long Length => throw new NotSupportedException();
+    public override long Position
+    {
+        get => throw new NotSupportedException();
+        set => throw new NotSupportedException();
+    }
+
+    public override int Read(byte[] buffer, int offset, int count)
+    {
+        if (_offset < _prefix.Length)
+        {
+            var copied = Math.Min(count, _prefix.Length - _offset);
+            Array.Copy(_prefix, _offset, buffer, offset, copied);
+            _offset += copied;
+            return copied;
+        }
+
+        return _inner.Read(buffer, offset, count);
+    }
+
+    public override async ValueTask<int> ReadAsync(
+        Memory<byte> buffer,
+        CancellationToken cancellationToken = default)
+    {
+        if (_offset < _prefix.Length)
+        {
+            var copied = Math.Min(buffer.Length, _prefix.Length - _offset);
+            _prefix.AsSpan(_offset, copied).CopyTo(buffer.Span);
+            _offset += copied;
+            return copied;
+        }
+
+        return await _inner.ReadAsync(buffer, cancellationToken);
+    }
+
+    public override Task<int> ReadAsync(
+        byte[] buffer,
+        int offset,
+        int count,
+        CancellationToken cancellationToken) =>
+        ReadAsync(buffer.AsMemory(offset, count), cancellationToken).AsTask();
+
+    public override void Flush()
+    {
+    }
+
+    public override long Seek(long offset, SeekOrigin origin) =>
+        throw new NotSupportedException();
+
+    public override void SetLength(long value) =>
+        throw new NotSupportedException();
+
+    public override void Write(byte[] buffer, int offset, int count) =>
+        throw new NotSupportedException();
+
+    protected override void Dispose(bool disposing)
+    {
+        // The host owns the request stream.
+    }
+
+    public override ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+internal static class StorageStreams
+{
+    /// <summary>Reads until the buffer is full or the stream reaches EOF.</summary>
+    public static async Task<int> ReadFullAsync(Stream stream, byte[] buffer)
+    {
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await stream.ReadAsync(buffer.AsMemory(total));
+            if (read == 0)
+                break;
+            total += read;
+        }
+
+        return total;
+    }
+}
+
 public static class Storage
 {
     public static IStorage R2(string? publicBaseUrl = null) =>
         ReptarApi.R2(publicBaseUrl);
+
+    public static IStorage R2(R2StorageOptions options) =>
+        ReptarApi.R2(options);
 
 #if !NETWASM
     /// <summary>Local disk storage. Alias of <see cref="Local"/>.</summary>

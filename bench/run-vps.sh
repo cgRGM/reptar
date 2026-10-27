@@ -29,20 +29,26 @@ fi
 
 mkdir -p "$RESULTS"
 
-echo "==> Stopping existing app containers to free CPU/RAM"
-docker stop reptar-realworld campfire >/dev/null 2>&1 || true
-
-echo "==> Cleaning up stale benchmark processes"
-pkill -x reptar-bench >/dev/null 2>&1 || true
-pkill -f "bench/out/minimal-api/minimal-api-bench" >/dev/null 2>&1 || true
-pkill -x hono >/dev/null 2>&1 || true
-pkill -f "bun run $ROOT/bench/hono/src/index.ts" >/dev/null 2>&1 || true
-sleep 1
-
+# Shared VPSes may host unrelated apps or other agents' experiments. Never
+# stop containers or kill processes implicitly. Operators can explicitly opt
+# into quiescing named containers; restore only ones that were running.
+containers_to_restart=()
 restart_containers() {
-  docker start reptar-realworld campfire >/dev/null 2>&1 || true
+  if [[ -n "${SERVER_PID:-}" ]]; then
+    kill "$SERVER_PID" >/dev/null 2>&1 || true
+    wait "$SERVER_PID" >/dev/null 2>&1 || true
+  fi
+  if [[ ${#containers_to_restart[@]} -gt 0 ]]; then
+    docker start "${containers_to_restart[@]}" >/dev/null 2>&1 || true
+  fi
 }
 trap restart_containers EXIT
+for container in ${BENCH_STOP_CONTAINERS:-}; do
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null)" == "true" ]]; then
+    containers_to_restart+=("$container")
+    docker stop "$container" >/dev/null
+  fi
+done
 
 echo "==> Seeding the shared database"
 bun "$ROOT/bench/shared/seed.ts" "$ROOT/bench/out/bench.db" >/dev/null
@@ -57,7 +63,8 @@ cat > "$RESULTS/manifest.json" <<EOF
   "bun": "$(bun --version)",
   "dotnet": "$(docker run --rm mcr.microsoft.com/dotnet/sdk:10.0 dotnet --version 2>/dev/null | tail -1)",
   "oha": "$($OHA --version)",
-  "gitCommit": "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)",
+  "gitCommit": "${BENCH_SOURCE_REVISION:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}",
+  "builderImageId": "$(docker image inspect --format '{{.Id}}' "${BUILDER_IMAGE:-reptar-bench-builder}" 2>/dev/null || echo unknown)",
   "binarySizes": {
     "reptar": $(stat -c%s "$ROOT/bench/out/reptar/reptar-bench" 2>/dev/null || echo 0),
     "minimalApi": $(stat -c%s "$ROOT/bench/out/minimal-api/minimal-api-bench" 2>/dev/null || echo 0),
@@ -79,6 +86,10 @@ start_server() {
   local db="$3"
   shift 3
 
+  if curl -s --max-time 1 "http://127.0.0.1:$port/__bench/plaintext" >/dev/null 2>&1; then
+    echo "Port $port is occupied; refusing to kill another process." >&2
+    return 1
+  fi
   rm -f "$db" "$db-wal" "$db-shm"
   cp "$ROOT/bench/out/bench.db" "$db"
 
@@ -87,6 +98,7 @@ start_server() {
   taskset -c 0 env \
     BENCH_DB="$db" \
     PORT="$port" \
+    HOST=127.0.0.1 \
     Logging__LogLevel__Default=Warning \
     ASPNETCORE_ENVIRONMENT=Production \
     "$@" >"$RESULTS/$label.server.log" 2>&1 &
@@ -161,6 +173,7 @@ run_impl() {
 
   kill "$SERVER_PID" >/dev/null 2>&1 || true
   wait "$SERVER_PID" >/dev/null 2>&1 || true
+  SERVER_PID=""
   sleep 1
 }
 

@@ -6,9 +6,12 @@ services:
       args:
         APP_DIR: examples/realworld
     restart: unless-stopped
+    user: "${REPTAR_UID:-1654}:${REPTAR_GID:-1654}"
     ports:
-      - "8787:8787"
+      - "${REPTAR_BIND_ADDRESS:-127.0.0.1}:8787:8787"
+    volumes:
+      - "${REALWORLD_DATA_DIR:-../.reptar/realworld}:/data"
     environment:
-      - PORT=8787
-      - REALWORLD_DB=/tmp/realworld.db
-      - REALWORLD_JWT_SECRET=reptar-realworld-vps-secret
+      PORT: "8787"
+      REALWORLD_DB: /data/realworld.db
+      REALWORLD_JWT_SECRET: "${REALWORLD_JWT_SECRET:?Set a private random JWT key before deploying}"

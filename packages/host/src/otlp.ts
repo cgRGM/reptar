@@ -19,7 +19,7 @@ const randomHex = (bytes: number): string => {
   let out = "";
 
   for (const byte of data) {
-    out += HEX[byte >> 4] + HEX[byte & 0x0f];
+    out += HEX[Math.floor(byte / 16)] + HEX[byte % 16];
   }
 
   return out;
@@ -63,9 +63,7 @@ const numberAttribute = (key: string, value: unknown) => {
 export const createOtlpExporter =
   (options: OtlpExporterOptions) =>
   async (event: ReptarTelemetryEvent): Promise<void> => {
-    const traceId = isHex(event.trace_id, 32)
-      ? event.trace_id
-      : randomHex(16);
+    const traceId = isHex(event.trace_id, 32) ? event.trace_id : randomHex(16);
     const spanId = isHex(event.span_id, 16) ? event.span_id : randomHex(8);
     const parentSpanId = isHex(event.parent_span_id, 16)
       ? event.parent_span_id

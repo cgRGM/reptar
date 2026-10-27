@@ -4,9 +4,14 @@
 
 A high-performance C# web framework compiled to **WebAssembly for Cloudflare Workers** and **Native AOT for Linux containers, VPS, and AWS Lambda** — with Hono-like routing, Drizzle-like schemas, Zod-like validation, built-in auth, zero-dependency Stripe checkout, first-class edge bindings, and auto-generated TypeScript contracts for any frontend.
 
-- **Live Landing Page:** [https://reptar-web.rocktown-labs.workers.dev](https://reptar-web.rocktown-labs.workers.dev)
-- **Live Documentation:** [https://reptar-docs.rocktown-labs.workers.dev](https://reptar-docs.rocktown-labs.workers.dev)
-- **Production Edge API:** [https://reptar-api.rocktown-labs.workers.dev](https://reptar-api.rocktown-labs.workers.dev)
+- **Landing Page:** [https://reptar.rocktownlabs.app](https://reptar.rocktownlabs.app)
+- **Documentation:** [https://reptar-docs.rocktownlabs.app](https://reptar-docs.rocktownlabs.app)
+- **Verified Benchmarks:** [https://reptar-bench.rocktownlabs.app](https://reptar-bench.rocktownlabs.app)
+- **Production Edge API:** [https://reptar-api.rocktownlabs.app](https://reptar-api.rocktownlabs.app)
+- **RealWorld API Demo:** [https://reptar-realworld-demo.rocktownlabs.app/api/articles](https://reptar-realworld-demo.rocktownlabs.app/api/articles)
+- **Rooms API Demo:** [https://reptar-rooms-demo.rocktownlabs.app/health](https://reptar-rooms-demo.rocktownlabs.app/health)
+
+Custom domains are managed by the existing Alchemy stack; the original `rocktown-labs.workers.dev` endpoints remain enabled during the transition.
 
 Read the canonical [design.md](./design.md) for architectural specifications, non-goals, and technical constraints.
 
@@ -42,7 +47,7 @@ Due to NetWasm `0.10.0` Binaryen's single-`[JSExport]` constraint (`Program.Hand
 | **Database (`c.Db`)** | C# `D1DbClient` (`[JSImport]`) / Postgres | C# `SqliteDbClient` / `PostgresDbClient` / `MySqlDbClient` | C# `SqliteDbClient` / `PostgresDbClient` / `MySqlDbClient` |
 | **Storage (`c.Storage`) & `Files.Check`** | C# `R2Client` (`[JSImport]`) | C# `LocalStorage` / `S3Storage` (SigV4) | C# `S3Storage` (SigV4) / `LocalStorage` |
 | **SSE (`Sse.cs`), WebSockets, Static Files** | TS `@reptar/host` Worker layer (`#if !NETWASM` in C#) | Native C# (`KestrelHost` / `ProductionExtensions`) | Buffered HTTP / API Gateway |
-| **Queue & Cron Consumers (`OnQueue`, `OnScheduled`)** | TS `@reptar/host` `queue`/`scheduled` bridge | Native C# (`HandleQueueBatchAsync`, `HandleScheduledAsync`) | Lambda Event Adapter |
+| **Queue & Cron Consumers (`OnQueue`, `OnScheduled`)** | TS `@reptar/host` `queue`/`scheduled` bridge | Native C# poller + cron scheduler (`DbQueueClient`, SQS, Azure Storage Queues, Pub/Sub adapters) | SQS event adapter (`ReportBatchItemFailures`) |
 
 ---
 
@@ -58,7 +63,7 @@ reptar/
 │   ├── Reptar.Wasm/     # netwasm0.1 target: D1, R2, KV, Queues, AI, DO bridges
 │   ├── Reptar.Kestrel/  # Native ASP.NET Core Kestrel host for Native AOT
 │   ├── Reptar.Lambda/   # AWS Lambda custom runtime host (provided.al2023)
-│   └── Reptar.Tests/    # Framework unit and integration tests (215 tests)
+│   └── Reptar.Tests/    # Framework unit and integration tests (388 tests)
 ├── examples/
 │   └── blog/            # File-based C# reference app (no .csproj)
 ├── packages/
@@ -93,7 +98,7 @@ bun reptar check:architecture   # Enforce the core/AI/terminal module boundary
 bun bench:gate --results <json> --baseline bench/perf-baseline.json  # Performance regression gate
 bun rpc:gen          # Generate contracts from C# route tree and sync packages/rpc
 bun rpc:check        # Typecheck the generated client contracts
-bun api:test         # Run all 215 framework unit tests
+bun api:test         # Run all 388 framework unit tests
 bun api:bench        # Run high-concurrency benchmarks (--target, -c, -d)
 bun e2e              # Run end-to-end integration tests
 bun run check        # Run Ultracite linter and formatter check
@@ -146,7 +151,7 @@ Showcase app: [`examples/agent-cli`](./examples/agent-cli) — file-based `app.c
 
 Inside the Cloudflare Worker isolate, C# interacts with Cloudflare platform primitives with zero network hops:
 
-- **Storage (`ctx.Storage`)**: R2 / S3 / local object store with metadata (`HeadAsync`), byte ranges (`GetRangeAsync`), cursor listing (`ListAsync`), presigned uploads and downloads, server-side copy/move, batch delete, streaming/multipart uploads, public CDN URLs, typed `StorageException` errors, and `ctx.File` / `ctx.Attachment` for `ETag`/`304`, `Range`/`206`, and `HEAD` responses.
+- **Storage (`ctx.Storage`)**: R2 / S3 / local object store with metadata (`HeadAsync`), byte ranges (`GetRangeAsync`), cursor listing (`ListAsync`), presigned uploads and downloads, server-side copy/move, batch delete, end-to-end streaming (`StreamBody` + `PutAsync(Stream)`), S3/R2 multipart with configurable part sizes, public CDN URLs, typed `StorageException` errors, and `ctx.File` / `ctx.Attachment` for `ETag`/`304`, `Range`/`206`, and `HEAD` responses.
 - **Cache (`ctx.Cache`)**: KV key-value store with TTL support.
 - **Queues (`ctx.Queue`)**: Message queue producer.
 - **Workers AI (`ctx.AI`)**: Edge LLM inferences (`@cf/meta/llama-3.2-1b-instruct`).
@@ -176,11 +181,7 @@ VPS Native AOT results with 300 seeded articles and autocannon:
 | `GET /api/articles?tag=bench` |     592 | 164 ms |
 | `POST /api/articles`          |     210 |  42 ms |
 
-> **Cache caveat:** the list, tag-filter, and single-article figures include
-> Kestrel's anonymous SWR cache. On the same 2-core benchmark VPS,
-> cache-busted `/api/tags` measured ~4.2k req/s and cache-busted
-> `/api/articles?limit=20` ~236 req/s (p50 ~211 ms). Treat cached and
-> uncached numbers separately; authenticated/write paths bypass the cache.
+> **Cache caveat:** the list, tag-filter, and single-article figures include Kestrel's anonymous SWR cache. On the same 2-core benchmark VPS, cache-busted `/api/tags` measured ~4.2k req/s and cache-busted `/api/articles?limit=20` ~236 req/s (p50 ~211 ms). Treat cached and uncached numbers separately; authenticated/write paths bypass the cache.
 
 List responses now omit the article body and fetch tags, favorite counts, favorite state, and follow state in page-level batches instead of per-row correlated subqueries. The SQLite WAL read pool added in `461be2e` lets those reads run concurrently, and article creation batches the article, tag, and junction writes into one transaction. The image remains **38.3 MB uncompressed / 11.6 MB compressed** after removing the 22 MB `.dbg` symbols.
 
@@ -237,26 +238,37 @@ Under concurrent write pressure, SQLite WAL mode with Reptar's group-commit batc
 
 ### 1. Cloudflare Workers (Edge Serverless)
 
-Deploy the full stack (API Worker, Static Docs, Astro Web, D1, R2, KV, Queues) with Alchemy:
+Deploy the API, RealWorld and Rooms Workers, docs, web, D1, R2, KV, Queues and Durable Objects with Alchemy. All three Worker artifacts must be rebuilt together; the infra deploy script now does this.
+
+Store a random `REALWORLD_JWT_SECRET` of at least 32 characters in a private environment file **outside the repository** (for example, generate it with `openssl rand -hex 32`). There is no production fallback. Alchemy deploys the value as `secret_text`, not a public/plain-text binding.
 
 ```bash
-# Deploy to Cloudflare Workers
-bun run deploy
-
-# Deploy non-interactively
-bun run deploy -- -y
+cd packages/infra
+bun run build:workers
+# Use the existing deployment's stage when updating it; a new stage owns new resources.
+bunx alchemy plan --env-file "$HOME/.config/reptar/production.env" --stage live_newrgm
+bunx alchemy deploy --env-file "$HOME/.config/reptar/production.env" --stage live_newrgm --yes
 ```
+
+Review the plan before deploying. Existing database, storage and Durable Object bindings should remain unchanged. Rotating the signing key invalidates previously issued RealWorld JWTs.
 
 ### 2. Docker / Distroless Container (VPS or Kubernetes)
 
-Build the minimal Google Distroless container (~38 MB uncompressed, ~11.6 MB compressed):
+The Dockerfile builds a Linux Native AOT executable in an Ubuntu Chiseled `.NET runtime-deps` image. Size depends on the app; it is not a Google Distroless image. Run with a writable data directory and an app-specific configuration:
 
 ```bash
-docker build -t reptar-app -f deploy/Dockerfile .
-docker run -p 8787:8787 -e DATABASE_URL="postgres://user:pass@host:5432/db" reptar-app
+docker build -t reptar-switchyard -f deploy/Dockerfile --build-arg APP_DIR=examples/switchyard .
+mkdir -p .reptar/switchyard
+docker run --user "$(id -u):$(id -g)" \
+  -v "$PWD/.reptar/switchyard:/data" -e SWITCHYARD_DB=/data/switchyard.db \
+  -p 127.0.0.1:8787:8787 reptar-switchyard
 ```
 
-Or deploy to any Ubuntu/Debian VPS with one command:
+Put a TLS reverse proxy in front of this loopback listener; Switchyard defaults to secure cookies. `SWITCHYARD_INSECURE_LOCAL=1` is only for local HTTP testing. The repeatable published-artifact check is `bash examples/switchyard/test-native.sh`.
+
+For RealWorld, `deploy/realworld-compose.yml` requires a private JWT key and persists SQLite under `.reptar/realworld`. Prepare that directory and set `REPTAR_UID`/`REPTAR_GID` to its non-root owner before starting Compose. Do not use an ephemeral `/tmp` database for persistent deployments. The default listener is loopback; opt into public binding only behind an appropriate network/TLS policy.
+
+The generic VPS helper targets its configured sample app; verify its data, auth and health settings before using it:
 
 ```bash
 bash deploy/vps-deploy.sh

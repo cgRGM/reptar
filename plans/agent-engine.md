@@ -96,108 +96,58 @@ LLMs follow whatever the JSON schema says, but tool descriptions say `wait_ms` w
 
 Added after studying Pi and OpenCode reference implementations:
 
-- **`/connect`** — provider picker with live per-row status (Pi's oauth-selector
-  pattern: `✓ env: OPENAI_API_KEY` / `✓ saved` / `• not connected`), hidden
-  API-key entry, base URL override, live connection test against the provider's
-  model endpoint, model pick, save + switch. `Other` registers custom
-  OpenAI-compatible endpoints (opencode parity).
-- **`~/.reptar/agent/auth.json`** — flat credential map (opencode's auth.json
-  shape) with `0600` permissions (pi) and a `_default` marker so the last
-  connected provider wins on plain launches. `REPTAR_AGENT_AUTH` overrides the
-  path (hermetic tests, sandboxes).
-- **Precedence kept env-first** — OpenCode's issue #10950 documents stored
-  credentials *silently overriding* explicit config, causing auth failures with
-  no explanation. Reptar's rule: env wins over saved, and `/providers` always
-  shows the live source.
-- **`/models`** — live catalog fetch per provider wire format (OpenAI-compat
-  `/models`, Anthropic `/v1/models`, Gemini `v1beta/models`, Ollama `/api/tags`)
-  with a numbered picker that persists the chosen default.
-- **`--connect [provider]` / `--providers`** CLI flags (opencode `auth login`
-  parity).
+- **`/connect`** — provider picker with live per-row status (Pi's oauth-selector pattern: `✓ env: OPENAI_API_KEY` / `✓ saved` / `• not connected`), hidden API-key entry, base URL override, live connection test against the provider's model endpoint, model pick, save + switch. `Other` registers custom OpenAI-compatible endpoints (opencode parity).
+- **`~/.reptar/agent/auth.json`** — flat credential map (opencode's auth.json shape) with `0600` permissions (pi) and a `_default` marker so the last connected provider wins on plain launches. `REPTAR_AGENT_AUTH` overrides the path (hermetic tests, sandboxes).
+- **Precedence kept env-first** — OpenCode's issue #10950 documents stored credentials _silently overriding_ explicit config, causing auth failures with no explanation. Reptar's rule: env wins over saved, and `/providers` always shows the live source.
+- **`/models`** — live catalog fetch per provider wire format (OpenAI-compat `/models`, Anthropic `/v1/models`, Gemini `v1beta/models`, Ollama `/api/tags`) with a numbered picker that persists the chosen default.
+- **`--connect [provider]` / `--providers`** CLI flags (opencode `auth login` parity).
 
 ### New bugs this uncovered (both fixed + regression-tested)
 
-1. **Double tool execution on OpenAI-style streams.** OpenAI clients emit
-   argument *deltas* and then a *complete* `ToolCall`; the harness treated
-   them as two calls, so every streamed tool call executed twice. Caught only
-   because the mock-server verification sent a real tool call over the wire —
-   the scripted unit tests emitted a single complete event and passed. Fix:
-   merge by call id (`StreamingAgentHarness`), regression test added.
+1. **Double tool execution on OpenAI-style streams.** OpenAI clients emit argument _deltas_ and then a _complete_ `ToolCall`; the harness treated them as two calls, so every streamed tool call executed twice. Caught only because the mock-server verification sent a real tool call over the wire — the scripted unit tests emitted a single complete event and passed. Fix: merge by call id (`StreamingAgentHarness`), regression test added.
 
-2. **Reflection-based tool schema serialization failed under Native AOT.**
-   `JsonSerializer.SerializeToNode(Dictionary<string, object?>)` throws
-   "Reflection-based serialization has been disabled" in AOT — the JIT dev
-   host and all unit tests masked it. Any AOT-published Reptar app making a
-   tool-carrying LLM call would have failed. Fix: manual `LlmHttp.ToNode`
-   converter; also fixed `GetAiToolsJson` which had the same pattern.
+2. **Reflection-based tool schema serialization failed under Native AOT.** `JsonSerializer.SerializeToNode(Dictionary<string, object?>)` throws "Reflection-based serialization has been disabled" in AOT — the JIT dev host and all unit tests masked it. Any AOT-published Reptar app making a tool-carrying LLM call would have failed. Fix: manual `LlmHttp.ToNode` converter; also fixed `GetAiToolsJson` which had the same pattern.
 
-3. **Agent errors surfaced as blank text** — the harness returned an empty
-   `FinalContent` on exceptions. Errors now carry the exception message
-   (innermost included).
+3. **Agent errors surfaced as blank text** — the harness returned an empty `FinalContent` on exceptions. Errors now carry the exception message (innermost included).
 
-Verification highlights: full `/connect → connection test → save → chat with
-in-process tool call → /models → /disconnect` run against a live local
-OpenAI-compatible mock through the real 12 MB AOT binary, plus a
-`--connect anthropic` test against the **real** Anthropic API confirming the
-wrong-key path (401, clean display, save-anyway prompt, no crash).
+Verification highlights: full `/connect → connection test → save → chat with in-process tool call → /models → /disconnect` run against a live local OpenAI-compatible mock through the real 12 MB AOT binary, plus a `--connect anthropic` test against the **real** Anthropic API confirming the wrong-key path (401, clean display, save-anyway prompt, no crash).
 
 ## Exploration: Spectre.Console vs the hand-rolled ANSI layer
 
 **Date:** 2026-10-25 · **Mode:** exploration only — nothing integrated.
 
-[Spectre.Console](https://github.com/spectreconsole/spectre.console) studied from
-source plus two live Native AOT spikes (a bare console app and a full copy of
-the agent-cli example with real widget usage).
+[Spectre.Console](https://github.com/spectreconsole/spectre.console) studied from source plus two live Native AOT spikes (a bare console app and a full copy of the agent-cli example with real widget usage).
 
 ### Measured (real AOT publishes, osx-arm64, Release, symbols stripped)
 
 | Binary | Size |
-|---|---|
+| --- | --- |
 | Bare `Console.WriteLine` AOT app | 1.2 MB |
 | Bare app + Spectre (widgets exercised) | 4.4 MB |
 | **Our agent CLI (baseline)** | **12,952,400 B ≈ 12.4 MiB** |
 | **Our agent CLI + Spectre (SelectionPrompt, Status, Table, Markup exercised)** | **14,593,680 B ≈ +1.6 MB** |
 
-Notes: merely referencing the package costs ~0 (ILC trims it — the first spike
-stayed 12 MB); the +1.6 MB is what the four widgets we'd actually use cost.
+Notes: merely referencing the package costs ~0 (ILC trims it — the first spike stayed 12 MB); the +1.6 MB is what the four widgets we'd actually use cost.
 
 ### Key facts from source
 
-- `IsAotCompatible=true` (net8/9/10 TFMs) — official AOT support; only
-  reflection is exception rendering (annotation-guarded). Zero runtime
-  package deps (Wcwidth is source-only).
-- **Prompts throw `NotSupportedException` on any redirected stream**
-  (`InteractionDetector` requires stdin+stdout+stderr all non-redirected).
-  Our numbered pickers degrade to plain text when piped — which is exactly how
-  every scripted/CI verification of `/connect` works today.
-- `Live`/`Status`/`Progress` rewrite lines in place — incompatible with the
-  append-only streaming chat output (fx scrollback philosophy), fine between
-  streaming segments (e.g. the connection-test spinner).
+- `IsAotCompatible=true` (net8/9/10 TFMs) — official AOT support; only reflection is exception rendering (annotation-guarded). Zero runtime package deps (Wcwidth is source-only).
+- **Prompts throw `NotSupportedException` on any redirected stream** (`InteractionDetector` requires stdin+stdout+stderr all non-redirected). Our numbered pickers degrade to plain text when piped — which is exactly how every scripted/CI verification of `/connect` works today.
+- `Live`/`Status`/`Progress` rewrite lines in place — incompatible with the append-only streaming chat output (fx scrollback philosophy), fine between streaming segments (e.g. the connection-test spinner).
 
 ### Verdict for Reptar
 
-- **Framework core (`Reptar.AI`): stays raw ANSI, zero-dep.** Non-negotiable
-  for the 10.4 MB claim, NetWasm constraints, and the zero-dependency pitch.
-- **Agent CLI:** hybrid is viable — Spectre for interactive chrome
-  (arrow-key provider/model pickers, `TextPrompt.Secret`, bordered
-  `/providers` and `/sessions` tables, connection-test spinner) behind an
-  `IsInputRedirected` check that falls back to the current numbered menus.
-  Keep streaming chat output raw ANSI forever.
-- **Cheaper alternative:** steal the ideas, not the package — a spinner is
-  ~30 lines of frame rotation, box-drawing tables are ~80. The references
-  back this: Pi built **pi-tui** from scratch, fx prints inline, OpenCode
-  rolls its own TUI — none of the three use Spectre.
-- Decision driver: whether ~+1.6 MB and the first example-app NuGet dep is
-  acceptable for noticeably nicer interactive chrome. Product call.
+- **Framework core (`Reptar.AI`): stays raw ANSI, zero-dep.** Non-negotiable for the 10.4 MB claim, NetWasm constraints, and the zero-dependency pitch.
+- **Agent CLI:** hybrid is viable — Spectre for interactive chrome (arrow-key provider/model pickers, `TextPrompt.Secret`, bordered `/providers` and `/sessions` tables, connection-test spinner) behind an `IsInputRedirected` check that falls back to the current numbered menus. Keep streaming chat output raw ANSI forever.
+- **Cheaper alternative:** steal the ideas, not the package — a spinner is ~30 lines of frame rotation, box-drawing tables are ~80. The references back this: Pi built **pi-tui** from scratch, fx prints inline, OpenCode rolls its own TUI — none of the three use Spectre.
+- Decision driver: whether ~+1.6 MB and the first example-app NuGet dep is acceptable for noticeably nicer interactive chrome. Product call.
 
 ## Follow-up: The Six Spectre Ideas, Implemented (plus reference-provider parity)
 
-**Date:** 2026-10-25 (second round) · **Outcome:** all six ideas shipped as
-~700 lines of raw-ANSI C# in `Reptar.AI/TerminalUi.cs` — same binary size
-(12 MB AOT), zero new dependencies.
+**Date:** 2026-10-25 (second round) · **Outcome:** all six ideas shipped as ~700 lines of raw-ANSI C# in `Reptar.AI/TerminalUi.cs` — same binary size (12 MB AOT), zero new dependencies.
 
 | Idea (Spectre) | Reptar implementation | Verified |
-|---|---|---|
+| --- | --- | --- |
 | `SelectionPrompt` | `TerminalUi.Select` — arrow keys, PageUp/Down, type-to-search filter, 8-row paging with scroll indicator; **numbered fallback when piped** | PTY: 3× arrow-down → Ollama selected; piped: all scripted flows still pass |
 | `TextPrompt.Secret()` + validation | `TerminalUi.Ask` — re-ask loop with red error, `*` masking, ESC cancel; piped → plain ReadLine | PTY: masked `***************`, validated URL prompt |
 | `Status` spinner | `TerminalUi.SpinAsync` — Braille frames + elapsed seconds, message updates mid-run; piped → static lines | PTY frames + clean cancel (fixed a `TaskCanceledException` crash and a double-glyph render) |
@@ -205,42 +155,22 @@ stayed 12 MB); the +1.6 MB is what the four widgets we'd actually use cost.
 | Color detection | `TerminalUi.Colors` → truecolor / 256 / basic from `COLORTERM`+`TERM`; `Rgb`/`Purple`/`Orange`/… downgrade via 6×6×6 cube or nearest-basic | banner/pickers use the brand purple when the terminal allows |
 | Exception rendering | `TerminalUi.RenderException` — red type+message, dim shortened frames, nested causes indented | available for fatal paths in app.cs |
 
-**models.dev catalog** (opencode's model source): `LlmCatalog.ListCuratedAsync`
-fetches `https://models.dev/api.json` — free, no credentials — so `/models
-anthropic` browses `Claude Opus 4.5 · 200k ctx` before any connection, and the
-live-list picker enriches model ids with display names + context windows.
+**models.dev catalog** (opencode's model source): `LlmCatalog.ListCuratedAsync` fetches `https://models.dev/api.json` — free, no credentials — so `/models anthropic` browses `Claude Opus 4.5 · 200k ctx` before any connection, and the live-list picker enriches model ids with display names + context windows.
 
-**New providers** (user request): `opencode` (OpenCode Zen,
-`https://opencode.ai/zen/v1`, env `OPENCODE_API_KEY`) and
-`cloudflare-gateway` (Cloudflare AI Gateway — `RequiresBaseUrl` prompt for
-the `gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}` URL,
-API key = upstream provider's).
+**New providers** (user request): `opencode` (OpenCode Zen, `https://opencode.ai/zen/v1`, env `OPENCODE_API_KEY`) and `cloudflare-gateway` (Cloudflare AI Gateway — `RequiresBaseUrl` prompt for the `gateway.ai.cloudflare.com/v1/{account_id}/{gateway_id}/{provider}` URL, API key = upstream provider's).
 
-**Verification:** 142/142 tests; piped + PTY flows against a live local
-OpenAI-compatible mock; live failure paths against the real Gemini and
-Anthropic APIs (400/401 handled gracefully); `/models` curated fallback with
-model switch persistence; 12 MB Native AOT rebuild with `--self-test` 7/7.
-Verified in an isolated tree — the shared checkout had another agent's
-mid-edit compile errors (documented below).
+**Verification:** 142/142 tests; piped + PTY flows against a live local OpenAI-compatible mock; live failure paths against the real Gemini and Anthropic APIs (400/401 handled gracefully); `/models` curated fallback with model switch persistence; 12 MB Native AOT rebuild with `--self-test` 7/7. Verified in an isolated tree — the shared checkout had another agent's mid-edit compile errors (documented below).
 
-**Shared-workspace race (note for the team):** two agents committing to
-`framework/Reptar/AI/` in parallel left `StructuredOutput.cs` (unfixed
-references) and `SessionStore.cs` (`IMessagePersistFilter`) briefly breaking
-the main build mid-round. Nothing was lost (my round was verified in a
-scratch copy at /tmp/reptar-iso with the WIP file excluded), but build gates
-in CI would have caught both.
+**Shared-workspace race (note for the team):** two agents committing to `framework/Reptar/AI/` in parallel left `StructuredOutput.cs` (unfixed references) and `SessionStore.cs` (`IMessagePersistFilter`) briefly breaking the main build mid-round. Nothing was lost (my round was verified in a scratch copy at /tmp/reptar-iso with the WIP file excluded), but build gates in CI would have caught both.
 
 ## Follow-up: Input UX (pi editor + opencode palette parity)
 
-**Date:** 2026-10-25 (third round) · **Trigger:** user UX feedback — "when you
-hit a / most terminal apps drop down the commands… the ui/ux isn't great."
+**Date:** 2026-10-25 (third round) · **Trigger:** user UX feedback — "when you hit a / most terminal apps drop down the commands… the ui/ux isn't great."
 
-Studied pi's actual source for the input loop this time (`custom-editor.ts`,
-`footer.ts`, `interactive-mode.ts` autocomplete provider) plus opencode's
-ctrl+p palette, and rebuilt the prompt as a real line editor:
+Studied pi's actual source for the input loop this time (`custom-editor.ts`, `footer.ts`, `interactive-mode.ts` autocomplete provider) plus opencode's ctrl+p palette, and rebuilt the prompt as a real line editor:
 
 | Reference behavior | Reptar implementation |
-|---|---|
+| --- | --- |
 | `/` dropdown, filter-as-you-type, fuzzy over name **and** description | `TerminalEditor` slash mode, filtered live per keystroke |
 | Arrow-key dropdown nav, Tab/Enter accept, Enter defaults to top suggestion | highlight starts at 0 (Enter accepts the top match — Claude Code behavior) |
 | `@file` suggestions from cwd with fd index | workspace scan (ignore-listed, 4k cap, 3s cache), score by filename prefix |
@@ -251,58 +181,32 @@ ctrl+p palette, and rebuilt the prompt as a real line editor:
 | @-attached images | `AgentImage` on `ChatMessage` → OpenAI `image_url`, Anthropic `image`, Gemini `inline_data` |
 
 Also fixed this round:
-- **Select "keeps printing" bug** — the frame eraser undercounted by
-  `min(rows, 8) + 2` instead of the exact printed row count; every keystroke
-  left stale frames. Erase now uses the exact count.
+
+- **Select "keeps printing" bug** — the frame eraser undercounted by `min(rows, 8) + 2` instead of the exact printed row count; every keystroke left stale frames. Erase now uses the exact count.
 - **Enter dropped the `@` marker on file accept**, so mentions never attached.
 - **Out-of-range cursor crashed `FilePrefix`** (caught by a test) — now clamps.
 
-Token/cost plumbing: OpenAI `stream_options.include_usage`, Anthropic
-`message_start`/`message_delta` usage, Gemini `usageMetadata` →
-`LlmStreamEvent.Usage` → `AgentEvent.UsageReported` → session totals →
-status bar.
+Token/cost plumbing: OpenAI `stream_options.include_usage`, Anthropic `message_start`/`message_delta` usage, Gemini `usageMetadata` → `LlmStreamEvent.Usage` → `AgentEvent.UsageReported` → session totals → status bar.
 
-**Verified:** 196/196 tests (main tree, merged with the parallel agent's
-feature push), 148/148 in the isolated tree before their merge; PTY runs of
-slash filter→select→execute, `!echo`, `@not`→`read @notes.md` with `[file: …]`
-attached, `@logo.png` attached as an image block, status bar on every prompt;
-AOT rebuild 13 MB (+1 MB for editor/usage/images), self-test 7/7.
+**Verified:** 196/196 tests (main tree, merged with the parallel agent's feature push), 148/148 in the isolated tree before their merge; PTY runs of slash filter→select→execute, `!echo`, `@not`→`read @notes.md` with `[file: …]` attached, `@logo.png` attached as an image block, status bar on every prompt; AOT rebuild 13 MB (+1 MB for editor/usage/images), self-test 7/7.
 
 ## Follow-up: Honest Gaps Closed (pinned footer, persisted history, clipboard paste)
 
-**Date:** 2026-10-25 (fourth round) · **Trigger:** the three "honest gaps
-still open" from the input-UX round.
+**Date:** 2026-10-25 (fourth round) · **Trigger:** the three "honest gaps still open" from the input-UX round.
 
 ### Gap 1: Pinned status bar — ✅ shipped
 
-`TerminalScreen.cs`: DECSTBM scroll region (`\x1b[1;{h-1}r`) reserves the
-bottom line. The footer paints via CUP (`\x1b[{h};1H`), wrapped in
-DECSC/DECRC (`\x1b7`/`\x1b8`) to restore the cursor. Re-applies the region
-on terminal resize; restores cleanly on exit and Ctrl+C. Piped/non-TTY mode
-falls back to the inline bar (previous behavior).
+`TerminalScreen.cs`: DECSTBM scroll region (`\x1b[1;{h-1}r`) reserves the bottom line. The footer paints via CUP (`\x1b[{h};1H`), wrapped in DECSC/DECRC (`\x1b7`/`\x1b8`) to restore the cursor. Re-applies the region on terminal resize; restores cleanly on exit and Ctrl+C. Piped/non-TTY mode falls back to the inline bar (previous behavior).
 
 ### Gap 2: Persisted input history — ✅ shipped
 
-`TerminalEditor.HistoryPath` (`~/.reptar/agent/history`, override via
-`REPTAR_AGENT_HISTORY`): HISTFILE-style, 500 entries, exact-duplicate
-move-to-end (not just consecutive dedup — a bug caught by tests), rewritten
-from memory on every submission. **Leading-space entries are never written
-to disk** (bash `HISTCONTROL=ignorespace` privacy escape), but stay
-recallable in-session.
+`TerminalEditor.HistoryPath` (`~/.reptar/agent/history`, override via `REPTAR_AGENT_HISTORY`): HISTFILE-style, 500 entries, exact-duplicate move-to-end (not just consecutive dedup — a bug caught by tests), rewritten from memory on every submission. **Leading-space entries are never written to disk** (bash `HISTCONTROL=ignorespace` privacy escape), but stay recallable in-session.
 
 ### Gap 3: Clipboard image paste — ✅ shipped, with a discovery
 
-Ctrl+V sends the OSC 52 clipboard query (`\x1b]52;c;?\x07`); the response
-(`\x1b]52;c;<base64>BEL`) is parsed into an `AgentImage` and the buffer gets
-a `[clipboard image]` marker. The `TerminalInput` reader thread is the
-**single owner of stdin** — this was the non-negotiable architectural
-requirement.
+Ctrl+V sends the OSC 52 clipboard query (`\x1b]52;c;?\x07`); the response (`\x1b]52;c;<base64>BEL`) is parsed into an `AgentImage` and the buffer gets a `[clipboard image]` marker. The `TerminalInput` reader thread is the **single owner of stdin** — this was the non-negotiable architectural requirement.
 
-**The discovery:** .NET 10's `Console.ReadKey` on Unix keeps an internal
-CSI/OSC parser that silently consumes (and discards) ESC-]-prefixed
-sequences, even after it returns. No clipboard, arrow-key sequence, or
-bracketed paste can be captured through it. The fix is a **dedicated reader
-thread + termios P/Invoke**:
+**The discovery:** .NET 10's `Console.ReadKey` on Unix keeps an internal CSI/OSC parser that silently consumes (and discards) ESC-]-prefixed sequences, even after it returns. No clipboard, arrow-key sequence, or bracketed paste can be captured through it. The fix is a **dedicated reader thread + termios P/Invoke**:
 
 ```
 TerminalInput.Activate() →
@@ -312,44 +216,21 @@ TerminalInput.Activate() →
   4. new Thread(ReadLoop)        // single reader owns stdin from here on
 ```
 
-The reader thread parses: CSI sequences (arrows, Home/End, PageUp/Down,
-Delete, bracketed paste `\x1b[200~`…`\x1b[201~`), OSC 52 clipboard
-responses (base64 → magic-byte sniff → `AgentImage`), UTF-8 text, control
-bytes, and Ctrl-combos — all surfaced as `TermKey` events. Every UI
-component (editor, selection prompts, text prompts, secret entry) routes
-through `TerminalInput` once active; `Console.ReadKey` is never called again.
+The reader thread parses: CSI sequences (arrows, Home/End, PageUp/Down, Delete, bracketed paste `\x1b[200~`…`\x1b[201~`), OSC 52 clipboard responses (base64 → magic-byte sniff → `AgentImage`), UTF-8 text, control bytes, and Ctrl-combos — all surfaced as `TermKey` events. Every UI component (editor, selection prompts, text prompts, secret entry) routes through `TerminalInput` once active; `Console.ReadKey` is never called again.
 
-**Verified via `expect` PTY driver** (with correct per-OS termios): single
-bytes (`key=a`), Ctrl+V (`key=V ctrl=True`), and OSC 52 clipboard
-(`clip=image/png`) all deliver correctly. Arrow-key delivery requires the
-reader thread to be the *sole* stdin consumer; under `dotnet run` the
-MSBuild parent process can race stdin during build — the fix for testing
-is `dotnet exec <app.dll>` which has no parent.
+**Verified via `expect` PTY driver** (with correct per-OS termios): single bytes (`key=a`), Ctrl+V (`key=V ctrl=True`), and OSC 52 clipboard (`clip=image/png`) all deliver correctly. Arrow-key delivery requires the reader thread to be the _sole_ stdin consumer; under `dotnet run` the MSBuild parent process can race stdin during build — the fix for testing is `dotnet exec <app.dll>` which has no parent.
 
 ### The AOT publish detour
 
-`dotnet publish app.cs -p:PublishAot=true` with an explicit
-`-r osx-arm64 --self-contained` produced a **silent JIT** fallback (no
-"Generating native code" line, framework-dependent output) at least once
-this round. The conditions are unclear — one successful 13 MB AOT binary
-was produced earlier with identical flags, and the same command later
-regressed to JIT without any error. Suspect: stale incremental state in
-the shared `runfile` cache (concurrent agents building the same file-based
-project). Documented as a known flake; do NOT treat a silent AOT skip
-as a build error — always check for "Generating native code" in the log.
-(For the record: the `dotnet run` MSBuild parent process also races stdin
-during build, consuming input bytes before the app starts. This is a
-**testing** problem only — production single binaries have no parent.)
+`dotnet publish app.cs -p:PublishAot=true` with an explicit `-r osx-arm64 --self-contained` produced a **silent JIT** fallback (no "Generating native code" line, framework-dependent output) at least once this round. The conditions are unclear — one successful 13 MB AOT binary was produced earlier with identical flags, and the same command later regressed to JIT without any error. Suspect: stale incremental state in the shared `runfile` cache (concurrent agents building the same file-based project). Documented as a known flake; do NOT treat a silent AOT skip as a build error — always check for "Generating native code" in the log. (For the record: the `dotnet run` MSBuild parent process also races stdin during build, consuming input bytes before the app starts. This is a **testing** problem only — production single binaries have no parent.)
 
 ### Verification
 
 - 210/210 tests (merged with the parallel agent's ReptarTerm TUI work)
-- Clipboard attach verified live (`clip=image/png` from a synthetic OSC 52
-  response containing a 1×1 PNG)
+- Clipboard attach verified live (`clip=image/png` from a synthetic OSC 52 response containing a 1×1 PNG)
 - History persists across separate process launches (verified via `expect`)
 - Pinned footer renders at the absolute bottom line and survives resize
-- All input flows through the single reader thread; `.NET Console.ReadKey`
-  is never invoked after activation
+- All input flows through the single reader thread; `.NET Console.ReadKey` is never invoked after activation
 
 ## Architecture Decisions Worth Keeping
 

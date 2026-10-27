@@ -23,9 +23,9 @@ const listeningPorts = (pid: string): number[] => {
   const output = run("lsof", ["-nP", "-iTCP", "-sTCP:LISTEN", "-a", "-p", pid]);
   const ports: number[] = [];
   for (const line of output.split("\n")) {
-    const match = /:(\d+)\s+\(LISTEN\)/.exec(line);
+    const match = /:(?<port>\d+)\s+\(LISTEN\)/u.exec(line);
     if (match) {
-      const port = Number.parseInt(match[1] ?? "", 10);
+      const port = Number(match.groups?.port);
       if (Number.isFinite(port) && !ports.includes(port)) {
         ports.push(port);
       }
@@ -57,14 +57,15 @@ export const listDevServers = (): void => {
     if (!trimmed) {
       continue;
     }
-    const [pid, elapsed, ...commandParts] = trimmed.split(/\s+/);
+    const [pid, elapsed, ...commandParts] = trimmed.split(/\s+/u);
     const command = commandParts.join(" ");
     const ports = listeningPorts(pid ?? "");
-    const label = command.includes("runfile/app-")
-      ? "wasm/app server (runfile)"
-      : command.includes("dotnet run app.cs")
-        ? "app muxer (dotnet run)"
-        : "wrangler dev";
+    let label = "wrangler dev";
+    if (command.includes("runfile/app-")) {
+      label = "wasm/app server (runfile)";
+    } else if (command.includes("dotnet run app.cs")) {
+      label = "app muxer (dotnet run)";
+    }
 
     // Skip the same-port duplicates between muxer and child.
     const portText =

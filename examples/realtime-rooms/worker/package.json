@@ -9,5 +9,8 @@
   },
   "dependencies": {
     "@reptar/host": "workspace:*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.152.0"
   }
 }

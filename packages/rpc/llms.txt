@@ -18,7 +18,8 @@ Before writing code or assuming database schema, query the framework's machine-r
 - `bun reptar check:netwasm [--strict] [path]`: Scans C# sources for NetWasm/Workers incompatibilities (Channels, Process/filesystem APIs, background Task.Run loops, anonymous ctx.Json, runtime reflection) with `#if !NETWASM`-aware regions. See §6 for the rules it enforces.
 - `bun reptar test:realtime [--workers|--kestrel]`: Two-host protocol smoke — runs `examples/realtime-rooms/smoke.ts` against local workerd (Durable Object + D1) AND native Kestrel (SQLite). Catches host-specific regressions (thread safety, WS event lifetime, D1 marshaling) before deploy.
 - `bun reptar dev:status`: Lists running dev servers and their listening ports — orphaned `dotnet run`/runfile processes serve stale builds and hold ports hostage in multi-agent repos.
-- `bun reptar self-check`: One-command ground truth: doctor → framework tests → netwasm lint → two-host realtime smoke. Run this after concurrent edits or before trusting cached state.
+- `bun reptar self-check`: One-command ground truth: doctor → framework tests → host boundary tests → host contract + artifact hashes → generated contracts → netwasm lint → two-host realtime smoke. Run this after concurrent edits or before trusting cached state.
+- `bun run test:providers`: Runs the same CRUD/transaction/migration contract against SQLite, PostgreSQL, MySQL, and D1 (Miniflare); use `--require-all` in CI so a missing server fails.
 - `bun reptar mcp`: Launches the Model Context Protocol stdio server exposing `reptar_inspect`, `reptar_schema`, `reptar_routes`, `reptar_db_status`, `reptar_db_plan`, `reptar_check`, and `reptar_doctor`.
 - `bun reptar make:model <Name> [-f] [-m]`: Generates a `TableDef` + `[ReptarEntity]` DTO, wires `#:include`, updates the JSON context when present, and optionally generates a CRUD feature slice (`-f`) and migration (`-m`). The generator lives in `@reptar/cli-core`, so scaffolded projects expose the same commands as `bun run make:model`.
 - `bun reptar make:feature <Name>`: Generates a CRUD feature slice for an existing model.
@@ -26,6 +27,9 @@ Before writing code or assuming database schema, query the framework's machine-r
 - `bun reptar check:architecture --strict`: Enforces the core/AI/terminal boundary.
 - `bun scripts/bench-gate.ts --results <result.json> --baseline bench/perf-baseline.json`: Compares a benchmark run to the baseline and fails on RPS/p95 regressions.
 - `app.UseMetrics(); app.MapMetrics();`: Exposes Prometheus counters/histograms at `GET /metrics`; protect the route when it is publicly reachable.
+- `app.UseOtlp(new OtlpExporterOptions { Endpoint = "..." });`: Batches structured request records to an OTLP/HTTP logs collector and flushes on shutdown.
+- `app.MapReptarDashboard();`: Local-only `GET /_reptar` dashboard with routes, tables, cache count, and metrics; set `AllowRemote` only behind admin auth.
+- `app.UseSWR(ttl, swr, o => o.Store = new FileSwrCacheStore(".cache/swr"));`: Shared file-backed SWR cache for multi-process native hosts; implement `ISwrCacheStore` for Redis/KV.
 
 ---
 
@@ -340,10 +344,11 @@ bytes and attached as an `AgentImage` when it's a PNG/JPEG/GIF/WebP.
 
 ### Native AOT rule (critical)
 
-Under Native AOT, `ctx.Json(new { ... })` and `ctx.Json(record)` serialize via
-reflection and **fail at runtime** (`SmallObjectWithParameterizedConverter`).
-In AOT-published code paths, build `JsonObject`/`JsonArray` and return
-`ctx.JsonRaw(obj.ToJsonString())` instead.
+Under Native AOT, `ctx.Json(new { ... })` and unregistered `ctx.Json(record)`
+serialize via reflection and **fail at runtime**. Register every DTO in a
+`JsonSerializerContext` (see `SourceGenJsonCodec`) or build
+`JsonObject`/`JsonArray` and return `ctx.JsonRaw(obj.ToJsonString())`.
+The scaffolded `AppJsonContext` already covers the template's DTOs.
 
 ---
 
@@ -379,10 +384,20 @@ app.Get("/download/:key", ctx => ctx.Attachment(ctx.Param("key")!));
 // Nested keys use a named catch-all; static and single-segment routes win.
 app.Get("/assets/*path", ctx => ctx.File(ctx.Param("path")!));
 
-// Stream large uploads (S3 multipart above 8 MB) and move/batch-delete.
+// Stream large uploads (S3/R2 multipart) and move/batch-delete.
 await ctx.Storage.PutAsync("videos/a.mp4", fileStream, "video/mp4");
 await ctx.Storage.MoveAsync("drafts/a.png", "published/a.png");
 await ctx.Storage.DeleteManyAsync(["drafts/b.png", "drafts/c.png"]);
+
+// Opt into a live request body (Kestrel) and validate its magic bytes.
+app.Put("/upload/stream", async ctx =>
+{
+    var check = await Files.CheckStreamAsync(ctx.Req.BodyStream, "image/*");
+    if (!check.Ok) return check.ToError(ctx);
+
+    await ctx.Storage.PutAsync("uploads/a.png", check.Body!, check.ContentType);
+    return ctx.Status(201);
+}).StreamBody(maxBytes: 20_000_000);
 ```
 
 Rules:
@@ -402,16 +417,94 @@ Rules:
 - `PutAsync(..., new StoragePutOptions { Overwrite = false })` fails with
   `PreconditionFailed` (HTTP 412) instead of replacing an existing object.
 - Catch-all route segments must be named and final (`/files/*path`); bare `*`
-  throws. Static and single-segment routes always win. WebSocket routes do not
-  support catch-alls.
-- `PutAsync(stream)` uses S3 multipart above 8 MiB and aborts on failure.
-  Providers without `StreamingPut` buffer through the default implementation.
-- `CopyAsync`/`MoveAsync` preserve content type, cache control, and user
+  throws. Static and single-segment routes always win. WebSocket routes support
+  the same named catch-all syntax.
+- `StreamBody(maxBytes)` opts a route into `ctx.Req.BodyStream`. Kestrel streams
+  the live request body; Workers still receive the buffered envelope but avoid
+  a second copy in storage. Streaming routes must not use `ctx.Req.Form`,
+  `ctx.Req.Body`, or `ctx.BindJsonAsync<T>()`.
+- `Files.CheckStreamAsync(stream, types)` peeks at magic bytes and returns a
+  stream that replays them; pair it with `StreamBody(maxBytes)`.
+- `PutAsync(stream)` uses S3/R2 multipart above the configured part size
+  (default 8 MiB, minimum 5 MiB) and aborts on failure. Tune with
+  `S3StorageOptions.MultipartPartSizeBytes` or
+  `R2StorageOptions.MultipartPartSizeBytes`. Providers without `StreamingPut`
+  buffer through the default implementation.
+- `CopyAsync`/`MoveAsync` preserve content type, cache control,
+  `Content-Disposition`, `Content-Encoding`, `Content-Language`, and user
   metadata by default; set `PreserveMetadata = false` or pass overrides.
+  `ctx.File` serves the stored content headers.
 - `DeleteManyAsync` uses S3 `DeleteObjects` (1000-key batches) and R2 array
   delete; the default loops `DeleteAsync`.
 - `PublicUrl` returns null unless the provider was configured with a public base
   URL (`Storage.R2("https://cdn...")` or `S3StorageOptions.PublicBaseUrl`).
+
+---
+
+## 5d. Transactional Email (`c.Mail`)
+
+Configure a transport in `ReptarConfig`; handlers send through `ctx.Mail`.
+Failures never throw — they come back as a `MailResult(bool Ok, string? ProviderId, string? Error)`.
+
+```csharp
+var app = ReptarApp.Create(new ReptarConfig
+{
+    Database = Db.Sqlite("app.db"),
+    Mail = Mail.Resend(apiKeyEnv: "RESEND_API_KEY", defaultFrom: "Acme <noreply@acme.com>")
+    // Mail.Cloudflare(binding: "SEND_EMAIL")        — Workers send_email binding (structured send)
+    // Mail.CloudflareRest(accountIdEnv:..., tokenEnv:...) — CF Email REST API from any runtime
+    // Mail.Postmark(tokenEnv: "POSTMARK_SERVER_TOKEN")
+    // Mail.MailPit(baseUrl: "http://localhost:8025")     — local MailPit container
+    // Mail.Http(new MailHttpOptions(...))                 — generic JSON relay
+    // Mail.Console() + app.UseMailPreview()               — dev ring buffer + GET /_mail (native only)
+    // Mail.InMemory() / Mail.None()                       — tests / explicit honest no-op
+});
+
+// Templates are plain records with raw string literals — zero template engines.
+public sealed record MagicLinkMail(string Url) : IMailTemplate
+{
+    public string Subject => "Sign in to Acme";
+    public string Html => $"""
+        <p><a href="{Url}">Sign in</a></p>
+        """;
+    public string? Text => $"Sign in: {Url}";
+}
+
+app.Post("/auth/magic-link", async ctx =>
+{
+    var mail = new MagicLinkMail("https://app.test/verify?t=abc123");
+    var result = await ctx.Mail.SendAsync(new MailMessage(
+        [ctx.Req.Param("email")!], mail.Subject, Html: mail.Html, Text: mail.Text,
+        IdempotencyKey: tokenId));   // forwarded as Resend `Idempotency-Key` (24h dedup)
+    // or fire-and-forget after the response (WaitUntil-held, observer-logged):
+    // ctx.Mail.SendInBackground(new MailMessage(...));
+    return result.Ok ? ctx.Status(202) : ctx.Error(502, "mail_failed", result.Error!);
+});
+```
+
+Rules:
+- `await ctx.Mail.SendAsync(...)` records `Server-Timing: mail;dur=...` per request.
+- `ctx.Mail.SendInBackground(...)` rides `ctx.WaitUntil` (isolate-held on Workers).
+- `MailMessage.To` is required; `From` resolves from the transport's `defaultFrom`.
+- Optional `IMailObserver` (config `MailObserver`) gets `Sent`/`Failed` — wire OTel over it.
+- No SMTP, no template engines, no reflection; payloads are source-gen JSON (`MailJsonContext`).
+- Local dev without Docker: `Mail.Console()` + `app.UseMailPreview()` serves
+  `GET /_mail` (HTML) and `GET /_mail/json` (links + OTP hints pre-extracted for agents).
+
+### Testing (first-class)
+
+`app.CreateTestClient()` auto-installs an in-memory sink (explicit transports are respected):
+
+```csharp
+var client = app.CreateTestClient();
+await client.PostJsonAsync("/auth/magic-link", """{"email":"user@example.com"}""");
+
+var message = client.Mail.LastSentTo("user@example.com");          // throws descriptive when none
+var link   = client.Mail.FirstLinkMatching("https://app.test/verify"); // magic-link helper
+var otp    = client.Mail.FirstOtp();                                // 6-digit code helper
+// client.Mail.Sent / client.Mail.Queued (background sends, captured deterministically)
+// client.Mail.Capturing is false when an explicit non-memory transport is configured.
+```
 
 ---
 
@@ -431,8 +524,8 @@ Reptar compiles to two runtimes (`net10.0` Native AOT and `netwasm0.1` WebAssemb
 
 Code that compiles locally can still fail at runtime under NetWasm. Run `bun reptar check:netwasm <path>` to scan before publishing:
 
-1. **JSON serialization must be source-generated under NetWasm.** `ctx.Json(...)` of anonymous objects, unregistered records, or `Dictionary<string, object?>` throws `NotSupportedException` at runtime (the app's `JsonSerializerContext` has no metadata for them). Register types with `[JsonSerializable]` in the worker's `Program.cs`, or hand-roll payloads with `ctx.JsonRaw(...)` / string interpolation.
-2. **`D1DbClient.InsertAsync(TableDef, IDictionary)` was the trap**: prefer `ExecuteAsync` with `@`-named parameters for dictionary-shaped writes under NetWasm (the D1 client rewrites them to positional parameters).
+1. **JSON serialization must be source-generated under NetWasm.** `ctx.Json(...)` of anonymous objects or unregistered records throws `NotSupportedException` at runtime. Add `[JsonSerializable]` for every DTO/list shape, set `[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]`, then call `ReptarJson.RegisterContext(AppJsonContext.Default)` and `ReptarJson.UseRegisteredContexts()` once in the worker's `Program.cs`. Use `ReptarJson.Deserialize<T>(json)` in exported JS-interop handlers instead of passing `ReptarJson.Options` directly.
+2. **D1 dictionaries are supported directly.** `D1DbClient.InsertAsync(TableDef, IDictionary)` maps dictionary keys to columns without JSON serialization (the generic overload detects `IDictionary` too). Use it for write-behind persistence; `ExecuteAsync` with `@`-named parameters remains available.
 3. **`System.Threading.Channels` and background `Task.Run` loops don't exist under NetWasm.** Workers freeze the isolate between events — background drain workers never run. Do work inline during the event, or use Durable Object alarms/Queues. Gate local-only code with `#if !NETWASM`.
 4. **Top-level-statement locals are invisible to type declarations later in the file** (file-based programs). Move shared constants into a static class.
 5. **OS/IO APIs are gone under NetWasm**: `System.Diagnostics.Process`, `System.IO.File`, filesystem APIs. Gate with `#if !NETWASM`.

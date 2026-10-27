@@ -1147,10 +1147,23 @@ public sealed class SqliteDbClient : IDbClient, IDisposable
 
         if (limit > 0)
         {
-            sql.Append($" LIMIT {limit}");
+            if (SqlPagination.SupportsNamedParams(param))
+            {
+                sql.Append(" LIMIT @__limit");
 
-            if (offset > 0)
-                sql.Append($" OFFSET {offset}");
+                if (offset > 0)
+                    sql.Append(" OFFSET @__offset");
+
+                param = SqlPagination.MergeNamed(param, limit, offset);
+            }
+            else
+            {
+                // Exotic parameter shapes keep the legacy literal paging.
+                sql.Append($" LIMIT {limit}");
+
+                if (offset > 0)
+                    sql.Append($" OFFSET {offset}");
+            }
         }
 
         return QueryAsync<T>(sql.ToString(), param);

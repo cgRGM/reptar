@@ -67,6 +67,15 @@ app.Post("/enqueue", async ctx =>
 
 app.OnQueue<BenchJob>("jobs", async (ctx, msg, job) =>
 {
+    // Live-fire hook: fail the first k deliveries of every job to exercise
+    // the adapter's retry/backoff/dead-letter path against real providers.
+    if (int.TryParse(Environment.GetEnvironmentVariable("REPTAR_JOBS_FAIL_FIRST"), out var failFirst) &&
+        failFirst > 0 &&
+        msg.Attempts <= failFirst)
+    {
+        throw new RetryIn(2);
+    }
+
     await ctx.Db.ExecuteAsync(
         "insert or ignore into bench_results (id, job_id, processed_at) values (@id, @jobId, @at)",
         new { id = Ids.New("res"), jobId = job.Id, at = DateTimeOffset.UtcNow.ToString("O") });

@@ -2,6 +2,7 @@ using System.Text;
 using Reptar;
 using Reptar.AI;
 using Xunit;
+using static Reptar.ReptarApi;
 
 namespace Reptar.Tests;
 
@@ -628,6 +629,175 @@ public sealed class SecurityRegressions
             Path = "/hooks/stripe",
         });
         Assert.Equal(200, webhook.Status);
+    }
+
+    private sealed class FakeWebSocketTransport : IWebSocketTransport
+    {
+        public List<(string SessionId, int Code, string Reason)> Closes { get; } = [];
+
+        public void Send(string sessionId, string message) { }
+
+        public void Close(string sessionId, int code, string reason) =>
+            Closes.Add((sessionId, code, reason));
+    }
+
+    private static async IAsyncEnumerable<string> Events(params string[] messages)
+    {
+        foreach (var message in messages)
+        {
+            yield return message;
+        }
+    }
+
+    [Fact]
+    public async Task WebSocket_Upgrade_RunsAppMiddleware_AndRefusesBlockedConnections()
+    {
+        var transport = new FakeWebSocketTransport();
+        var app = ReptarApp.Create(new ReptarConfig());
+        app.SetWebSocketTransport(transport);
+
+        var opened = 0;
+        app.Use(async (ctx, next) =>
+        {
+            if (ctx.Req.Header("X-Api-Token") != "open-sesame")
+                return ctx.Unauthorized();
+
+            return await next();
+        });
+        app.OnWebSocket("/ws", new WebSocketHandlers
+        {
+            Open = _ =>
+            {
+                opened++;
+                return Task.CompletedTask;
+            },
+        });
+
+        // Blocked upgrade: the middleware refuses, the socket is closed with
+        // 1008, and the open handler never runs.
+        await app.HandleWebSocketOpenAsync("blocked", new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ws",
+        });
+        Assert.Equal(0, opened);
+        Assert.Contains(transport.Closes, c => c.SessionId == "blocked" && c.Code == 1008);
+
+        // Passing upgrade: the open handler runs and no close is recorded.
+        await app.HandleWebSocketOpenAsync("allowed", new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/ws",
+            Headers = new Dictionary<string, string> { ["X-Api-Token"] = "open-sesame" },
+        });
+        Assert.Equal(1, opened);
+        Assert.DoesNotContain(transport.Closes, c => c.SessionId == "allowed");
+    }
+
+    [Fact]
+    public async Task WsOrigin_GatesBrowserRequests_AndAllowsNonBrowserClients()
+    {
+        var app = ReptarApp.Create(new ReptarConfig());
+        app.Use(Middlewares.WsOrigin("https://app.example.com"));
+        app.Get("/value", ctx => ctx.Json(new { ok = true }));
+
+        var evil = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/value",
+            Headers = new Dictionary<string, string> { ["Origin"] = "https://evil.example" },
+        });
+        Assert.Equal(403, evil.Status);
+
+        var allowed = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/value",
+            Headers = new Dictionary<string, string> { ["Origin"] = "https://app.example.com" },
+        });
+        Assert.Equal(200, allowed.Status);
+
+        // Non-browser clients send no Origin and cannot be cross-site attackers.
+        var nonBrowser = await app.HandleAsync(new ReptarRequest
+        {
+            Method = "GET",
+            Path = "/value",
+        });
+        Assert.Equal(200, nonBrowser.Status);
+    }
+
+    [Fact]
+    public async Task Sse_FramesMultiLinePayloads_AsSingleDataEvents()
+    {
+        var app = ReptarApp.Create(new ReptarConfig());
+        app.Get("/events", ctx => ctx.Sse(Events("first\nsecond", "plain")));
+
+        var res = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/events" });
+        Assert.Equal(200, res.Status);
+        Assert.NotNull(res.BodyStream);
+
+        var bytes = new List<byte>();
+        await foreach (var chunk in res.BodyStream!(CancellationToken.None))
+        {
+            bytes.AddRange(chunk);
+        }
+
+        var text = Encoding.UTF8.GetString(bytes.ToArray());
+
+        // Each newline inside a payload becomes a new data: line within the
+        // same event — never a raw newline that could inject new SSE fields.
+        Assert.Contains("data: first\ndata: second\n\n", text);
+        Assert.Contains("data: plain\n\n", text);
+        Assert.DoesNotContain("data: first\nsecond\n\n", text);
+    }
+
+    [Fact]
+    public async Task ServerTiming_RejectsHeaderInjectionCharacters()
+    {
+        var app = ReptarApp.Create(new ReptarConfig());
+        app.Get("/timing", ctx =>
+        {
+            ctx.ServerTiming("db", 1.5, "query\"; bad\r\nX-Injected: 1");
+            return ctx.Text("ok");
+        });
+
+        var res = await app.HandleAsync(new ReptarRequest { Method = "GET", Path = "/timing" });
+        var header = res.Headers["Server-Timing"];
+
+        // CR/LF is the actual header-injection vector; quotes and separators
+        // are stripped so the description cannot break out of its field.
+        Assert.DoesNotContain("\r", header);
+        Assert.DoesNotContain("\n", header);
+        Assert.Equal(2, header.Count(c => c == '"'));
+    }
+
+    private sealed record EmailInput(string Email);
+
+    private static readonly Validator<EmailInput> EmailOnlySchema = Rule<EmailInput>()
+        .Prop(x => x.Email, rules => rules.Email());
+
+    [Fact]
+    public void Email_Validation_RejectsHtmlAndHeaderInjectionCharacters()
+    {
+        Assert.Empty(EmailOnlySchema.Validate(new EmailInput("user.name+tag@example.com")));
+
+        Assert.NotEmpty(EmailOnlySchema.Validate(new EmailInput("a@b.c\"><script>alert(1)</script>")));
+        Assert.NotEmpty(EmailOnlySchema.Validate(new EmailInput("a@b.c\r\nBcc: victim@example.com")));
+        Assert.NotEmpty(EmailOnlySchema.Validate(new EmailInput("a b@example.com")));
+        Assert.NotEmpty(EmailOnlySchema.Validate(new EmailInput("a'@b.c")));
+    }
+
+    [Fact]
+    public void Postgres_Ddl_EscapesStringColumnDefaults()
+    {
+        var table = DefineTable("pg_escape_test",
+            Col.Text("id").PrimaryKey(),
+            Col.Text("label").Default("safe'; DROP TABLE users;--"));
+
+        var ddl = PostgresDbClient.GenerateCreateTableSql(table);
+
+        Assert.Contains("'safe''; DROP TABLE users;--'", ddl);
+        Assert.DoesNotContain("DEFAULT safe';", ddl);
     }
 
     [Fact]

@@ -16,6 +16,12 @@ public sealed class S3StorageOptions
     public IHttpClient? HttpClient { get; init; }
     public Func<DateTimeOffset>? Clock { get; init; }
 
+    /// <summary>
+    /// Part size for multipart uploads. S3 requires at least 5 MiB; smaller
+    /// values are clamped up to the S3 minimum.
+    /// </summary>
+    public int MultipartPartSizeBytes { get; init; } = 8 * 1024 * 1024;
+
     /// <summary>Optional CDN/custom-domain base URL used by <see cref="S3Storage.PublicUrl"/>.</summary>
     public string? PublicBaseUrl { get; init; }
 }
@@ -27,11 +33,14 @@ public sealed class S3StorageOptions
 /// </summary>
 public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2Client
 {
-    private const int MultipartPartSize = 8 * 1024 * 1024;
+    private const int MinimumMultipartPartSize = 5 * 1024 * 1024;
     private const int MaxDeleteBatch = 1000;
 
     private readonly IHttpClient _http = options.HttpClient ?? new DefaultHttpClient();
     private readonly Func<DateTimeOffset> _clock = options.Clock ?? (() => DateTimeOffset.UtcNow);
+    private readonly int _multipartPartSize = Math.Max(
+        MinimumMultipartPartSize,
+        options.MultipartPartSizeBytes);
 
     public StorageCapabilities Capabilities
     {
@@ -71,6 +80,12 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
             extra["content-type"] = contentType.Trim();
         if (!string.IsNullOrWhiteSpace(putOptions.CacheControl))
             extra["cache-control"] = putOptions.CacheControl.Trim();
+        if (!string.IsNullOrWhiteSpace(putOptions.ContentDisposition))
+            extra["content-disposition"] = putOptions.ContentDisposition.Trim();
+        if (!string.IsNullOrWhiteSpace(putOptions.ContentEncoding))
+            extra["content-encoding"] = putOptions.ContentEncoding.Trim();
+        if (!string.IsNullOrWhiteSpace(putOptions.ContentLanguage))
+            extra["content-language"] = putOptions.ContentLanguage.Trim();
         if (!putOptions.Overwrite)
             extra["if-none-match"] = "*";
         if (putOptions.Metadata is { Count: > 0 })
@@ -110,8 +125,8 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
                 normalizedKey);
         }
 
-        var buffer = new byte[MultipartPartSize];
-        var read = await ReadFullAsync(body, buffer);
+        var buffer = new byte[_multipartPartSize];
+        var read = await StorageStreams.ReadFullAsync(body, buffer);
 
         if (read == 0)
             return await PutAsync(normalizedKey, [], contentType, putOptions);
@@ -168,6 +183,9 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
             !copyOptions.PreserveMetadata ||
             copyOptions.ContentType is not null ||
             copyOptions.CacheControl is not null ||
+            copyOptions.ContentDisposition is not null ||
+            copyOptions.ContentEncoding is not null ||
+            copyOptions.ContentLanguage is not null ||
             copyOptions.Metadata is not null;
 
         if (replaceMetadata)
@@ -185,9 +203,34 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
             if (!string.IsNullOrWhiteSpace(cacheControl))
                 extra["cache-control"] = cacheControl.Trim();
 
+            var contentDisposition = copyOptions.ContentDisposition
+                ?? (copyOptions.PreserveMetadata
+                    ? info.MetadataValue("content-disposition")
+                    : null);
+            if (!string.IsNullOrWhiteSpace(contentDisposition))
+                extra["content-disposition"] = contentDisposition.Trim();
+
+            var contentEncoding = copyOptions.ContentEncoding
+                ?? (copyOptions.PreserveMetadata
+                    ? info.MetadataValue("content-encoding")
+                    : null);
+            if (!string.IsNullOrWhiteSpace(contentEncoding))
+                extra["content-encoding"] = contentEncoding.Trim();
+
+            var contentLanguage = copyOptions.ContentLanguage
+                ?? (copyOptions.PreserveMetadata
+                    ? info.MetadataValue("content-language")
+                    : null);
+            if (!string.IsNullOrWhiteSpace(contentLanguage))
+                extra["content-language"] = contentLanguage.Trim();
+
             var metadata = copyOptions.Metadata
                 ?? (copyOptions.PreserveMetadata
-                    ? info.MetadataExcept("cache-control")
+                    ? info.MetadataExcept(
+                        "cache-control",
+                        "content-disposition",
+                        "content-encoding",
+                        "content-language")
                     : null);
             if (metadata is { Count: > 0 })
             {
@@ -321,8 +364,8 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
                 parts.Add((partNumber, etag));
                 partNumber++;
 
-                buffer = new byte[MultipartPartSize];
-                length = await ReadFullAsync(body, buffer);
+                buffer = new byte[_multipartPartSize];
+                length = await StorageStreams.ReadFullAsync(body, buffer);
             }
 
             await CompleteMultipartUploadAsync(key, uploadId, parts);
@@ -471,6 +514,12 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
             extra["content-type"] = contentType.Trim();
         if (!string.IsNullOrWhiteSpace(putOptions.CacheControl))
             extra["cache-control"] = putOptions.CacheControl.Trim();
+        if (!string.IsNullOrWhiteSpace(putOptions.ContentDisposition))
+            extra["content-disposition"] = putOptions.ContentDisposition.Trim();
+        if (!string.IsNullOrWhiteSpace(putOptions.ContentEncoding))
+            extra["content-encoding"] = putOptions.ContentEncoding.Trim();
+        if (!string.IsNullOrWhiteSpace(putOptions.ContentLanguage))
+            extra["content-language"] = putOptions.ContentLanguage.Trim();
         if (putOptions.Metadata is { Count: > 0 })
         {
             foreach (var (name, value) in putOptions.Metadata)
@@ -478,20 +527,6 @@ public sealed partial class S3Storage(S3StorageOptions options) : IStorage, IR2C
         }
 
         return extra;
-    }
-
-    private static async Task<int> ReadFullAsync(Stream stream, byte[] buffer)
-    {
-        var total = 0;
-        while (total < buffer.Length)
-        {
-            var read = await stream.ReadAsync(buffer.AsMemory(total));
-            if (read == 0)
-                break;
-            total += read;
-        }
-
-        return total;
     }
 
     public async Task<byte[]?> GetAsync(string key)

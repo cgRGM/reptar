@@ -9,6 +9,7 @@ public sealed class RouteMeta
     public required string Method { get; init; }
     public required string Path { get; init; }
     public Type? InputType { get; internal set; }
+    public Type? QueryType { get; internal set; }
     public List<(int Status, Type? Type)> Produces { get; } = new();
     public string? Name { get; internal set; }
     public string? Summary { get; internal set; }
@@ -22,6 +23,7 @@ public sealed class RouteMeta
     public string? FileDescription { get; internal set; }
     public bool FileRequired { get; internal set; } = true;
     public long? MaxBodyBytes { get; internal set; }
+    public bool StreamingBody { get; internal set; }
 
     internal RouteMeta CloneWithPath(string path)
     {
@@ -30,6 +32,7 @@ public sealed class RouteMeta
             Method = Method,
             Path = path,
             InputType = InputType,
+            QueryType = QueryType,
             Name = Name,
             Summary = Summary,
             Description = Description,
@@ -41,6 +44,7 @@ public sealed class RouteMeta
             FileDescription = FileDescription,
             FileRequired = FileRequired,
             MaxBodyBytes = MaxBodyBytes,
+            StreamingBody = StreamingBody,
         };
 
         clone.Produces.AddRange(Produces);
@@ -71,7 +75,9 @@ internal sealed record WebSocketRoute(
     bool[] IsParamSegment,
     string[] ParamNames,
     int[] ParamIndices,
-    WebSocketHandlers Handlers);
+    WebSocketHandlers Handlers,
+    bool IsCatchAll = false,
+    int CatchAllIndex = -1);
 
 public sealed record QueueMessage(
     string Id,
@@ -121,6 +127,8 @@ public sealed class ReptarApp
     private readonly Dictionary<string, WebSocketHandlers> _webSocketHandlers =
         new(StringComparer.OrdinalIgnoreCase);
     private readonly List<WebSocketRoute> _webSocketParamRoutes = [];
+    private readonly List<WebSocketRoute> _webSocketCatchAllRoutes = [];
+    private Func<Ctx, Task>? _alarmHandler;
     // WebSocket sessions are touched concurrently by the host's request
     // threads (open/message/close), so this must be the concurrent dictionary —
     // a plain Dictionary corrupts under simultaneous opens.
@@ -142,6 +150,17 @@ public sealed class ReptarApp
     public void SetWebSocketTransport(IWebSocketTransport transport)
     {
         _config.WebSocket = transport;
+        _services = null;
+    }
+
+    /// <summary>
+    /// Swaps the mail transport and rebuilds the cached service set on the
+    /// next request. <see cref="ReptarTestClient"/> uses this to install an
+    /// in-memory sink automatically; dev tools can use it at runtime.
+    /// </summary>
+    public void SetMailTransport(IMailClient transport)
+    {
+        _config.Mail = transport;
         _services = null;
     }
 
@@ -535,6 +554,7 @@ public sealed class ReptarApp
         }
 
         _webSocketParamRoutes.AddRange(subApp._webSocketParamRoutes);
+        _webSocketCatchAllRoutes.AddRange(subApp._webSocketCatchAllRoutes);
 
         return this;
     }
@@ -566,6 +586,19 @@ public sealed class ReptarApp
         return this;
     }
 
+    /// <summary>
+    /// Registers the Durable Object alarm handler. The reserved
+    /// <c>/_reptar/alarm</c> path dispatches through the normal request
+    /// pipeline, so the Durable Object host's alarm() reuses the existing
+    /// fetch export — no additional JS exports (which Binaryen currently
+    /// rejects). Native targets can hit the path from any HTTP client.
+    /// </summary>
+    public ReptarApp OnAlarm(Func<Ctx, Task> handler)
+    {
+        _alarmHandler = handler;
+        return this;
+    }
+
     public ReptarApp OnWebSocket(string path, WebSocketHandlers handlers)
     {
         var normalized = Normalize(path);
@@ -573,14 +606,41 @@ public sealed class ReptarApp
         var isParamSegment = new bool[segments.Length];
         var paramNames = new List<string>();
         var paramIndices = new List<int>();
+        var isCatchAll = false;
+        var catchAllIndex = -1;
 
         for (var i = 0; i < segments.Length; i++)
         {
             if (segments[i].StartsWith('*'))
             {
-                throw new ArgumentException(
-                    "Catch-all segments are not supported for WebSocket routes.",
-                    nameof(path));
+                if (i != segments.Length - 1)
+                {
+                    throw new ArgumentException(
+                        $"Catch-all segment '{segments[i]}' must be the final WebSocket route segment.",
+                        nameof(path));
+                }
+
+                if (segments[i].Length == 1)
+                {
+                    throw new ArgumentException(
+                        "Catch-all segments must be named, e.g. '/ws/*path'.",
+                        nameof(path));
+                }
+
+                var catchAllName = segments[i][1..];
+                if (!IsValidParamName(catchAllName))
+                {
+                    throw new ArgumentException(
+                        $"Catch-all parameter '{catchAllName}' must be a valid identifier.",
+                        nameof(path));
+                }
+
+                isCatchAll = true;
+                catchAllIndex = i;
+                isParamSegment[i] = true;
+                paramNames.Add(catchAllName);
+                paramIndices.Add(i);
+                continue;
             }
 
             if (TryParseParamSegment(segments[i], out var name))
@@ -591,14 +651,22 @@ public sealed class ReptarApp
             }
         }
 
-        if (paramNames.Count > 0)
+        var route = new WebSocketRoute(
+            segments,
+            isParamSegment,
+            [.. paramNames],
+            [.. paramIndices],
+            handlers,
+            isCatchAll,
+            catchAllIndex);
+
+        if (isCatchAll)
         {
-            _webSocketParamRoutes.Add(new WebSocketRoute(
-                segments,
-                isParamSegment,
-                [.. paramNames],
-                [.. paramIndices],
-                handlers));
+            _webSocketCatchAllRoutes.Add(route);
+        }
+        else if (paramNames.Count > 0)
+        {
+            _webSocketParamRoutes.Add(route);
         }
         else
         {
@@ -611,7 +679,7 @@ public sealed class ReptarApp
     public bool HasWebSocketHandler(string path) =>
         TryMatchWebSocket(path) is not null;
 
-    private (WebSocketHandlers Handlers, Dictionary<string, string> Params)? TryMatchWebSocket(string path)
+    internal (WebSocketHandlers Handlers, Dictionary<string, string> Params)? TryMatchWebSocket(string path)
     {
         var normalized = Normalize(path);
 
@@ -646,6 +714,40 @@ public sealed class ReptarApp
             for (var p = 0; p < route.ParamNames.Length; p++)
             {
                 routeParams[route.ParamNames[p]] = segments[route.ParamIndices[p]];
+            }
+
+            return (route.Handlers, routeParams);
+        }
+
+        foreach (var route in _webSocketCatchAllRoutes)
+        {
+            if (segments.Length <= route.CatchAllIndex)
+                continue;
+
+            var matched = true;
+            for (var i = 0; i < route.CatchAllIndex; i++)
+            {
+                if (!route.IsParamSegment[i] &&
+                    !string.Equals(route.Segments[i], segments[i], StringComparison.OrdinalIgnoreCase))
+                {
+                    matched = false;
+                    break;
+                }
+            }
+
+            if (!matched)
+                continue;
+
+            var routeParams = new Dictionary<string, string>(
+                route.ParamNames.Length,
+                StringComparer.OrdinalIgnoreCase);
+
+            for (var p = 0; p < route.ParamNames.Length; p++)
+            {
+                var index = route.ParamIndices[p];
+                routeParams[route.ParamNames[p]] = index == route.CatchAllIndex
+                    ? string.Join("/", segments[index..])
+                    : segments[index];
             }
 
             return (route.Handlers, routeParams);
@@ -721,22 +823,51 @@ public sealed class ReptarApp
             RequestId = sessionId,
         };
         var connection = new WebSocketConnection(sessionId, ctx);
-        _webSocketSessions[sessionId] = (connection, handlers);
 
-        if (handlers.Open is null)
-            return;
+        // The app middleware pipeline gates WebSocket upgrades the same way it
+        // gates HTTP requests: any middleware may refuse the connection
+        // (auth, rate limit, origin gate) and a short-circuit response closes
+        // the socket instead of reaching the open handler. The sentinel
+        // reference distinguishes "pipeline passed" from a middleware's
+        // refusal response.
+        var proceed = new ReptarResponse { Status = 0 };
+
+        Func<Task<ReptarResponse>> next = handlers.Open is null
+            ? () => Task.FromResult(proceed)
+            : async () =>
+            {
+                await handlers.Open(connection);
+                return proceed;
+            };
+
+        for (var i = _middlewares.Count - 1; i >= 0; i--)
+        {
+            var middleware = _middlewares[i];
+            var inner = next;
+            next = () => middleware(ctx, inner);
+        }
 
         try
         {
-            await handlers.Open(connection);
+            var gate = await next();
+
+            if (!ReferenceEquals(gate, proceed))
+            {
+                ctx.Log.Info(
+                    $"[WebSocket:{sessionId}] Upgrade refused by middleware (HTTP {gate.Status}).");
+                Services.WebSocket.Close(sessionId, 1008, "WebSocket upgrade refused.");
+                return;
+            }
         }
         catch (Exception exception)
         {
             ctx.Log.Error(
                 $"[WebSocket:{sessionId}] Open failed: {exception.Message}");
-            _webSocketSessions.TryRemove(sessionId, out _);
             Services.WebSocket.Close(sessionId, 1011, "WebSocket open failed.");
+            return;
         }
+
+        _webSocketSessions[sessionId] = (connection, handlers);
     }
 
     public async Task HandleWebSocketMessageAsync(
@@ -886,6 +1017,13 @@ public sealed class ReptarApp
     public long GetMaxBodyBytes(string method, string path) =>
         Match(method, path)?.Entry.Meta.MaxBodyBytes ?? _config.MaxBodyBytes;
 
+    /// <summary>
+    /// True when the matched route opted into a streaming request body via
+    /// <see cref="RouteBuilder.StreamBody"/>.
+    /// </summary>
+    public bool IsStreamingBody(string method, string path) =>
+        Match(method, path)?.Entry.Meta.StreamingBody ?? false;
+
     private static bool IsBodyOverLimit(ReptarRequest request, long maxBodyBytes)
     {
         if (request.BodyTooLarge)
@@ -932,6 +1070,56 @@ public sealed class ReptarApp
         ReptarRequest request,
         bool startBackground)
     {
+        // Durable Object alarm dispatch: a reserved internal path that rides
+        // the normal pipeline (no extra JS exports — Binaryen rejects those).
+        // Guarded by a null check so apps without OnAlarm pay nothing.
+        if (_alarmHandler is not null &&
+            string.Equals(request.Path, "/_reptar/alarm", StringComparison.Ordinal))
+        {
+            var alarmCtx = new Ctx(new ReptarRequest
+            {
+                Method = "ALARM",
+                Path = "/_reptar/alarm",
+                Query = "",
+                Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Cookies = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+                Body = [],
+            }, Services)
+            {
+                RequestId = Ids.New("alarm"),
+            };
+
+            ReptarResponse alarmResponse;
+            try
+            {
+                await _alarmHandler(alarmCtx);
+                alarmResponse = ReptarResponse.Json("{\"ran\":true}", 200);
+            }
+            catch (Exception exception)
+            {
+                alarmCtx.Log.Error($"[Alarm] {exception.Message}");
+                alarmResponse = ReptarResponse.Json(
+                    $"{{\"ran\":false,\"error\":{System.Text.Json.JsonSerializer.Serialize(exception.Message, ReptarJson.Options)}}}", 500);
+            }
+
+            if (startBackground && alarmCtx.BackgroundTasks.Count > 0)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await Task.WhenAll(alarmCtx.BackgroundTasks);
+                    }
+                    catch (Exception ex)
+                    {
+                        alarmCtx.Log.Error($"Background task failed: {ex.Message}");
+                    }
+                });
+            }
+
+            return (alarmResponse, alarmCtx);
+        }
+
         var ctx = new Ctx(request, Services);
         ctx.RequestAborted = request.Aborted;
         var traceParent = TraceParent.Parse(request.Header("traceparent"));
@@ -969,6 +1157,10 @@ public sealed class ReptarApp
                 try
                 {
                     response = await match.Value.Entry.Handler(ctx);
+                }
+                catch (PayloadTooLargeException exception)
+                {
+                    response = ctx.Error(413, "payload_too_large", exception.Message);
                 }
                 catch (Exception exception)
                 {
@@ -1021,6 +1213,10 @@ public sealed class ReptarApp
             try
             {
                 response = await next();
+            }
+            catch (PayloadTooLargeException exception)
+            {
+                response = ctx.Error(413, "payload_too_large", exception.Message);
             }
             catch (Exception exception)
             {
@@ -1450,6 +1646,7 @@ public sealed class ReptarApp
         _config.Cache ?? DefaultCache(),
         _config.Queues ?? DefaultQueues(this),
         _config.Durable ?? DefaultDurable(),
+        _config.Mail ?? DefaultMail(),
         _config.Http ?? DefaultHttp(),
         _config.Clock ?? new SystemClock(),
         _config.Crypto ?? DefaultCrypto(),
@@ -1457,6 +1654,7 @@ public sealed class ReptarApp
         _config.Json ?? new DefaultJsonCodec(),
         _config.Errors ?? new DefaultErrorMapper(),
         _config.Log ?? DefaultLog(),
+        _config.MailObserver,
         _config.WebSocket ?? new NoopWebSocketTransport(),
         Policies);
 
@@ -1468,6 +1666,8 @@ public sealed class ReptarApp
         return new ConsoleAppLogger();
 #endif
     }
+
+    private static IMailClient DefaultMail() => new NoopMailClient();
 
     private static IDbClient Instrument(IDbClient db) =>
         db is InstrumentedDbClient ? db : new InstrumentedDbClient(db);
@@ -1583,7 +1783,7 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
 {
     public ReptarApp Build() => app;
 
-    public RouteBuilder Produces<T>(int status)
+    public RouteBuilder Produces<T>(int status = 200)
     {
         meta.Produces.Add((status, typeof(T)));
         return this;
@@ -1592,6 +1792,17 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
     public RouteBuilder Produces(int status)
     {
         meta.Produces.Add((status, null));
+        return this;
+    }
+
+    /// <summary>
+    /// Declares the query-string contract for codegen and OpenAPI. The handler
+    /// still parses/validates values explicitly; this does not bind a JSON body.
+    /// Query records should contain scalar string, number, boolean, or enum fields.
+    /// </summary>
+    public RouteBuilder WithQuery<T>()
+    {
+        meta.QueryType = typeof(T);
         return this;
     }
 
@@ -1647,6 +1858,19 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
     public RouteBuilder WithMaxBody(long maxBytes)
     {
         meta.MaxBodyBytes = maxBytes;
+        return this;
+    }
+
+    /// <summary>
+    /// Opts the route into a streaming request body. Kestrel hands the handler
+    /// the live request stream instead of buffering it first. <paramref name="maxBytes"/>
+    /// sets the route limit (0 = unlimited); the pipeline still returns 413 when
+    /// Content-Length or the streamed byte count exceeds it.
+    /// </summary>
+    public RouteBuilder StreamBody(long maxBytes = 0)
+    {
+        meta.StreamingBody = true;
+        meta.MaxBodyBytes = Math.Max(0, maxBytes);
         return this;
     }
 

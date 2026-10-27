@@ -35,21 +35,17 @@ Model names route by prefix; `provider/model` syntax (Portkey-style) overrides:
 | `a2a/<agent-url>` | **A2A agents as upstreams**: agent card resolved once, `message/send` JSON-RPC, `tasks/get` polling for long-running tasks | none |
 | `mock*` | Built-in mock (benchmarks/demos) | none |
 
-If the primary provider returns `429`/`5xx`/connection errors, the next provider in the chain is retried **within the same HTTP connection**. The chain defaults to `GATEWAY_FALLBACKS=mock` so demos always succeed; set it to `""` for production.
-A2A knobs: `A2A_POLL_ATTEMPTS` (default 60), `A2A_POLL_INTERVAL_MS` (default 500).
+If the primary provider returns `429`/`5xx`/connection errors, the next provider in the chain is retried **within the same HTTP connection**. The chain defaults to `GATEWAY_FALLBACKS=mock` so demos always succeed; set it to `""` for production. A2A knobs: `A2A_POLL_ATTEMPTS` (default 60), `A2A_POLL_INTERVAL_MS` (default 500).
 
 ## Stream resume (continuation tokens)
 
-Every streaming response carries `X-Reptar-Continuation: <token>`, and every SSE
-frame carries an incremental `id:`. A client that drops mid-stream can resume from
-the cached completion at zero upstream cost:
+Every streaming response carries `X-Reptar-Continuation: <token>`, and every SSE frame carries an incremental `id:`. A client that drops mid-stream can resume from the cached completion at zero upstream cost:
 
 ```
 POST /v1/chat/completions?continuation=<token>&last_event=<last-received-id>
 ```
 
-SSE clients can send the standard `Last-Event-ID` header instead of `last_event`;
-data-stream clients use the same frame-index semantics via `last_event`.
+SSE clients can send the standard `Last-Event-ID` header instead of `last_event`; data-stream clients use the same frame-index semantics via `last_event`.
 
 ## Wire protocols
 
@@ -69,8 +65,7 @@ Every request logs model, prompt/completion tokens, latency, and cache status in
 
 ## Env knobs
 
-`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OLLAMA_BASE_URL`, `A2A_POLL_ATTEMPTS`,
-`A2A_POLL_INTERVAL_MS`, `GATEWAY_FALLBACKS`, `GATEWAY_DEFAULT_PROVIDER`, `GATEWAY_CACHE_TTL_SECONDS`, `GATEWAY_CACHE_MAX_ENTRIES`, `GATEWAY_MOCK_TOKENS` (default 48), `GATEWAY_TOKEN_DELAY_MS` (stream pacing for demos), `GATEWAY_LOGGING=0` to disable, `PORT` (default 8788).
+`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OLLAMA_BASE_URL`, `A2A_POLL_ATTEMPTS`, `A2A_POLL_INTERVAL_MS`, `GATEWAY_FALLBACKS`, `GATEWAY_DEFAULT_PROVIDER`, `GATEWAY_CACHE_TTL_SECONDS`, `GATEWAY_CACHE_MAX_ENTRIES`, `GATEWAY_MOCK_TOKENS` (default 48), `GATEWAY_TOKEN_DELAY_MS` (stream pacing for demos), `GATEWAY_LOGGING=0` to disable, `PORT` (default 8788).
 
 ## Benchmark results (M3 MacBook, dev JIT host, 500 connections)
 

@@ -172,7 +172,7 @@ const findBuildLockHolders = (): { command: string; pid: number }[] => {
     }
     for (const line of result.stdout.split("\n")) {
       const pid = Math.trunc(Number(line.trim()));
-      if (!Number.isFinite(pid) || holders.has(pid)) {
+      if (!Number.isFinite(pid) || pid <= 0 || holders.has(pid)) {
         continue;
       }
       const ps = spawnSync("ps", ["-p", String(pid), "-o", "command="], {
@@ -351,10 +351,10 @@ const syncRpcContracts = (): void => {
  * Post-pass for the Worker module. NetWasm 0.10.1's host-tools wasm-opt
  * crashes on the current module (SIGBUS / "unknown error"), but the Binaryen
  * binary shipped in netwasm.toolchain handles it correctly. Optimizing after
- * publish brings the blog Worker from ~27 MB to ~15 MB, under Cloudflare's
- * 25 MiB per-asset limit.
+ * publish keeps the module inside Cloudflare's 64 MiB Worker script limit and
+ * the project's 32 MiB upload budget.
  */
-const optimizeWasmModule = (wasmPath: string): number | null => {
+const optimizeWasmModule = (wasmPath: string, level = "-Oz"): number | null => {
   if (process.env.REPTAR_SKIP_WASM_OPT === "1") {
     return null;
   }
@@ -399,17 +399,24 @@ const optimizeWasmModule = (wasmPath: string): number | null => {
       "--enable-nontrapping-float-to-int",
       "--enable-reference-types",
       wasmPath,
-      "-Oz",
+      level,
       "-o",
       optimized,
     ],
-    { stdio: "inherit" }
+    {
+      stdio: "inherit",
+      timeout: Number(process.env.REPTAR_WASM_OPT_TIMEOUT_MS ?? 180_000),
+    }
   );
 
   if (result.status !== 0 || !existsSync(optimized)) {
     rmSync(optimized, { force: true });
+    const reason =
+      result.error?.name === "Error"
+        ? "timed out"
+        : (result.status ?? "no output");
     console.warn(
-      `wasm-opt post-pass skipped (${result.status ?? "no output"}) — keeping the unoptimized module.`
+      `wasm-opt post-pass skipped (${reason}) — keeping the unoptimized module.`
     );
     return null;
   }
@@ -455,27 +462,62 @@ const resolveAppWasm = (publishRoot: string): string | undefined => {
 };
 
 /**
- * The optimized wasm no longer matches the hash recorded by NetWasm's
- * deployment manifest. Refresh the artifact hash and the generated loader's
- * manifestSha256 so the host's integrity check passes.
+ * Recompute every artifact hash in NetWasm's deployment manifest (the wasm
+ * and raw adapter change when the core is optimized/relinked) and update the
+ * generated loader's manifestSha256. Without this the host rejects the module
+ * with "raw artifact integrity check failed".
  */
-const refreshWasmManifest = (publishRoot: string, wasmFile: string): void => {
+/**
+ * The Worker host imports the wasm as a module and `.assetsignore` removes it
+ * from the asset upload. If a NetWasm upgrade changes the loader, the
+ * readArtifact patch silently stops applying and the Worker fails at boot;
+ * fail the build instead.
+ */
+const verifyApplicationAssetSkip = (browserRoot: string): void => {
+  const pagePath = path.join(browserRoot, "netwasm.page.mjs");
+  if (!existsSync(pagePath)) {
+    return;
+  }
+  const page = readFileSync(pagePath, "utf-8");
+  if (!page.includes("if(e.role===`application`)return new Uint8Array(0)")) {
+    console.error(
+      "Error: the NetWasm loader patch that skips the application wasm asset did not apply. " +
+        "Update patchNetWasmHost for the current NetWasm output before shipping."
+    );
+    process.exit(1);
+  }
+};
+
+const refreshDeploymentHashes = (publishRoot: string): void => {
   const manifestPath = path.join(publishRoot, "deployment.json");
   if (!existsSync(manifestPath)) {
     return;
   }
 
   const manifest = JSON.parse(readFileSync(manifestPath, "utf-8")) as {
-    artifacts?: { relativePath?: string; sha256?: string }[];
+    artifacts?: { relativePath?: string; role?: string; sha256?: string }[];
   };
-  const artifact = manifest.artifacts?.find(
-    (entry) => entry.relativePath === wasmFile
-  );
-  if (!artifact) {
-    return;
+
+  // The Worker host imports the application wasm as a WebAssembly.Module and
+  // patches the loader to skip fetching it (see @reptar/host patch.ts). The
+  // loader still verifies the artifact hash, so record the empty hash.
+  const emptySha256 =
+    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+  for (const artifact of manifest.artifacts ?? []) {
+    if (!artifact.relativePath) {
+      continue;
+    }
+    if (artifact.role === "application") {
+      artifact.sha256 = emptySha256;
+      continue;
+    }
+    const artifactPath = path.join(publishRoot, artifact.relativePath);
+    if (existsSync(artifactPath)) {
+      artifact.sha256 = sha256File(artifactPath);
+    }
   }
 
-  artifact.sha256 = sha256File(path.join(publishRoot, wasmFile));
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   const manifestHash = sha256File(manifestPath);
@@ -497,10 +539,89 @@ const refreshWasmManifest = (publishRoot: string, wasmFile: string): void => {
     writeFileSync(loaderPath, content);
   }
 
-  console.log(`Refreshed deployment manifest for ${wasmFile}`);
+  console.log("Refreshed deployment artifact hashes");
 };
 
-const workerAssetLimit = 25 * 1024 * 1024;
+/**
+ * NetWasm 0.10.1 cannot optimize this module itself (its wasm-opt invocation
+ * omits the required feature flags). Optimize the core module, then re-run
+ * the link/raw-binding deployment target so the interop manifest is generated
+ * from the optimized core. Optimizing the final linked module would invalidate
+ * the manifest's function mapping.
+ */
+const optimizeWorkerCore = (
+  csharpRoot: string,
+  publishRoot: string,
+  wasmFile: string
+): void => {
+  const coreFile = wasmFile.replace(/\.wasm$/u, ".core.wasm");
+  const corePath = path.join(csharpRoot, "bin/Release/netwasm0.1", coreFile);
+
+  if (!existsSync(corePath)) {
+    throw new Error(`Core wasm not found at ${corePath}`);
+  }
+
+  // -O1 is the only level that relinks this core reliably. -Oz/-O2 either
+  // fail validation or take long enough to look hung. The optimizer is an
+  // optional size pass: if it fails or times out, keep the already-published
+  // unoptimized module, which is still under the 64 MiB platform limit.
+  const optimized = optimizeWasmModule(corePath, "-O1");
+  if (optimized === null) {
+    console.warn(
+      "Core wasm optimization unavailable; keeping the unoptimized module. " +
+        "It is under Cloudflare's 64 MiB script limit but above the 32 MiB target. " +
+        "Set REPTAR_SKIP_WASM_OPT=1 to skip this attempt."
+    );
+    return;
+  }
+
+  // Relink the final module and regenerate the raw adapter/interop metadata
+  // from the optimized core. The compile target is not in this dependency
+  // chain, so the optimized core is preserved.
+  run(
+    [
+      "msbuild",
+      "HelloReptar.csproj",
+      "-t:NetWasmSdkComponentize",
+      "-p:Configuration=Release",
+      "-p:NetWasmOptimization=O0",
+      "-p:TargetFramework=netwasm0.1",
+    ],
+    csharpRoot
+  );
+
+  const binDir = path.join(csharpRoot, "bin/Release/netwasm0.1");
+  const relinkedWasm = path.join(binDir, wasmFile);
+  const relinkedAdapter = path.join(
+    binDir,
+    wasmFile.replace(/\.wasm$/u, ".netwasm.raw-adapter.mjs")
+  );
+
+  if (!existsSync(relinkedWasm) || !existsSync(relinkedAdapter)) {
+    throw new Error(
+      "NetWasm relink did not produce the expected wasm/raw adapter artifacts."
+    );
+  }
+
+  copyFileSync(relinkedWasm, path.join(publishRoot, wasmFile));
+  copyFileSync(
+    relinkedAdapter,
+    path.join(publishRoot, wasmFile.replace(/\.wasm$/u, ".raw-adapter.mjs"))
+  );
+
+  // The Worker imports the wasm as a CompiledWasm module and the patched
+  // loader uses that module directly, so the wasm is excluded from the static
+  // asset upload (see public/.assetsignore). Only the 64 MiB Worker script
+  // limit applies.
+  refreshDeploymentHashes(publishRoot);
+};
+
+// Cloudflare's Worker script limit is 64 MiB uncompressed. The wasm is
+// imported as a module (not a static asset), so the 25 MiB per-asset limit
+// does not apply. Optimize at the 32 MiB target; `reptar check:worker` enforces
+// a 48 MiB hard ceiling and warns above 32 MiB until the Speed release.
+const workerAssetLimit = 64 * 1024 * 1024;
+const workerProjectBudget = 32 * 1024 * 1024;
 
 const [command, ...rest] = process.argv.slice(2);
 
@@ -531,9 +652,9 @@ Commands:
   check:netwasm Scan C# sources for NetWasm/Workers incompatibilities (--strict, default target examples/)
   check:architecture Enforce the core/AI/terminal module boundary (--strict)
   check:host   Verify app.host.mjs exports match the generated interop manifest
-  check:worker Measure the uncompressed Worker upload size (--app, --max-mb)
+  check:worker Measure the uncompressed Worker upload size (--app, --max-mb, --target-mb)
   dev:status   List running Reptar dev servers and their ports
-  self-check   doctor + tests + host contract + netwasm lint + two-host realtime smoke in one command
+  self-check   doctor + tests + host boundary + host contract + generated contracts + netwasm lint + two-host smoke
   build        Build the framework core
   build:worker Publish the C# Wasm app and patch the NetWasm host for Workers
   build:worker:rooms Publish the realtime-rooms hub as a NetWasm Worker host
@@ -808,7 +929,9 @@ if (command === "inspect") {
   if (appIdx !== -1 && rest[appIdx + 1]) {
     targetDir = path.resolve(process.cwd(), rest[appIdx + 1]);
   }
-  const inspection = inspectProject(repoRoot, targetDir);
+  const inspection = inspectProject(repoRoot, targetDir, {
+    dbPath: argValue(rest, "--db"),
+  });
   if (isJson) {
     console.log(JSON.stringify(inspection, null, 2));
     process.exit(0);
@@ -865,7 +988,10 @@ if (command === "doctor") {
   }
   const isJson = rest.includes("--json");
   const strict = rest.includes("--strict");
-  const report = doctorProject(repoRoot, targetDir, { strict });
+  const report = doctorProject(repoRoot, targetDir, {
+    dbPath: argValue(rest, "--db"),
+    strict,
+  });
   if (isJson) {
     console.log(JSON.stringify(report, null, 2));
     process.exit(report.healthy ? 0 : 1);
@@ -1050,6 +1176,8 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     }
 
     const check = rest.includes("--check");
+    const isBlog =
+      path.resolve(appDir) === path.resolve(repoRoot, "examples/blog");
     const outArg = argValue(rest, "--out");
     const outDir = outArg
       ? path.resolve(process.cwd(), outArg)
@@ -1088,20 +1216,75 @@ Slash commands inside the session: /reset /history /tools /model /sessions
         ];
         const stale: string[] = [];
 
-        for (const file of files) {
-          const generatedPath = path.join(generatedDir, file);
-          const currentPath = path.join(outDir, file);
-
+        const compare = (
+          generatedPath: string,
+          currentPath: string,
+          transform?: (value: string) => string
+        ): void => {
           if (!existsSync(generatedPath)) {
-            continue;
+            return;
           }
 
-          if (
-            !existsSync(currentPath) ||
-            readFileSync(generatedPath, "utf-8") !==
-              readFileSync(currentPath, "utf-8")
-          ) {
+          if (!existsSync(currentPath)) {
             stale.push(path.relative(repoRoot, currentPath));
+            return;
+          }
+
+          const generated = transform
+            ? transform(readFileSync(generatedPath, "utf-8"))
+            : readFileSync(generatedPath, "utf-8");
+
+          if (generated !== readFileSync(currentPath, "utf-8")) {
+            stale.push(path.relative(repoRoot, currentPath));
+          }
+        };
+
+        for (const file of files) {
+          compare(path.join(generatedDir, file), path.join(outDir, file));
+        }
+
+        if (isBlog) {
+          // The blog app also feeds the published @reptar/rpc package and the
+          // generated API docs. Check those copies too, otherwise a stale
+          // package passes `rpc:check` while consumers see old contracts.
+          const rpcSource = path.join(repoRoot, "packages/rpc/src");
+
+          // The published package copy is a .ts file, so format the rewritten
+          // .d.ts output before comparing. Otherwise line wrapping differs and
+          // the check reports drift forever.
+          const normalizedAppType = path.join(
+            generatedDir,
+            "app-type.package.ts"
+          );
+          writeFileSync(
+            normalizedAppType,
+            readFileSync(
+              path.join(generatedDir, "app-type.d.ts"),
+              "utf-8"
+            ).replaceAll('from "@reptar/client"', 'from "./client"')
+          );
+          formatPaths([normalizedAppType]);
+          compare(normalizedAppType, path.join(rpcSource, "app-type.ts"));
+          compare(
+            path.join(generatedDir, "types.ts"),
+            path.join(rpcSource, "types.ts")
+          );
+          compare(
+            path.join(generatedDir, "schemas.ts"),
+            path.join(rpcSource, "schemas.ts")
+          );
+          compare(
+            path.join(generatedDir, "openapi.json"),
+            path.join(repoRoot, "packages/rpc/openapi.json")
+          );
+          compare(
+            path.join(generatedDir, "schema.json"),
+            path.join(repoRoot, "packages/rpc/schema.json")
+          );
+
+          const rootLlms = path.join(repoRoot, "llms.txt");
+          if (existsSync(rootLlms)) {
+            compare(rootLlms, path.join(repoRoot, "packages/rpc/llms.txt"));
           }
         }
 
@@ -1130,8 +1313,6 @@ Slash commands inside the session: /reset /history /tools /model /sessions
         writeFileSync(appType, content, "utf-8");
       }
 
-      const isBlog =
-        path.resolve(appDir) === path.resolve(repoRoot, "examples/blog");
       if (isBlog) {
         syncRpcContracts();
         formatGenerated();
@@ -1208,7 +1389,14 @@ Slash commands inside the session: /reset /history /tools /model /sessions
 
     if (existsSync(browserRoot)) {
       const patched = patchNetWasmHost(browserRoot);
+      verifyApplicationAssetSkip(browserRoot);
       console.log(`Patched ${patched} NetWasm host replacement(s).`);
+
+      // Patching rewrites netwasm.page.mjs, so refresh the manifest hashes
+      // after the patch — not before it.
+      if (patched > 0) {
+        refreshDeploymentHashes(browserRoot);
+      }
     } else {
       console.error(
         `Error: No RealWorld browser artifacts found at ${browserRoot} or ${publishRoot}`
@@ -1241,15 +1429,31 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     if (existsSync(publishRoot)) {
       const wasmFile = resolveAppWasm(publishRoot);
       if (wasmFile) {
-        const optimizedSize = optimizeWasmModule(
-          path.join(publishRoot, wasmFile)
-        );
-        if (optimizedSize !== null) {
-          refreshWasmManifest(publishRoot, wasmFile);
+        let finalSize = statSync(path.join(publishRoot, wasmFile)).size;
+
+        if (finalSize > workerProjectBudget) {
+          if (process.env.REPTAR_OPTIMIZE_WORKER === "1") {
+            console.log(
+              `Worker wasm is ${(finalSize / 1024 / 1024).toFixed(1)} MiB; optimizing the core module (REPTAR_OPTIMIZE_WORKER=1)...`
+            );
+            optimizeWorkerCore(csharpRoot, publishRoot, wasmFile);
+            finalSize = statSync(path.join(publishRoot, wasmFile)).size;
+          } else {
+            // The wasm is imported as a CompiledWasm module and excluded from
+            // the static-asset upload, so only the 64 MiB Worker script limit
+            // applies. The 32 MiB target is an optimization goal; the
+            // post-link optimizer is opt-in because it is slow and can
+            // invalidate the interop manifest on NetWasm 0.10.1.
+            console.warn(
+              `Worker wasm is ${(finalSize / 1024 / 1024).toFixed(1)} MiB (32 MiB target, 64 MiB hard limit); ` +
+                "leaving it unoptimized. Set REPTAR_OPTIMIZE_WORKER=1 to attempt the slow wasm-opt pass."
+            );
+          }
         }
-        if (optimizedSize !== null && optimizedSize > workerAssetLimit) {
+
+        if (finalSize > workerAssetLimit) {
           console.error(
-            `Error: ${wasmFile} is ${(optimizedSize / 1024 / 1024).toFixed(1)} MiB, over Cloudflare's 25 MiB per-asset limit.`
+            `Error: ${wasmFile} is ${(finalSize / 1024 / 1024).toFixed(1)} MiB, over Cloudflare's 64 MiB Worker script limit.`
           );
           process.exit(1);
         }
@@ -1261,7 +1465,14 @@ Slash commands inside the session: /reset /history /tools /model /sessions
 
     if (existsSync(browserRoot)) {
       const patched = patchNetWasmHost(browserRoot);
+      verifyApplicationAssetSkip(browserRoot);
       console.log(`Patched ${patched} NetWasm host replacement(s).`);
+
+      // Patching rewrites netwasm.page.mjs, so refresh the manifest hashes
+      // after the patch — not before it.
+      if (patched > 0) {
+        refreshDeploymentHashes(browserRoot);
+      }
     } else {
       console.error(
         `Error: No NetWasm browser artifacts found at ${browserRoot} or ${publishRoot}`
@@ -1297,7 +1508,14 @@ Slash commands inside the session: /reset /history /tools /model /sessions
 
     if (existsSync(browserRoot)) {
       const patched = patchNetWasmHost(browserRoot);
+      verifyApplicationAssetSkip(browserRoot);
       console.log(`Patched ${patched} NetWasm host replacement(s).`);
+
+      // Patching rewrites netwasm.page.mjs, so refresh the manifest hashes
+      // after the patch — not before it.
+      if (patched > 0) {
+        refreshDeploymentHashes(browserRoot);
+      }
     } else {
       console.error(
         `Error: No NetWasm browser artifacts found at ${browserRoot} or ${publishRoot}`
@@ -1366,11 +1584,11 @@ Slash commands inside the session: /reset /history /tools /model /sessions
   case "self-check": {
     preflightBuildLocks(rest);
     console.log(
-      "Reptar self-check — doctor, tests, host contract, netwasm lint, two-host smoke"
+      "Reptar self-check — doctor, tests, host boundary, host contract, generated contracts, netwasm lint, two-host smoke"
     );
     console.log("───────────────────────────────────────────");
 
-    console.log("\n[1/5] doctor...");
+    console.log("\n[1/7] doctor...");
     const doctorReport = doctorProject(repoRoot, process.cwd());
     if (doctorReport.checks.some((check) => !check.passed)) {
       for (const check of doctorReport.checks.filter((c) => !c.passed)) {
@@ -1380,7 +1598,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     }
     console.log("  ✓ doctor healthy");
 
-    console.log("\n[2/5] framework tests...");
+    console.log("\n[2/7] framework tests...");
     const tests = spawnSync(
       dotnetPath(),
       [
@@ -1392,17 +1610,45 @@ Slash commands inside the session: /reset /history /tools /model /sessions
       ],
       { cwd: repoRoot, encoding: "utf-8", env: dotnetEnv() }
     );
-    const testSummary = tests.stdout
+    const testOutput = `${tests.stdout ?? ""}\n${tests.stderr ?? ""}`;
+    const testSummary = testOutput
       .split("\n")
       .find((line) => line.includes("Passed!") || line.includes("Failed!"));
     console.log(
       `  ${tests.status === 0 ? "✓" : "✗"} ${testSummary?.trim() ?? "test run finished"}`
     );
     if (tests.status !== 0) {
+      const failedLines = testOutput
+        .split("\n")
+        .filter(
+          (line) =>
+            line.includes("[FAIL]") ||
+            line.includes("Failed ") ||
+            line.includes("Error Message:")
+        );
+      console.error(
+        failedLines.length > 0
+          ? failedLines.join("\n")
+          : testOutput.slice(-4000)
+      );
       process.exit(1);
     }
 
-    console.log("\n[3/5] host contract...");
+    console.log("\n[3/7] host boundary tests...");
+    const hostTests = spawnSync(
+      process.execPath,
+      ["test", "packages/host/src"],
+      { cwd: repoRoot, encoding: "utf-8" }
+    );
+    if (hostTests.status !== 0) {
+      console.error(hostTests.stdout ?? "");
+      console.error(hostTests.stderr ?? "");
+      console.error("  ✗ host boundary tests failed");
+      process.exit(hostTests.status ?? 1);
+    }
+    console.log("  ✓ host boundary tests passed");
+
+    console.log("\n[4/7] host contract...");
     const hostCheck = spawnSync(
       process.execPath,
       [path.join(repoRoot, "scripts/check-host-contract.ts")],
@@ -1416,7 +1662,21 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     }
     console.log("  ✓ host contract clean");
 
-    console.log("\n[4/5] netwasm lint (examples/realtime-rooms)...");
+    console.log("\n[5/7] generated contracts...");
+    const contracts = spawnSync(
+      process.execPath,
+      [path.join(repoRoot, "scripts/reptar.ts"), "codegen", "--check"],
+      { cwd: repoRoot, encoding: "utf-8", env: dotnetEnv() }
+    );
+    if (contracts.status !== 0) {
+      console.error(contracts.stdout ?? "");
+      console.error(contracts.stderr ?? "");
+      console.error("  ✗ generated contracts are stale");
+      process.exit(contracts.status ?? 1);
+    }
+    console.log("  ✓ generated contracts current");
+
+    console.log("\n[6/7] netwasm lint (examples/realtime-rooms)...");
     const lint = runCheck([path.join(repoRoot, "examples/realtime-rooms")], {
       strict: true,
     });
@@ -1426,7 +1686,7 @@ Slash commands inside the session: /reset /history /tools /model /sessions
     }
     console.log("  ✓ netwasm lint clean");
 
-    console.log("\n[5/5] two-host realtime smoke (workers + kestrel)...");
+    console.log("\n[7/7] two-host realtime smoke (workers + kestrel)...");
     const smokePassed = await runRealtimeSmoke({});
     if (!smokePassed) {
       console.error("  ✗ realtime smoke failed (see output above)");

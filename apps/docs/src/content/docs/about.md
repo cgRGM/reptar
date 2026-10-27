@@ -7,7 +7,7 @@ Reptar is a high-performance, single-binary C# 13 web framework built for deploy
 
 ## Who builds it
 
-Reptar is developed in the open by [Rocktown Labs](https://github.com/RocktownLabs). The framework, its examples, the benchmark suite (the RealWorld spec, run head-to-head against .NET Minimal API and Hono on Bun), and this documentation site all live in the [RocktownLabs/reptar](https://github.com/RocktownLabs/reptar) repository.
+Reptar is developed in the open by [Rocktown Labs](https://github.com/RocktownLabs). The framework, its examples, the benchmark suite (the RealWorld spec, run head-to-head against .NET Minimal API and Hono on Bun), and this documentation site all live in the [cgRGM/reptar](https://github.com/cgRGM/reptar) repository.
 
 ## Project status
 

@@ -260,12 +260,11 @@ export default {
       env.CORS_ORIGINS
     );
   },
-  async queue(
-    batch: MessageBatch<unknown>,
-    env: Env,
-    ctx: ExecutionContext
-  ) {
-    await host.queue(batch, env, ctx);
+  async queue(batch: MessageBatch<unknown>, env: Env, ctx: ExecutionContext) {
+    // Workerd delivers the PHYSICAL queue name ("reptar-events"); the C#
+    // handlers register LOGICAL names ("events" — matching the producer
+    // binding). Map before dispatch so OnQueue("events") receives it.
+    await host.queue({ ...batch, queue: "events" }, env, ctx);
   },
   async scheduled(
     event: { cron: string; scheduledTime: number | Date },

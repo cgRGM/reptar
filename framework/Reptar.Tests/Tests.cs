@@ -566,7 +566,7 @@ public class PostgresTests
         Assert.Equal(["w_123"], client.LastExecutedParams);
 
         await client.ListAsync<Widget>(TestSchema.Widgets, "count > 5", limit: 10, offset: 20);
-        Assert.Equal("SELECT * FROM \"widgets\" WHERE count > 5 LIMIT 10 OFFSET 20", client.LastExecutedSql);
+        Assert.Equal("SELECT * FROM \"widgets\" WHERE count > 5 LIMIT $1 OFFSET $2", client.LastExecutedSql);
 
         var widget = new Widget("w_456", "Hammer", 42);
         await client.InsertAsync(TestSchema.Widgets, widget);
@@ -1828,7 +1828,7 @@ public class AotSafeSqliteTests
 
         await db.ListAsync<Widget>(TestSchema.Widgets, "where count > 10", limit: 10, offset: 5);
         Assert.NotNull(db.LastExecutedSql);
-        Assert.Equal("SELECT * FROM `widgets` where count > 10 LIMIT 10 OFFSET 5", db.LastExecutedSql);
+        Assert.Equal("SELECT * FROM `widgets` where count > 10 LIMIT @__limit OFFSET @__offset", db.LastExecutedSql);
 
         var client = Db.MySql("mock:");
         Assert.IsType<MySqlDbClient>(client);

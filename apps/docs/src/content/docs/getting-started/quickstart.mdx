@@ -3,7 +3,16 @@ title: Quick Start
 description: Build a fullstack app with real accounts and deploy it — schema, validated API, typed client, production container — in about 25 minutes.
 ---
 
-import { Steps, Tabs, TabItem, Aside, Code, LinkCard, CardGrid, Card } from "@astrojs/starlight/components";
+import {
+  Steps,
+  Tabs,
+  TabItem,
+  Aside,
+  Code,
+  LinkCard,
+  CardGrid,
+  Card,
+} from "@astrojs/starlight/components";
 
 ## What you're going to build
 
@@ -27,7 +36,11 @@ A production-shaped app with **real authentication**. When this page ends you wi
 Every step ends with a ✅ **checkpoint**. If a checkpoint fails, stop and fix it — the next step won't work.
 
 <Aside type="note" title="Why the scaffold runs from the repo clone">
-  The Reptar NuGet packages aren't published yet, so scaffolding builds your app file-based against the in-repo framework sources — the exact same `#:project` mechanism the framework's own examples use. Standalone `bun create reptar` scaffolds arrive with the 0.1 NuGet release; nothing else in this tutorial changes.
+  The Reptar NuGet packages aren't published yet, so scaffolding builds your app
+  file-based against the in-repo framework sources — the exact same `#:project`
+  mechanism the framework's own examples use. Standalone `bun create reptar`
+  scaffolds arrive with the 0.1 NuGet release; nothing else in this tutorial
+  changes.
 </Aside>
 
 ## 1. Create the app
@@ -77,7 +90,10 @@ public static readonly TableDef Notes = DefineTable("notes",
 ```
 
 <Aside type="tip" title="Why this looks like nothing">
-  Storage schema is plain C# — no attributes, no fluent builders, no migration ceremony. The Reptar source generators read this declaration and emit typed `ColumnRef` tokens (`AppSchema.NotesCols.Title`) at compile time, and your table is created on the next boot.
+  Storage schema is plain C# — no attributes, no fluent builders, no migration
+  ceremony. The Reptar source generators read this declaration and emit typed
+  `ColumnRef` tokens (`AppSchema.NotesCols.Title`) at compile time, and your
+  table is created on the next boot.
 </Aside>
 
 ## 4. Write the notes API
@@ -220,8 +236,24 @@ The same C# app compiles to a **10.4 MB Native AOT container**. Take your pick:
 ## Where to go next
 
 <CardGrid>
-  <LinkCard title="Build with an AI agent" description="Copy-paste prompt that ships your app with an agent driving Reptar's MCP tools." href="/getting-started/agents/" />
-  <LinkCard title="File uploads & storage" description="Local or R2 storage with magic-byte sniffing and size limits." href="/cookbook/file-uploads/" />
-  <LinkCard title="Realtime SSE rooms" description="Server-sent events rooms and streams for live UIs." href="/cookbook/realtime-sse/" />
-  <LinkCard title="The AI Gateway" description="Universal LLM proxy: failover, prompt cache, Vercel-stream compatible." href="/ai/ai-gateway/" />
+  <LinkCard
+    title="Build with an AI agent"
+    description="Copy-paste prompt that ships your app with an agent driving Reptar's MCP tools."
+    href="/getting-started/agents/"
+  />
+  <LinkCard
+    title="File uploads & storage"
+    description="Local or R2 storage with magic-byte sniffing and size limits."
+    href="/cookbook/file-uploads/"
+  />
+  <LinkCard
+    title="Realtime SSE rooms"
+    description="Server-sent events rooms and streams for live UIs."
+    href="/cookbook/realtime-sse/"
+  />
+  <LinkCard
+    title="The AI Gateway"
+    description="Universal LLM proxy: failover, prompt cache, Vercel-stream compatible."
+    href="/ai/ai-gateway/"
+  />
 </CardGrid>

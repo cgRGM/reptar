@@ -179,6 +179,8 @@ internal static class OpenApiGenerator
                 });
             }
 
+            if (route.QueryType is not null)
+                parameters.AddRange(QueryContract.Parameters(route.QueryType));
             if (parameters.Count > 0)
                 operation["parameters"] = parameters;
 

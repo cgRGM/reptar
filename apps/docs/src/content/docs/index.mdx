@@ -3,11 +3,17 @@ title: Reptar Documentation
 description: A blazing-fast C# web framework compiled to Native AOT containers and Cloudflare Workers — built so humans and AI agents ship production backends with the compiler as reviewer.
 ---
 
-import { Card, CardGrid, LinkCard, Aside, Code } from "@astrojs/starlight/components";
+import {
+  Card,
+  CardGrid,
+  LinkCard,
+  Aside,
+  Code,
+} from "@astrojs/starlight/components";
 
 **Reptar is the backend. Full stop.**
 
-One compiled C# app — schema, routes, auth, validation, storage, streaming, agents — that runs identically as a **10.4 MB Native AOT container** on any VPS or in AWS Lambda, and as **WebAssembly** inside Cloudflare Workers. Zero runtime reflection: everything is resolved at compile time, which makes it fast, small, and *surprisingly good at being built by AI agents*.
+One compiled C# app — schema, routes, auth, validation, storage, streaming, agents — that runs identically as a **10.4 MB Native AOT container** on any VPS or in AWS Lambda, and as **WebAssembly** inside Cloudflare Workers. Zero runtime reflection: everything is resolved at compile time, which makes it fast, small, and _surprisingly good at being built by AI agents_.
 
 ```csharp
 var app = ReptarApp.Create(new ReptarConfig
@@ -35,16 +41,20 @@ await app.RunAsync(args);
 
 <CardGrid>
   <Card title="41.9k req/s" icon="rocket">
-    Plaintext routing at or above raw .NET 10 Minimal API; **36.3k req/s** with validation in the path. 10.4 MB binary, **124 ms** cold boot.
+    Plaintext routing at or above raw .NET 10 Minimal API; **36.3k req/s** with
+    validation in the path. 10.4 MB binary, **124 ms** cold boot.
   </Card>
   <Card title="2,799 req/s on a $6 VPS" icon="seti:server">
-    Real database I/O, RealWorld spec suite passing **154/154 requests** on every target — including Cloudflare Workers via NetWasm.
+    Real database I/O, RealWorld spec suite passing **154/154 requests** on
+    every target — including Cloudflare Workers via NetWasm.
   </Card>
   <Card title="39k+ req/s cached reads" icon="zap">
-    Built-in stale-while-revalidate caching, SQLite group-commit write batching (26 ms → 2.8 ms write gate), zero-allocation routing.
+    Built-in stale-while-revalidate caching, SQLite group-commit write batching
+    (26 ms → 2.8 ms write gate), zero-allocation routing.
   </Card>
   <Card title="One C# app, four targets" icon="arrow-right">
-    VPS · Docker · AWS Lambda · Cloudflare Workers — same schema files, same routes, same feature slices.
+    VPS · Docker · AWS Lambda · Cloudflare Workers — same schema files, same
+    routes, same feature slices.
   </Card>
 </CardGrid>
 
@@ -66,16 +76,35 @@ await app.RunAsync(args);
 </CardGrid>
 
 <Aside type="tip" title="Have an AI coding agent? Start here">
-  Copy the [agent prompt](/getting-started/agents/) into Claude Code, Cursor, or any coding agent inside a Reptar clone and it can scaffold, build, and verify a deployed app on your behalf — the framework's machine-readable tooling and compile-time contracts are what make that safe.
+  Copy the [agent prompt](/getting-started/agents/) into Claude Code, Cursor, or
+  any coding agent inside a Reptar clone and it can scaffold, build, and verify
+  a deployed app on your behalf — the framework's machine-readable tooling and
+  compile-time contracts are what make that safe.
 </Aside>
 
 ## Start here
 
 <CardGrid>
-  <LinkCard title="Quick Start" description="Real app, real auth, deployed — with a checkpoint at every step." href="/getting-started/quickstart/" />
-  <LinkCard title="Build with an AI Agent" description="The copy-paste prompt plus the MCP tooling that powers it." href="/getting-started/agents/" />
-  <LinkCard title="Why Reptar" description="The honest case — including when not to choose it." href="/overview/why-reptar/" />
-  <LinkCard title="Deployment Targets" description="VPS, Docker, Lambda, and Cloudflare Workers from one codebase." href="/overview/deployment-targets/" />
+  <LinkCard
+    title="Quick Start"
+    description="Real app, real auth, deployed — with a checkpoint at every step."
+    href="/getting-started/quickstart/"
+  />
+  <LinkCard
+    title="Build with an AI Agent"
+    description="The copy-paste prompt plus the MCP tooling that powers it."
+    href="/getting-started/agents/"
+  />
+  <LinkCard
+    title="Why Reptar"
+    description="The honest case — including when not to choose it."
+    href="/overview/why-reptar/"
+  />
+  <LinkCard
+    title="Deployment Targets"
+    description="VPS, Docker, Lambda, and Cloudflare Workers from one codebase."
+    href="/overview/deployment-targets/"
+  />
 </CardGrid>
 
 ## Documentation Map

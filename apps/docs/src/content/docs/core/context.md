@@ -118,8 +118,8 @@ app.Post("/api/orders", async c =>
 });
 ```
 
-- **Cloudflare Workers (`netwasm0.1`)**: Passes the promise to `executionCtx.waitUntil(promise)`.
-- **Kestrel (`net10.0`)**: Dispatches to the .NET thread pool with top-level unhandled exception capture.
+- **Cloudflare Workers (`netwasm0.1`)**: The generated `WorkerEntrypoint` returns the background work with the async export; `@reptar/host` sends the response, then passes the task to `executionCtx.waitUntil(promise)`.
+- **Kestrel (`net10.0`)**: `HandleAsync` dispatches to the .NET thread pool with top-level unhandled exception capture. `HandleWithBackgroundAsync` exposes the task for hosts and tests that need to await it.
 
 ---
 

@@ -5,9 +5,11 @@ export {
   type D1PreparedStatementLike,
   type R2BucketLike,
   type R2GetOptions,
+  type R2MultipartUploadLike,
   type R2ObjectLike,
   type R2ObjectsLike,
   type R2PutOptions,
+  type R2UploadedPartLike,
   type ReptarBindings,
   type ReptarStorageBinding,
 } from "./bindings";

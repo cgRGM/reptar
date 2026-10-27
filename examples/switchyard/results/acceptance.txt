@@ -1,0 +1,14 @@
+bun test v1.4.4 (38afee6c8)
+
+acceptance.test.ts:
+(pass) native auth, tenant isolation, duplicate constraints, and validation [8.24ms]
+(pass) concurrent publish has one winner, immutable versions and matching audit [18.70ms]
+(pass) deterministic rollout, stable buckets, conditional GET and publish invalidation [11.70ms]
+(pass) disabled wins over allowlist and rollout; independent environments [4.73ms]
+(pass) runtime buckets match an independent BigInt implementation, including Unicode [49.63ms]
+(pass) signin, nested session JSON, duplicate signup, and signout [76.71ms]
+
+ 6 pass
+ 0 fail
+ 265 expect() calls
+Ran 6 tests across 1 file. [324.00ms]

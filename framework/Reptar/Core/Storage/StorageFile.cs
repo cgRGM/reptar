@@ -89,6 +89,9 @@ public static class StorageFile
         var cacheControl = ResolveCacheControl(info, options);
         var etag = info.HttpETag;
         var lastModified = info.LastModified;
+        var contentDisposition = info.MetadataValue("content-disposition");
+        var contentEncoding = info.MetadataValue("content-encoding");
+        var contentLanguage = info.MetadataValue("content-language");
         var isHead = IsHead(ctx.Req.Method);
 
         if (options.EnableConditional)
@@ -195,6 +198,9 @@ public static class StorageFile
                     normalized,
                     etag,
                     cacheControl,
+                    contentDisposition,
+                    contentEncoding,
+                    contentLanguage,
                     lastModified,
                     options);
                 partial.Headers["Content-Range"] =
@@ -214,7 +220,16 @@ public static class StorageFile
                 ContentType = contentType,
             };
 
-            ApplyHeaders(head, normalized, etag, cacheControl, lastModified, options);
+            ApplyHeaders(
+                head,
+                normalized,
+                etag,
+                cacheControl,
+                contentDisposition,
+                contentEncoding,
+                contentLanguage,
+                lastModified,
+                options);
             head.Headers["Content-Length"] =
                 info.Size.ToString(CultureInfo.InvariantCulture);
             return head;
@@ -231,7 +246,16 @@ public static class StorageFile
             Body = body,
         };
 
-        ApplyHeaders(full, normalized, etag, cacheControl, lastModified, options);
+        ApplyHeaders(
+            full,
+            normalized,
+            etag,
+            cacheControl,
+            contentDisposition,
+            contentEncoding,
+            contentLanguage,
+            lastModified,
+            options);
         full.Headers["Content-Length"] =
             body.Length.ToString(CultureInfo.InvariantCulture);
         return full;
@@ -242,11 +266,20 @@ public static class StorageFile
         string key,
         string etag,
         string cacheControl,
+        string? contentDisposition,
+        string? contentEncoding,
+        string? contentLanguage,
         DateTimeOffset? lastModified,
         StorageFileOptions options)
     {
         if (etag.Length > 0)
             response.Headers["ETag"] = etag;
+
+        if (!string.IsNullOrWhiteSpace(contentEncoding))
+            response.Headers["Content-Encoding"] = contentEncoding;
+
+        if (!string.IsNullOrWhiteSpace(contentLanguage))
+            response.Headers["Content-Language"] = contentLanguage;
 
         if (lastModified is { } modified)
         {
@@ -272,6 +305,10 @@ public static class StorageFile
         {
             response.Headers["Content-Disposition"] = StorageKey.ContentDisposition(
                 StorageKey.FileName(key));
+        }
+        else if (!string.IsNullOrWhiteSpace(contentDisposition))
+        {
+            response.Headers["Content-Disposition"] = contentDisposition;
         }
 
         if (options.Headers is { Count: > 0 })

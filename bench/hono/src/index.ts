@@ -516,6 +516,6 @@ app.post(
   }
 );
 
-Bun.serve({ fetch: app.fetch, port });
+Bun.serve({ fetch: app.fetch, hostname: "127.0.0.1", port });
 
 console.log(`reptar-bench-hono listening on ${port}`);

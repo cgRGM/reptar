@@ -51,6 +51,27 @@ var app = ReptarApp.Create(new ReptarConfig
 });
 ```
 
+### NetWasm / Cloudflare Workers
+
+The Workers host boots a `DefaultJsonCodec`, so register the app's generated context once at startup and switch the framework to it:
+
+```csharp
+[JsonSourceGenerationOptions(
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(HostWebSocketOpen))]
+[JsonSerializable(typeof(Note))]
+[JsonSerializable(typeof(List<Note>))]
+internal partial class AppJsonContext : JsonSerializerContext;
+
+static PageExports()
+{
+    ReptarJson.RegisterContext(AppJsonContext.Default);
+    ReptarJson.UseRegisteredContexts();
+}
+```
+
+Use camelCase naming (the generated client and JavaScript host expect it) and list every DTO, WebSocket envelope, and list shape the app serializes. In exports that receive raw JSON from JavaScript, use `ReptarJson.Deserialize<T>(json)` instead of passing `ReptarJson.Options` directly; it resolves the context metadata explicitly and avoids the "JsonTypeInfo ... does not match" / reflection-disabled errors that appear when a source-generated context is used with a different options instance.
+
 ## Structured Error Envelope
 
 When input validation fails, Reptar returns a standardized HTTP 400 response:

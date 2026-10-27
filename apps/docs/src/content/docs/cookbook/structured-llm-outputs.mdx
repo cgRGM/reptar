@@ -3,7 +3,7 @@ title: Structured LLM Outputs
 description: Make any model call return a validated C# record — Rule<T> renders the prompt schema, validates the reply, and retries with feedback until it passes.
 ---
 
-Every LLM app eventually needs the model to return *data*, not prose — and hand-rolled JSON parsing of model output is where hallucinated fields and missing properties become runtime exceptions. Reptar closes the loop with the same validator you already use on inbound routes.
+Every LLM app eventually needs the model to return _data_, not prose — and hand-rolled JSON parsing of model output is where hallucinated fields and missing properties become runtime exceptions. Reptar closes the loop with the same validator you already use on inbound routes.
 
 `client.GenerateAsync<T>(...)` renders the JSON Schema **from your `Rule<T>`** (the identical schema your OpenAPI export shows), parses the reply, validates it, and when validation fails, feeds the issues back to the model and retries automatically.
 

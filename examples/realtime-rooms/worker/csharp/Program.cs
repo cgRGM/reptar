@@ -24,6 +24,7 @@ public sealed record HostWebSocketMessage(
 public sealed record HostWebSocketClose(
     string SessionId);
 
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(HostWebSocketOpen))]
 [JsonSerializable(typeof(HostWebSocketMessage))]
 [JsonSerializable(typeof(HostWebSocketClose))]
@@ -57,9 +58,7 @@ public static partial class PageExports
     [JSExport("handleWebSocketOpen")]
     public static void HandleWebSocketOpen(string openJson)
     {
-        var open = JsonSerializer.Deserialize<HostWebSocketOpen>(
-            openJson,
-            ReptarJson.Options);
+        var open = ReptarJson.Deserialize<HostWebSocketOpen>(openJson);
 
         if (open is null)
         {
@@ -100,9 +99,7 @@ public static partial class PageExports
     [JSExport("handleWebSocketMessage")]
     public static void HandleWebSocketMessage(string messageJson)
     {
-        var message = JsonSerializer.Deserialize<HostWebSocketMessage>(
-            messageJson,
-            ReptarJson.Options);
+        var message = ReptarJson.Deserialize<HostWebSocketMessage>(messageJson);
 
         if (message is null)
         {
@@ -129,9 +126,7 @@ public static partial class PageExports
     [JSExport("handleWebSocketClose")]
     public static void HandleWebSocketClose(string closeJson)
     {
-        var close = JsonSerializer.Deserialize<HostWebSocketClose>(
-            closeJson,
-            ReptarJson.Options);
+        var close = ReptarJson.Deserialize<HostWebSocketClose>(closeJson);
 
         if (close is null)
         {

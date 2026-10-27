@@ -109,7 +109,7 @@ public sealed record StorageObject(
         return null;
     }
 
-    public IReadOnlyDictionary<string, string>? MetadataExcept(string name)
+    public IReadOnlyDictionary<string, string>? MetadataExcept(params string[] names)
     {
         if (Metadata is null)
             return null;
@@ -117,7 +117,17 @@ public sealed record StorageObject(
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var (key, value) in Metadata)
         {
-            if (!string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+            var excluded = false;
+            foreach (var name in names)
+            {
+                if (string.Equals(key, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    excluded = true;
+                    break;
+                }
+            }
+
+            if (!excluded)
                 result[key] = value;
         }
 
@@ -177,12 +187,21 @@ public sealed record StoragePutOptions
 
     public string? CacheControl { get; init; }
 
+    public string? ContentDisposition { get; init; }
+
+    public string? ContentEncoding { get; init; }
+
+    public string? ContentLanguage { get; init; }
+
     /// <summary>User metadata. Providers that cannot store it ignore it.</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
 
     public bool IsDefault =>
         Overwrite &&
         string.IsNullOrWhiteSpace(CacheControl) &&
+        string.IsNullOrWhiteSpace(ContentDisposition) &&
+        string.IsNullOrWhiteSpace(ContentEncoding) &&
+        string.IsNullOrWhiteSpace(ContentLanguage) &&
         (Metadata is null || Metadata.Count == 0);
 }
 
@@ -200,8 +219,26 @@ public sealed record StorageCopyOptions
     /// <summary>Overrides the destination cache control.</summary>
     public string? CacheControl { get; init; }
 
+    public string? ContentDisposition { get; init; }
+
+    public string? ContentEncoding { get; init; }
+
+    public string? ContentLanguage { get; init; }
+
     /// <summary>Overrides destination user metadata. Replaces preserved metadata when set.</summary>
     public IReadOnlyDictionary<string, string>? Metadata { get; init; }
+}
+
+public sealed record R2StorageOptions
+{
+    /// <summary>Optional CDN/custom-domain base URL used by <c>PublicUrl</c>.</summary>
+    public string? PublicBaseUrl { get; init; }
+
+    /// <summary>
+    /// Part size for R2 multipart uploads. R2 requires at least 5 MiB; smaller
+    /// values are clamped up to the R2 minimum.
+    /// </summary>
+    public int MultipartPartSizeBytes { get; init; } = 8 * 1024 * 1024;
 }
 
 public sealed record PresignDownloadOptions
@@ -356,8 +393,21 @@ public interface IStorage
                 ? info?.MetadataValue("cache-control")
                 : null);
 
+        var contentDisposition = options.ContentDisposition
+            ?? (options.PreserveMetadata ? info?.MetadataValue("content-disposition") : null);
+        var contentEncoding = options.ContentEncoding
+            ?? (options.PreserveMetadata ? info?.MetadataValue("content-encoding") : null);
+        var contentLanguage = options.ContentLanguage
+            ?? (options.PreserveMetadata ? info?.MetadataValue("content-language") : null);
+
         var metadata = options.Metadata
-            ?? (options.PreserveMetadata ? info?.MetadataExcept("cache-control") : null);
+            ?? (options.PreserveMetadata
+                ? info?.MetadataExcept(
+                    "cache-control",
+                    "content-disposition",
+                    "content-encoding",
+                    "content-language")
+                : null);
 
         await PutAsync(
             destination,
@@ -367,6 +417,9 @@ public interface IStorage
             {
                 Overwrite = options.Overwrite,
                 CacheControl = cacheControl,
+                ContentDisposition = contentDisposition,
+                ContentEncoding = contentEncoding,
+                ContentLanguage = contentLanguage,
                 Metadata = metadata,
             });
 

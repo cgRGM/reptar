@@ -1,15 +1,12 @@
 # Queues & Background Jobs Research → Reptar Queue Engine Plan
 
-**Status:** research/audit — no framework code changed
-**Date:** 2026-10-26
-**Scope:** the queue/jobs proposal in the pasted transcript (System.Threading.Channels, TickerQ, MediatR, dual-target `#if NETWASM` queue engine), what `@adonisjs/queue` actually ships, what Go/Rust/Wasm ecosystems do (River, asynq, apalis, BullMQ, worker-rs), what the Cloudflare platform itself offers (Queues, Workflows, DO Alarms), and an audit of Reptar's current queue surface.
-**Related:** `plans/adonisjs-core-audit.md` (the first AdonisJS pass — CLI, preload, lifecycles), `design.md` §7/§13/§16, `llms.txt` §5b/§6, `plans/master-audit-and-roadmap.md`.
+**Status:** research/audit — no framework code changed **Date:** 2026-10-26 **Scope:** the queue/jobs proposal in the pasted transcript (System.Threading.Channels, TickerQ, MediatR, dual-target `#if NETWASM` queue engine), what `@adonisjs/queue` actually ships, what Go/Rust/Wasm ecosystems do (River, asynq, apalis, BullMQ, worker-rs), what the Cloudflare platform itself offers (Queues, Workflows, DO Alarms), and an audit of Reptar's current queue surface. **Related:** `plans/adonisjs-core-audit.md` (the first AdonisJS pass — CLI, preload, lifecycles), `design.md` §7/§13/§16, `llms.txt` §5b/§6, `plans/master-audit-and-roadmap.md`.
 
 ---
 
 ## 0. TL;DR
 
-The transcript's *conclusion* — build a dual-target queue engine (Channels-based worker under Native AOT, platform hooks under NetWasm) — is right and matches the repo's own constraints. But its *facts* are a mix of verified, outdated, and misattributed, and it under-credits what Reptar already has. The bigger finding is from auditing our own code: **Reptar's queue story is a Cloudflare-only half-bridge, and parts of the docs overstate what exists.**
+The transcript's _conclusion_ — build a dual-target queue engine (Channels-based worker under Native AOT, platform hooks under NetWasm) — is right and matches the repo's own constraints. But its _facts_ are a mix of verified, outdated, and misattributed, and it under-credits what Reptar already has. The bigger finding is from auditing our own code: **Reptar's queue story is a Cloudflare-only half-bridge, and parts of the docs overstate what exists.**
 
 | Question | Verdict | Short reason |
 | :-- | :-- | :-- |
@@ -18,9 +15,9 @@ The transcript's *conclusion* — build a dual-target queue engine (Channels-bas
 | Are Hangfire/Quartz "entirely built on reflection" and AOT-broken? | **Half-right, outdated** | Hangfire: still true (`Type.GetType` + expression-tree serialization, AOT issue #2478 open). **Quartz.NET 4.x now declares `IsAotCompatible`** with registered-type tables, System.Text.Json default, and native canary builds. Right conclusion (don't adopt), wrong basis. |
 | Is TickerQ the AOT reference? | **Real, but license changed** | Source-generated, Native-AOT-verified (3.5k stars) — but **5.x moved to a commercial license** (Community/Evaluation/Commercial). Learn the design; don't plan on it as a dependency. |
 | Is MediatR a useful reference? | **Pattern only** | MediatR went dual/commercial license in v13 (Jul 2025) and its AOT-support issue was closed stale. The "in-process dispatcher" idea is the reusable part — and Reptar's `OnQueue` dictionary already is one. |
-| Should we build the dual-target queue engine? | **Yes — phased** | Native targets currently have *no* background-job story at all (producers no-op, crons never fire). The unified facade is required for the "one app source, every target" promise. |
+| Should we build the dual-target queue engine? | **Yes — phased** | Native targets currently have _no_ background-job story at all (producers no-op, crons never fire). The unified facade is required for the "one app source, every target" promise. |
 
-**Bottom line:** steal the *options layer* from AdonisJS/`@boringnode/queue` (delay, priority, backoff, dedup, history, sync adapter), the *storage model* from River (`jobs` table in the app's existing DB), and the *edge mapping* already proven by worker-rs (typed batches → `ack()`/`retry(delaySeconds)`). Fix the honesty gaps first (silent no-op producers, waitUntil that doesn't actually wait, crons that never fire on Kestrel), then ship the native SQLite-backed queue, then the edge power features.
+**Bottom line:** steal the _options layer_ from AdonisJS/`@boringnode/queue` (delay, priority, backoff, dedup, history, sync adapter), the _storage model_ from River (`jobs` table in the app's existing DB), and the _edge mapping_ already proven by worker-rs (typed batches → `ack()`/`retry(delaySeconds)`). Fix the honesty gaps first (silent no-op producers, waitUntil that doesn't actually wait, crons that never fire on Kestrel), then ship the native SQLite-backed queue, then the edge power features.
 
 ---
 
@@ -29,27 +26,32 @@ The transcript's *conclusion* — build a dual-target queue engine (Channels-bas
 Every claim below was checked in the current checkout.
 
 ### Producer side
+
 - `IQueueClient` has a single method: `SendAsync(queueName, messageJson)` plus a typed helper that serializes with `ReptarJson.Options` (`framework/Reptar/Data/Services.cs:491-507`).
 - Under NetWasm, `QueueClient` bridges via `[JSImport("queueSend")]` → host `__REPTAR_QUEUE_SEND` → Cloudflare Queues binding (`framework/Reptar.Wasm/Data/QueueClient.cs`, `packages/host/src/host.ts:384-398`).
 - **On Kestrel, Lambda, and dev, the default is `NoopQueueClient` — `SendAsync` silently drops every message** (`framework/Reptar/Core/ReptarApp.cs:1212-1219`). No log, no exception.
 - The host-side `QueueLike` is `send(message)` only — **no `sendBatch`, no `delaySeconds`, no content type**, even though Cloudflare Queues supports all three.
 
 ### Consumer side
+
 - `app.OnQueue(name, handler)` / `OnQueue<T>(...)` register handlers in a plain dictionary — a compile-time, reflection-free dispatcher (the transcript's "statically map a job key to a code path" already exists).
 - `HandleQueueBatchAsync` processes messages **sequentially**, catches per-message exceptions, and returns failed message IDs; the TS host maps those to `message.retry()` / `message.ack()` (`packages/host/src/host.ts:946-1007`). The wiring works and is tested (`framework/Reptar.Tests/Tests.cs:819-880`).
 - Gaps: no retry-delay control (Cloudflare's `retry({delaySeconds })` is unreachable from C#), no backoff policy surface, no DLQ concept in C#, no per-queue concurrency, no batch acknowledgment strategy, no idempotency helpers, no job history.
 - **The reference Wasm app doesn't even export `handleQueue`/`handleScheduled`** — the NetWasm/Binaryen optimizer limitation documented in `design.md` ("rejects or stalls on additional JS exports... cron, durable-object... queue-consumer demos"). The host supports them; the app never wires them.
 
 ### Cron side
+
 - `app.OnScheduled(cron, handler)` + `HandleScheduledAsync` — but matching is **exact cron-string equality or `"*"`** (`framework/Reptar/Core/ReptarApp.cs:652-694`). `"*/5 * * * * *"` never fires unless the platform hands back the identical string.
 - On Cloudflare this works only if the registered string matches the wrangler trigger exactly. **On Kestrel/Lambda nothing ever invokes `HandleScheduledAsync` — there is no scheduler loop at all.** Native apps have zero cron.
 
 ### Background tasks — a docs/runtime gap
+
 - `ctx.WaitUntil(...)` collects tasks; `ReptarApp.HandleAsync` then does `_ = Task.Run(() => Task.WhenAll(...))` on every target (`framework/Reptar.Core/ReptarApp.cs:883-896`).
-- The docs claim Workers semantics: *"Passes the asynchronous task to `ctx.executionCtx.waitUntil(promise)`. The Worker isolate remains warm"* (`apps/docs/src/content/docs/cookbook/background-tasks.mdx`, `llms.txt` matrix).
+- The docs claim Workers semantics: _"Passes the asynchronous task to `ctx.executionCtx.waitUntil(promise)`. The Worker isolate remains warm"_ (`apps/docs/src/content/docs/cookbook/background-tasks.mdx`, `llms.txt` matrix).
 - **Verified false.** `createReptarHost.fetch(request, env)` never receives an `ExecutionContext`, and no `waitUntil` exists anywhere in `packages/host`. The only real `ctx.waitUntil` in the repo is hand-written TS in `spikes/realworld-worker/src/index.ts:183` for its own cache. Under NetWasm, the C# `Task.Run` continuation is dead the moment `respond()` resolves. `ctx.WaitUntil` on Workers today is fire-and-freeze.
 
 ### Other verified gaps
+
 - `createReptarDurableObjectHost` has no `alarm()` handler (`packages/host/src/durable-object.ts`) — yet `llms.txt` §6's matrix says "⚡ Use DO Alarms" for delayed work. No bridge exists.
 - The README's queue row claims a "Lambda Event Adapter" for queue consumers — there is no SQS/queue code in `Reptar.Lambda` or `packages/adapter-lambda`.
 - Lambda background tasks are marked "⚠️ Buffered execution" in the matrix; the adapter only parses API Gateway events.
@@ -61,7 +63,7 @@ Every claim below was checked in the current checkout.
 | # | Transcript claim | Accuracy | Evidence / correction |
 | :-- | :-- | :-- | :-- |
 | 1 | AdonisJS has an official `@adonisjs/queue` requiring explicit job classes, structured keys, serializable payloads | **Correct** | Created 2026-01-02, `adonisjs/queue` on GitHub (MIT, experimental), by Romain Lanz with Julien-R44/thetutlage/JanStevens. Powered by `@boringnode/queue` (Romain Lanz, MIT, framework-agnostic, BullMQ-comparable benchmarks). |
-| 2 | Hangfire/Quartz are *entirely* reflection-built; expression trees break under AOT | **Half-right** | Hangfire: yes — `Type.GetType` on stored type names, expression-tree serialization, AOT issue #2478 open. Quartz.NET 4.x: now `IsAotCompatible` for core packages — reflective fallback behind a feature switch (off when trimmed), `JOB_CLASS_NAME` resolved against a registered-type table, System.Text.Json default, ILCompiler-published canaries per PR. |
+| 2 | Hangfire/Quartz are _entirely_ reflection-built; expression trees break under AOT | **Half-right** | Hangfire: yes — `Type.GetType` on stored type names, expression-tree serialization, AOT issue #2478 open. Quartz.NET 4.x: now `IsAotCompatible` for core packages — reflective fallback behind a feature switch (off when trimmed), `JOB_CLASS_NAME` resolved against a registered-type table, System.Text.Json default, ILCompiler-published canaries per PR. |
 | 3 | `System.Threading.Channels` is AOT-safe, near-zero-alloc, handles backpressure | **Correct** | Already proven in-repo: `KestrelWebSocketConnection` uses a bounded `Channel<byte[]>` pump with `DropOldest` (`framework/Reptar.Kestrel/KestrelHost.cs:182-251`); SQLite group-commit batcher uses the same idea. "Lock-free" is an overstatement (they're low-allocation, not strictly lock-free) — irrelevant for our purposes. |
 | 4 | TickerQ is a fast, reflection-free AOT task scheduler | **Correct on facts, missing the license** | `Arcenox-co/TickerQ` — source generator wires `[TickerFunction]` handlers at compile time; 5.x is Native-AOT-verified for scheduler, dashboard, in-memory, and Redis providers (EF Core/MongoDB providers are managed-only). **5.x is distributed under the TickerQ Software License Agreement** (free Community tier, paid Commercial); earlier releases were MIT/Apache. |
 | 5 | MediatR can be configured explicitly / write a mini reflection-free variant | **Pattern is fine; library isn't** | MediatR v13+ (Jul 2025) is dual-licensed RPL 1.5 + Commercial (free Community under $5M revenue). Its AOT-support issue (#892) was closed stale — never shipped. The "mini dispatcher" is exactly what `OnQueue`'s handler dictionary already is. |
@@ -99,7 +101,7 @@ The design worth mirroring, feature for feature:
 
 - `Backend` trait (`poll_next` + `TaskSink`) decouples worker logic from storage; backends: Postgres, MySQL, SQLite, Redis, AMQP, NATS, pgmq, rsmq.
 - **Worker heartbeats + task leases** (visibility timeouts / orphan recovery) — the stalled-worker defense `@boringnode/queue` also adopted.
-- **`pipe_to`** — ephemeral streams (cron ticks, webhooks) are piped *into* a durable backend before processing. "A missed cron tick should be a retryable job, not a lost event." This is the right shape for Reptar cron → jobs-table.
+- **`pipe_to`** — ephemeral streams (cron ticks, webhooks) are piped _into_ a durable backend before processing. "A missed cron tick should be a retryable job, not a lost event." This is the right shape for Reptar cron → jobs-table.
 - Tower middleware (retry, rate limit, timeout, load-shed, tracing) as composable layers; `apalis-workflow` for orchestration.
 
 ### 3.4 Cloudflare platform — what the edge natively gives us
@@ -227,15 +229,35 @@ Deliberately **not** in the core vocabulary: ordering/group keys (each provider 
 - The **only** provider concepts that are truly universal are ack/retry and attempts→DLQ. Those are already Reptar concepts — so core stays the two interface groups above and nothing more.
 - `DedupId` and `DelaySeconds` are "honor or honestly ignore" — each adapter documents per-field behavior, which is the adapter-honesty success criterion.
 - The SQS Lambda adapter is the highest-value external one: it makes an existing README claim true, and AWS users get queues with zero new services. Service Bus and Pub/Sub adapters are the same shape; build on demand.
-- NetWasm producing to *any* provider via HTTP means a Cloudflare-hosted Reptar app can still enqueue into a customer's existing AWS/Azure queue — "interface with their stuff" works in both directions.
+- NetWasm producing to _any_ provider via HTTP means a Cloudflare-hosted Reptar app can still enqueue into a customer's existing AWS/Azure queue — "interface with their stuff" works in both directions.
 
 ---
 
 ## 5. Recommended sequence
 
-> **Revision 2 (2026-10-26):** Re-scoped after the platform decision. Reptar should not build a queue *engine* (not a River/Oban clone — that's feature creep and maintenance surface). It should build the thinnest complete **port** — the same move the framework already made for DB/storage/cache — plus per-target adapters that connect to whatever the user's platform already runs. Core vocabulary stays small; adapters do the platform work; every adapter is opt-in except the dev/test one.
+> **Revision 4 (2026-10-26, "do it all" round): the four follow-ups landed.**
+>
+> 1. **DO alarm bridge — shipped.** `app.OnAlarm(...)` dispatches behind the reserved `/_reptar/alarm` path (rides the normal fetch pipeline — no new JS exports). `createReptarDurableObjectHost` now captures Durable Object storage, intercepts `POST /_reptar/alarm/schedule` → `state.storage.setAlarm(runAtMs)`, and implements `alarm()` with runtime-retry propagation on 500s. Portable tests cover dispatch, failure isolation, background-task draining, and route-metadata isolation.
+> 2. **Queue stats in inspect/MCP — shipped.** `bun reptar inspect --app .` reads `reptar_jobs` directly: `Queue: 3 pending, oldest 62s, 0 completed, 1 dead (reptar_jobs)` — same section in `inspect --json` and the `reptar_inspect` MCP tool (no MCP changes needed; it returns the full inspection).
+> 3. **Wasm export verification — the documented Binaryen limitation is GONE.** `WorkerEntrypoint.HandleQueueAsync`/`HandleScheduledAsync` + `handleQueue`/`handleScheduled` exports built clean through the full NetWasm publish. Local workerd proof of the complete round trip: `POST /platform/queue` → Cloudflare Queues → the C# `handleQueue` export → `HandleQueueBatchAsync` → `OnQueue` handler (KV write) → **`1/1` acked**. Three real findings: (a) the spike's `wrangler.jsonc` never configured a **consumer** — the queue demo was silently dead in local dev; fixed. (b) workerd delivers the _physical_ queue name where `OnQueue` registers _logical_ names — unmapped, the dispatcher returns all-failed with zero logs (the exact "silent retry loop" symptom); the Worker's `queue()` handler now maps it, and the features doc calls the requirement out. (c) The _actual_ optimizer limitation is not export count: `wasm-opt -Oz` fails outright on ~38 MiB modules — `build:worker` now falls back to `-O1` (which shrinks the core 38→24 MB). `design.md`'s note updated with the precise facts.
+> 4. **Live-fire harness — shipped.** `bun examples/jobs/livefire.ts [sqs|azure|pubsub]` runs enqueue → retry (`REPTAR_JOBS_FAIL_FIRST=1`) → process against real infrastructure, reporting PASS/FAIL/MISSING with exact remediation. On this machine all three are credential-blocked (MISSING): AWS SSO token expired, no Azure CLI, gcloud needs `gcloud auth login`.
+>
+> Also this round: consumer config added to the spike's `wrangler.jsonc` (a producer without a consumer never delivered anything in local dev — the README's queue demo was silently dead), and the `applyBatchResult` host helper extracted to keep lint complexity gates green.
 
-### Phase 0 — Correctness & honesty (stop the silent lies) — ~3–4 days *(unchanged — this is the "fix ours" part)*
+> **Revision 3 (2026-10-26): SHIPPED.** The queue port landed in the working tree this session. What is now real (all tested, 304+ tests green):
+>
+> - **Vocabulary:** `QueueSendOptions` (delay/dedup/attempts-hint), `RetryIn` + per-message retry delays through `QueueBatchResult.Retries`, `IQueueConsumer` poll port, `IQueueObserver` null-default hooks, `SendBatchAsync` on `IQueueClient`.
+> - **Adapters in-repo:** `SyncQueueClient` (native default — replaces the silent Noop), `FakeQueueClient` (tests), `DbQueueClient` (durable over the app's own SQLite/Postgres/MySQL with backoff, delays, dedup, dead-letter state, retention sweep), `SqsQueueClient` (hand-rolled SigV4 over HTTP, golden-tested against the published AWS vector; producer + consumer), `AzureStorageQueueClient` (SharedKey HMAC), `PubSubQueueClient` (portable JSON + bearer token), Cloudflare Queues parity (sendBatch/delaySeconds/retry-delay through `@reptar/host`).
+> - **Kestrel runtime:** module-lifecycle-aligned queue poller + cron scheduler (5/6-field regex-free parser, dom/dow OR rule) with `REPTAR_QUEUE_POLL_SECS`/`REPTAR_QUEUE_BATCH`/`REPTAR_CRON_TICK_SECS` tuning.
+> - **Lambda:** SQS event source adapter → `HandleQueueBatchAsync` → `ReportBatchItemFailures` partial responses.
+> - **Example + bench:** `examples/jobs` (one app, adapter via `REPTAR_QUEUE`) with measured numbers: **~22,000 enqueues/s, ~200 jobs/s durable drain** including handler writes (SQLite WAL, single-writer gate).
+> - **Docs:** `apps/docs/.../features/queues.md`, bindings/deployment-matrix/README truth updates.
+>
+> Deliberately not built (recipes only, documented in the features page): Service Bus (AMQP), Redis/BullMQ (RESP replication of BullMQ structures), Kafka/RabbitMQ/NATS (protocol weight) — each is an `IQueueClient` + optional `IQueueConsumer` pair when a real workload asks.
+
+> **Revision 2 (2026-10-26):** Re-scoped after the platform decision. Reptar should not build a queue _engine_ (not a River/Oban clone — that's feature creep and maintenance surface). It should build the thinnest complete **port** — the same move the framework already made for DB/storage/cache — plus per-target adapters that connect to whatever the user's platform already runs. Core vocabulary stays small; adapters do the platform work; every adapter is opt-in except the dev/test one.
+
+### Phase 0 — Correctness & honesty (stop the silent lies) — ~3–4 days _(unchanged — this is the "fix ours" part)_
 
 1. **Replace `NoopQueueClient` with `SyncQueueClient`** as the non-NetWasm default: execute the registered `OnQueue` handler inline (no registered handler → log a warning once, still no throw). Tests and dev get real behavior; the Noop remains available explicitly. This single change turns every local enqueue from a silent drop into working code.
 2. **Make `ctx.WaitUntil` real on Workers.** Extend the host contract the same way `supportsWsMessageDone` already does: the Wasm runtime awaits `ctx.BackgroundTasks` before calling a new `respondDone(requestId)` (or reuses the done-queue pattern), and the host holds the event open via `executionCtx.waitUntil`. Until this lands, fix `background-tasks.mdx`/`llms.txt`/`context.md` to say the truth.
@@ -259,7 +281,7 @@ The core ships two adapters; everything else is a documented port (§4.1).
 
 1. **`SyncQueueClient`** (dev/tests — ships in Phase 0 as the non-NetWasm default): inline execute, zero infra.
 2. **`SqliteQueueClient`** (opt-in, single-node VPS/containers — the "no infra" durable default): deliberately minimal — one `jobs` table via `TableDef` + our migration engine, implementing `IQueueConsumer` for the generic Kestrel poller, attempts/backoff/retry-delay/DLQ-state. ~a few hundred lines, no history UI, retention is a `DELETE` on read. It must reuse the SQLite single-writer gate so it can never contend with request latency, and Phase 0's Kestrel cron loop rides in the same worker. **This is not a feature showcase — it's the admission that a VPS has no platform queue.** Benchmark gate: `/health` and `/posts` numbers must be unchanged with the module present but idle.
-3. **AWS SQS adapter** (Lambda consumers + any-target HTTP producer): parse the SQS event JSON → `HandleQueueBatchAsync`, return `batchItemFailures` for the event source mapping, map `RetryIn` to visibility-timeout extension. Producer side is pure HTTPS + SigV4 (HMAC-SHA256 exists in both `DevCrypto` and `WasmCrypto`), so it produces from *any* runtime. This makes the README's existing Lambda claim true.
+3. **AWS SQS adapter** (Lambda consumers + any-target HTTP producer): parse the SQS event JSON → `HandleQueueBatchAsync`, return `batchItemFailures` for the event source mapping, map `RetryIn` to visibility-timeout extension. Producer side is pure HTTPS + SigV4 (HMAC-SHA256 exists in both `DevCrypto` and `WasmCrypto`), so it produces from _any_ runtime. This makes the README's existing Lambda claim true.
 4. **Azure + GCP: recipes first, code on demand.** Service Bus (complete/abandon/defer + `MessageId` dedup) and Storage Queues (pop receipt + `{queue}-poison` convention) and Pub/Sub (ack/nack + dead-letter topic) all fit the §4.1 port — each is an `IQueueClient` + `IQueueConsumer` pair over HTTP. An external adapter is an afternoon; we build in-repo when a real user asks, because each provider we ship is a test matrix we own.
 
 ### Phase 3 — Edge polish (optional, after demand) (~1 week)
@@ -269,7 +291,7 @@ The core ships two adapters; everything else is a documented port (§4.1).
 
 ### Explicitly deferred / non-goals
 
-- Redis as a *core* adapter (external adapters welcome; core adds no dependencies). Same policy for Kafka/RabbitMQ/NATS: recipe docs, never core.
+- Redis as a _core_ adapter (external adapters welcome; core adds no dependencies). Same policy for Kafka/RabbitMQ/NATS: recipe docs, never core.
 - Assembly-scanning job discovery, IoC, `[Job]` attribute magic — violates the one rule.
 - A Hangfire-style dashboard UI. Ever.
 - A workflow/orchestration engine — orchestration is the platform's job (Workflows on Cloudflare, Step Functions on AWS, Durable Task Framework on Azure). Document the enqueue-next-job pattern for chains.
@@ -289,7 +311,7 @@ The core ships two adapters; everything else is a documented port (§4.1).
 
 ## 6. What this buys the framework
 
-The AdonisJS audit (`plans/adonisjs-core-audit.md`) set the identity: *AdonisJS/Laravel ergonomics, Dapper-like explicit SQL, zero runtime reflection, Native AOT/NetWasm performance*. Queues close the loop with a third idea: **Reptar is a port layer over the best primitive each platform already runs.** The end state is small enough to state in one sentence: *"one typed enqueue API, one consumer handler, per-platform adapters — Cloudflare Queues, SQS, or a one-table SQLite queue — with retries, delay, dead-lettering, and schedules, no Redis, no reflection, no dashboard."* Users bring Cloudflare, AWS, Azure, GCP, or a bare VPS, and the app code never changes. Nothing in .NET offers that today: Hangfire and BullMQ-style systems need infra; TickerQ and MediatR went commercial; Quartz is in-process only; every "works everywhere" queue adds a database and a UI. The differentiator is precisely that ours doesn't.
+The AdonisJS audit (`plans/adonisjs-core-audit.md`) set the identity: _AdonisJS/Laravel ergonomics, Dapper-like explicit SQL, zero runtime reflection, Native AOT/NetWasm performance_. Queues close the loop with a third idea: **Reptar is a port layer over the best primitive each platform already runs.** The end state is small enough to state in one sentence: _"one typed enqueue API, one consumer handler, per-platform adapters — Cloudflare Queues, SQS, or a one-table SQLite queue — with retries, delay, dead-lettering, and schedules, no Redis, no reflection, no dashboard."_ Users bring Cloudflare, AWS, Azure, GCP, or a bare VPS, and the app code never changes. Nothing in .NET offers that today: Hangfire and BullMQ-style systems need infra; TickerQ and MediatR went commercial; Quartz is in-process only; every "works everywhere" queue adds a database and a UI. The differentiator is precisely that ours doesn't.
 
 ---
 

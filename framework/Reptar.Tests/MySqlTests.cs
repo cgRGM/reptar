@@ -109,7 +109,7 @@ public class MySqlTests
 
         // 6. ListAsync
         await client.ListAsync<Widget>(TestSchema.Widgets, "WHERE count > 20", limit: 25, offset: 5);
-        Assert.Equal("SELECT * FROM `widgets` WHERE count > 20 LIMIT 25 OFFSET 5", client.LastExecutedSql);
+        Assert.Equal("SELECT * FROM `widgets` WHERE count > 20 LIMIT @__limit OFFSET @__offset", client.LastExecutedSql);
 
         // 7. ExistsAsync
         await client.ExistsAsync(TestSchema.Widgets, "`name` = @name", new { name = "SpeedWidget" });

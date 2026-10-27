@@ -104,6 +104,34 @@ const assert = (condition: boolean, message: string) => {
   }
 };
 
+const waitForPersistence = async (): Promise<Frame> => {
+  const deadline = Date.now() + 5000;
+  while (true) {
+    // eslint-disable-next-line no-await-in-loop -- Native fanout precedes the queued SQLite commit.
+    const response = await fetch(`${host}/stats`);
+    if (!response.ok) {
+      throw new Error(`stats returned HTTP ${response.status}`);
+    }
+    // eslint-disable-next-line no-await-in-loop -- Inspect each persistence attempt before polling again.
+    const snapshot = (await response.json()) as Frame;
+    if (Number(snapshot.messagesPersistFailed) > 0) {
+      throw new Error(
+        `message persistence failed: ${JSON.stringify(snapshot)}`
+      );
+    }
+    if (Number(snapshot.messagesPersisted) >= 1) {
+      return snapshot;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `persistence did not complete within 5s: ${JSON.stringify(snapshot)}`
+      );
+    }
+    // eslint-disable-next-line no-await-in-loop -- This is a bounded completion poll, not a load test.
+    await Bun.sleep(25);
+  }
+};
+
 try {
   const alice = await connect("alice");
   const connected = await nextFrame(alice, "connected");
@@ -153,8 +181,9 @@ try {
   assert(peerLeft.userId === "bob-1", "alice is told bob left");
 
   // REST surface
-  const statsResponse = await fetch(`${host}/stats`);
-  const stats = (await statsResponse.json()) as Frame;
+  // Native persistence is deliberately queued after broadcast; receipt of a
+  // frame is not a durable-write acknowledgement. Verify eventual completion.
+  const stats = await waitForPersistence();
   assert(stats.messagesRelayed >= 1, "stats counts relayed messages");
   assert(stats.messagesPersisted >= 1, "stats counts persisted messages");
 

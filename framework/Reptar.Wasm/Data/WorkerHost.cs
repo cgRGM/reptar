@@ -23,11 +23,46 @@ public sealed record HostResponse(
     string Body,
     string[] SetCookies);
 
+public sealed record HostQueueMessage(
+    string Id,
+    string Body,
+    string Timestamp,
+    int Attempts);
+
+public sealed record HostQueueBatch(
+    string BatchId,
+    string Queue,
+    List<HostQueueMessage> Messages);
+
+public sealed record HostQueueRetry(string MessageId, int DelaySeconds);
+
+public sealed record HostQueueResult(
+    bool Success,
+    string[] FailedMessageIds,
+    List<HostQueueRetry>? Retries = null);
+
+public sealed record HostScheduledEvent(
+    string Cron,
+    string ScheduleId,
+    string ScheduledTime);
+
+public sealed record HostScheduledResult(
+    bool Success,
+    string[] Errors);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(HostRequest))]
 [JsonSerializable(typeof(HostResponse))]
 [JsonSerializable(typeof(Dictionary<string, string>))]
 [JsonSerializable(typeof(string[]))]
+[JsonSerializable(typeof(HostQueueBatch))]
+[JsonSerializable(typeof(HostQueueMessage))]
+[JsonSerializable(typeof(List<HostQueueMessage>))]
+[JsonSerializable(typeof(HostQueueResult))]
+[JsonSerializable(typeof(HostQueueRetry))]
+[JsonSerializable(typeof(List<HostQueueRetry>))]
+[JsonSerializable(typeof(HostScheduledEvent))]
+[JsonSerializable(typeof(HostScheduledResult))]
 internal partial class WorkerJsonContext : JsonSerializerContext
 {
 }
@@ -91,16 +126,20 @@ public static class WorkerEntrypoint
 
         try
         {
+            var body = string.IsNullOrEmpty(request.Body)
+                ? []
+                : Convert.FromBase64String(request.Body);
+
             var result = await app.HandleWithBackgroundAsync(new ReptarRequest
             {
                 Method = request.Method,
                 Path = request.Path,
                 Query = request.Query.TrimStart('?'),
+                RequestId = request.RequestId,
                 Headers = request.Headers,
                 Cookies = ParseCookies(request.Headers),
-                Body = string.IsNullOrEmpty(request.Body)
-                    ? []
-                    : Convert.FromBase64String(request.Body),
+                Body = body,
+                BodyStream = new MemoryStream(body, writable: false),
             });
 
             RespondOnce(
@@ -115,15 +154,152 @@ public static class WorkerEntrypoint
             {
                 // The response is already on the wire. Surface the failure in
                 // logs; the host's waitUntil sees the rejected export.
-                Console.Error.WriteLine(exception);
+                Console.WriteLine($"ERROR background: {exception}");
             }
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine(exception);
+            Console.WriteLine($"ERROR handler: {exception}");
             RespondOnce(
                 request.RequestId,
                 new HostResponse(500, [], EncodeBody(InternalErrorBody), []));
+        }
+    }
+
+    /// <summary>
+    /// Queue consumer entrypoint: the host's <c>queue()</c> handler passes
+    /// <paramref name="batchJson"/> (batchId, queue, messages), and the app's
+    /// <see cref="ReptarApp.HandleQueueBatchAsync"/> result flows back through
+    /// <paramref name="respondQueue"/> — acks, retries, and RetryIn delays map
+    /// onto the Workers queue primitives in the host.
+    /// </summary>
+    public static async Task HandleQueueAsync(
+        ReptarApp app,
+        string batchJson,
+        Action<string, string> respondQueue)
+    {
+        var responded = false;
+
+        void RespondOnce(string batchId, HostQueueResult result)
+        {
+            if (responded)
+                return;
+
+            responded = true;
+            respondQueue(
+                batchId,
+                JsonSerializer.Serialize(result, WorkerJson.Options));
+        }
+
+        HostQueueBatch? batch = null;
+        try
+        {
+            batch = JsonSerializer.Deserialize<HostQueueBatch>(
+                batchJson,
+                WorkerJson.Options);
+        }
+        catch (JsonException)
+        {
+            // Fall through to the all-failed response below.
+        }
+
+        if (batch is null)
+        {
+            RespondOnce("", new HostQueueResult(false, [], null));
+            return;
+        }
+
+        try
+        {
+            var messages = new List<QueueMessage>(batch.Messages.Count);
+            foreach (var message in batch.Messages)
+            {
+                messages.Add(new QueueMessage(
+                    message.Id,
+                    message.Body,
+                    message.Timestamp,
+                    message.Attempts));
+            }
+
+            var result = await app.HandleQueueBatchAsync(
+                new QueueBatch(batch.BatchId, batch.Queue, messages));
+
+            List<HostQueueRetry>? retries = null;
+            if (result.Retries is { Count: > 0 })
+            {
+                retries = new List<HostQueueRetry>(result.Retries.Count);
+                foreach (var retry in result.Retries)
+                    retries.Add(new HostQueueRetry(retry.MessageId, retry.DelaySeconds));
+            }
+
+            RespondOnce(
+                batch.BatchId,
+                new HostQueueResult(result.Success, result.FailedMessageIds, retries));
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine($"ERROR queue: {exception}");
+            // Report every message as failed so the host retries the batch.
+            var all = new List<string>(batch.Messages.Count);
+            foreach (var message in batch.Messages)
+                all.Add(message.Id);
+
+            RespondOnce(batch.BatchId, new HostQueueResult(false, all.ToArray(), null));
+        }
+    }
+
+    /// <summary>
+    /// Cron entrypoint: the host's <c>scheduled()</c> handler passes
+    /// <paramref name="scheduledJson"/> (cron, scheduleId, scheduledTime) and
+    /// resolves its held Promise through <paramref name="respondScheduled"/>.
+    /// </summary>
+    public static async Task HandleScheduledAsync(
+        ReptarApp app,
+        string scheduledJson,
+        Action<string, string> respondScheduled)
+    {
+        var responded = false;
+
+        void RespondOnce(string scheduleId, HostScheduledResult result)
+        {
+            if (responded)
+                return;
+
+            responded = true;
+            respondScheduled(
+                scheduleId,
+                JsonSerializer.Serialize(result, WorkerJson.Options));
+        }
+
+        HostScheduledEvent? scheduled = null;
+        try
+        {
+            scheduled = JsonSerializer.Deserialize<HostScheduledEvent>(
+                scheduledJson,
+                WorkerJson.Options);
+        }
+        catch (JsonException)
+        {
+            // Fall through to the failed response below.
+        }
+
+        if (scheduled is null)
+        {
+            RespondOnce("", new HostScheduledResult(false, ["Invalid scheduled envelope."]));
+            return;
+        }
+
+        try
+        {
+            var result = await app.HandleScheduledAsync(
+                new ScheduledEvent(scheduled.Cron, scheduled.ScheduledTime));
+
+            RespondOnce(scheduled.ScheduleId, new HostScheduledResult(result.Success, result.Errors));
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine($"ERROR scheduled: {exception}");
+            RespondOnce(scheduled.ScheduleId, new HostScheduledResult(false, [exception.Message]));
         }
     }
 

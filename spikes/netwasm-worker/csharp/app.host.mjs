@@ -14,6 +14,9 @@ export const r2putoptions = (
   bytes,
   contentType,
   cacheControl,
+  contentDisposition,
+  contentEncoding,
+  contentLanguage,
   metadataJson,
   onlyIfAbsent
 ) =>
@@ -22,6 +25,9 @@ export const r2putoptions = (
     bytes,
     contentType,
     cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
     metadataJson,
     onlyIfAbsent
   );
@@ -40,8 +46,35 @@ export const r2exists = (key) => globalThis.__REPTAR_R2_EXISTS(key);
 
 export const r2delete = (key) => globalThis.__REPTAR_R2_DELETE(key);
 
-export const r2deleteMany = (keys) =>
-  globalThis.__REPTAR_R2_DELETE_MANY(keys);
+export const r2deleteMany = (keys) => globalThis.__REPTAR_R2_DELETE_MANY(keys);
+
+export const r2multipartcreate = (
+  key,
+  contentType,
+  cacheControl,
+  contentDisposition,
+  contentEncoding,
+  contentLanguage,
+  metadataJson
+) =>
+  globalThis.__REPTAR_R2_MULTIPART_CREATE(
+    key,
+    contentType,
+    cacheControl,
+    contentDisposition,
+    contentEncoding,
+    contentLanguage,
+    metadataJson
+  );
+
+export const r2multipartpart = (key, uploadId, partNumber, bytes) =>
+  globalThis.__REPTAR_R2_MULTIPART_PART(key, uploadId, partNumber, bytes);
+
+export const r2multipartcomplete = (key, uploadId, parts) =>
+  globalThis.__REPTAR_R2_MULTIPART_COMPLETE(key, uploadId, parts);
+
+export const r2multipartabort = (key, uploadId) =>
+  globalThis.__REPTAR_R2_MULTIPART_ABORT(key, uploadId);
 
 export const kvGet = (key) => globalThis.__REPTAR_KV_GET(key);
 
@@ -53,16 +86,8 @@ export const kvDelete = (key) => globalThis.__REPTAR_KV_DELETE(key);
 export const queueSend = (queueName, messageJson) =>
   globalThis.__REPTAR_QUEUE_SEND(queueName, messageJson);
 
-export const queueSendWithOptions = (
-  queueName,
-  messageJson,
-  delaySeconds
-) =>
-  globalThis.__REPTAR_QUEUE_SEND_OPTIONS(
-    queueName,
-    messageJson,
-    delaySeconds
-  );
+export const queueSendWithOptions = (queueName, messageJson, delaySeconds) =>
+  globalThis.__REPTAR_QUEUE_SEND_OPTIONS(queueName, messageJson, delaySeconds);
 
 export const queueSendBatch = (queueName, messagesJson) =>
   globalThis.__REPTAR_QUEUE_SEND_BATCH(queueName, messagesJson);
@@ -76,13 +101,7 @@ export const durableFetch = (namespace, id, path, method, body) =>
 export const httpFetch = (url, method, headersJson, body) =>
   globalThis.__REPTAR_HTTP_FETCH(url, method, headersJson, body);
 
-export const httpFetchBytes = (
-  url,
-  method,
-  headersJson,
-  body,
-  contentType
-) =>
+export const httpFetchBytes = (url, method, headersJson, body, contentType) =>
   globalThis.__REPTAR_HTTP_FETCH_BYTES(
     url,
     method,
@@ -120,8 +139,7 @@ export const wsCommand = (sessionId, json) => {
 export const respond = (requestId, json) =>
   globalThis.__REPTAR_RESPOND(requestId, json);
 
-export const telemetry = (json) =>
-  globalThis.__REPTAR_TELEMETRY(json);
+export const telemetry = (json) => globalThis.__REPTAR_TELEMETRY(json);
 
 export const streamStart = (requestId, status, headersJson, cookiesJson) =>
   globalThis.__REPTAR_STREAM_START(requestId, status, headersJson, cookiesJson);

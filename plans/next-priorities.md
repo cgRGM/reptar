@@ -1,28 +1,22 @@
 # Next Priorities
 
-The provider matrix is the current trust gate. Everything below is deliberately
-queued behind it, in rough priority order.
+The provider matrix is the current trust gate. Everything below is deliberately queued behind it, in rough priority order.
 
 ## 1. One production-shaped reference app, end to end
 
-Build a single app that exercises auth, Stripe checkout + webhooks, queues,
-realtime, object storage, migrations, OTLP, and metrics — then run the same
-suite against:
+Build a single app that exercises auth, Stripe checkout + webhooks, queues, realtime, object storage, migrations, OTLP, and metrics — then run the same suite against:
 
 - Kestrel / Native AOT
 - Cloudflare Workers / NetWasm / D1
 - PostgreSQL and MySQL variants of the native host
 
-This catches integration gaps that isolated unit tests cannot: webhook
-idempotency, transaction boundaries around payments, queue retry behavior,
-storage parity, and auth cookie/redirect behavior behind a proxy.
+This catches integration gaps that isolated unit tests cannot: webhook idempotency, transaction boundaries around payments, queue retry behavior, storage parity, and auth cookie/redirect behavior behind a proxy.
 
 ## 2. Failure UX
 
 Every framework failure should answer three questions without a debugger:
 
-- what failed (migration checksum, missing binding, unsupported provider
-  capability, invalid route pattern);
+- what failed (migration checksum, missing binding, unsupported provider capability, invalid route pattern);
 - where it failed (file/route/table/migration id);
 - how to fix it (the exact command or config key).
 
@@ -52,10 +46,6 @@ Priorities:
 - `Rule<T>` invalid-path allocations (~656 B per failing validation).
 - Migration lease renewal for migrations longer than 30 minutes.
 - Redis/KV `ISwrCacheStore` adapters (file-backed and in-memory exist).
-- Standalone NuGet-based scaffold path (`create-reptar` currently builds
-  file-based against a clone).
-- Repo-wide `bun run check` cleanup outside the CLI scripts: generated browser
-  bundles, `packages/host`, `packages/rpc`, and a few examples still have
-  pre-existing Ultracite findings.
-- MySQL live provider test in local development (CI has a service container;
-  local machines without Docker only run SQLite/Postgres/D1).
+- Standalone NuGet-based scaffold path (`create-reptar` currently builds file-based against a clone).
+- Repo-wide `bun run check` cleanup outside the CLI scripts: generated browser bundles, `packages/host`, `packages/rpc`, and a few examples still have pre-existing Ultracite findings.
+- MySQL live provider test in local development (CI has a service container; local machines without Docker only run SQLite/Postgres/D1).

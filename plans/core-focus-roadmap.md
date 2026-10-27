@@ -24,7 +24,7 @@ Reptar already has enough features. The next gains do **not** come from adding m
 
 The framework's current performance story is genuinely good: on the calibrated VPS benchmark Reptar is at or above raw .NET Minimal API on HTTP/JSON/routing/validation, wins 10 of 12 tiers, and ships a ~10.4 MB AOT binary. The problem is that those numbers are not gated, and the observability/reliability story is ahead of the implementation. Fix that before adding preload, `make:*`, or lifecycle hooks.
 
-**The one-sentence strategy:** *Make the fast path measurable, make the failure path observable, keep the core small, and add only features that remove a measured bottleneck.*
+**The one-sentence strategy:** _Make the fast path measurable, make the failure path observable, keep the core small, and add only features that remove a measured bottleneck._
 
 ---
 
@@ -192,8 +192,7 @@ This is the biggest **credibility** gap in the framework. Either implement it or
 
 ### 4.2 Minimum viable observability (MVO)
 
-1. **Structured request log.** One JSON line per request, with:
-   `timestamp`, `level`, `request_id`, `trace_id`, `method`, `route` (template, not raw path), `path`, `status`, `duration_ms`, `db_ms`, `db_queries`, `cache`, `user_id`, `cf_ray`, `colo`, `error_code`.
+1. **Structured request log.** One JSON line per request, with: `timestamp`, `level`, `request_id`, `trace_id`, `method`, `route` (template, not raw path), `path`, `status`, `duration_ms`, `db_ms`, `db_queries`, `cache`, `user_id`, `cf_ray`, `colo`, `error_code`.
 2. **DB instrumentation.** Add an optional `IDbObserver`:
    ```csharp
    public interface IDbObserver

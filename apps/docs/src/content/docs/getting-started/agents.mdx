@@ -3,7 +3,15 @@ title: Build with an AI Agent
 description: Hand this prompt to Claude Code, Cursor, Codex, or any coding agent and get a deployed Reptar app — the framework is designed to be agent-driven.
 ---
 
-import { Tabs, TabItem, Aside, Code, LinkCard, CardGrid, Card } from "@astrojs/starlight/components";
+import {
+  Tabs,
+  TabItem,
+  Aside,
+  Code,
+  LinkCard,
+  CardGrid,
+  Card,
+} from "@astrojs/starlight/components";
 
 Reptar was built for this workflow: **an AI agent reads your intent and writes the C# backend directly.** The framework's constraints do the rest — zero runtime reflection and compile-time validation mean the compiler catches what a human would catch in review. Most frameworks make agents guess; Reptar gives them contracts.
 
@@ -11,7 +19,7 @@ Reptar was built for this workflow: **an AI agent reads your intent and writes t
 
 Open your agent in the repo clone and paste this. It encodes the conventions, the loop, and the definition of done.
 
-````text
+```text
 You are building a Reptar fullstack app. Read llms.txt at the repo root first —
 it is the canonical API reference and its rules are hard requirements.
 
@@ -45,7 +53,7 @@ signed-in users log customer calls, tag them, and export CSVs">
 Done means: the dev server boots, every checkpoint above passes with curl
 output pasted, the generated client compiles, and `doctor --json` reports
 healthy. Do not mark success from the build alone — run the checkpoints.
-````
+```
 
 <Aside type="tip" title="Why agents do well here">
   The same properties that make Reptar fast on Cloudflare and Native AOT — no runtime reflection, generated column tokens, `Rule<T>` as a single source of truth for both prompts and validation — are exactly what makes agents productive: the compiler is the reviewer. See [Why Reptar](/overview/why-reptar/) for the full argument.
@@ -88,7 +96,19 @@ If your agent supports MCP, skip the prompt's manual steps and add the server:
 7. **Deploy** — `my-app/deploy/deploy.sh`; the health gate is the last checkpoint
 
 <CardGrid>
-  <LinkCard title="Quick Start" description="The exact app your agent will build, with every checkpoint." href="/getting-started/quickstart/" />
-  <LinkCard title="AI Cookbook: Agent Tools" description="Expose routes as OpenAI/Anthropic tool schemas with one line." href="/cookbook/ai-agent-tools/" />
-  <LinkCard title="The Agent Harness" description="Modules, request ports, approvals, loops — the full agent engine." href="/ai/agent-harness/" />
+  <LinkCard
+    title="Quick Start"
+    description="The exact app your agent will build, with every checkpoint."
+    href="/getting-started/quickstart/"
+  />
+  <LinkCard
+    title="AI Cookbook: Agent Tools"
+    description="Expose routes as OpenAI/Anthropic tool schemas with one line."
+    href="/cookbook/ai-agent-tools/"
+  />
+  <LinkCard
+    title="The Agent Harness"
+    description="Modules, request ports, approvals, loops — the full agent engine."
+    href="/ai/agent-harness/"
+  />
 </CardGrid>

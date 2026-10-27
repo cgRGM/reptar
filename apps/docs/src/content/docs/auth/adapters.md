@@ -3,12 +3,7 @@ title: Authentication Adapters
 description: Integrating Better Auth, pure C# OAuth 2.0 PKCE, Clerk, and custom identity providers.
 ---
 
-:::caution[Roadmap]
-The `Clerk(...)` and `Custom(...)` adapters shown on this page are **not
-implemented yet**. The built-in C# auth slice and the Better Auth wire
-protocol are available today. The examples below document the intended shape
-for the upcoming adapter release.
-:::
+:::caution[Roadmap] The `Clerk(...)` and `Custom(...)` adapters shown on this page are **not implemented yet**. The built-in C# auth slice and the Better Auth wire protocol are available today. The examples below document the intended shape for the upcoming adapter release. :::
 
 ## Better Auth Protocol & C# Server
 

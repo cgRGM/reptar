@@ -662,7 +662,7 @@ export const versionAtLeast = (actual: string, required: string): boolean => {
 export const doctorProject = (
   repoRoot: string,
   cwd: string = process.cwd(),
-  options?: { strict?: boolean }
+  options?: { dbPath?: string; strict?: boolean }
 ): ReptarDoctorReport => {
   const checks: CheckItem[] = [];
 
@@ -750,7 +750,7 @@ export const doctorProject = (
 
   // Check 3: Database & Migrations. Connectivity must be real: compiler
   // schema classes alone do not prove the runtime database exists.
-  const inspection = inspectProject(repoRoot, cwd);
+  const inspection = inspectProject(repoRoot, cwd, { dbPath: options?.dbPath });
   const { database } = inspection;
   const isPostgres = database.dialect === "postgres";
   const databaseAdvice = database.connected

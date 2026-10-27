@@ -30,6 +30,7 @@ using static Reptar.ReptarApi;
 [JsonSerializable(typeof(Auth.SignUpInput))]
 [JsonSerializable(typeof(Auth.SignInInput))]
 [JsonSerializable(typeof(DbCount))]
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 internal partial class BlogJsonContext : JsonSerializerContext
 {
 }
@@ -48,9 +49,23 @@ public static partial class PageExports
     [JSImport("respond", "app.host")]
     private static extern void Respond(string requestId, string json);
 
+    [JSImport("respondQueue", "app.host")]
+    private static extern void RespondQueue(string batchId, string json);
+
+    [JSImport("respondScheduled", "app.host")]
+    private static extern void RespondScheduled(string scheduleId, string json);
+
     [JSExport("handle")]
     public static Task Handle(string requestJson) =>
         WorkerEntrypoint.HandleAsync(App, requestJson, Respond);
+
+    [JSExport("handleQueue")]
+    public static Task HandleQueue(string batchJson) =>
+        WorkerEntrypoint.HandleQueueAsync(App, batchJson, RespondQueue);
+
+    [JSExport("handleScheduled")]
+    public static Task HandleScheduled(string scheduledJson) =>
+        WorkerEntrypoint.HandleScheduledAsync(App, scheduledJson, RespondScheduled);
 
     private static ReptarApp BuildApp()
     {
@@ -128,7 +143,19 @@ public static partial class PageExports
 
         app.OnQueue("events", async (ctx, msg) =>
         {
-            await ctx.Cache.PutAsync($"queue:{msg.Id}", msg.Body, 300);
+            try
+            {
+                // Trace the payload, and mirror it onto the "demo" key so
+                // the round trip is observable through GET /platform/kv:
+                // POST /platform/queue → Queues → this consumer → KV.
+                await ctx.Cache.PutAsync($"queue:{msg.Id}", msg.Body, 300);
+                await ctx.Cache.PutAsync("demo", msg.Body, 300);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[queue] consumer failed: {ex.GetType().Name}: {ex.Message}");
+                throw;
+            }
         });
 
         return app;
