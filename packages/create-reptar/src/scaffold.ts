@@ -298,7 +298,8 @@ const wireUpFileBasedApp = (
     <ProjectReference
       Include="$(MSBuildThisFileDirectory)${normalize(frameworkFromRoot)}/Reptar.SourceGenerators/Reptar.SourceGenerators.csproj"
       OutputItemType="Analyzer"
-      ReferenceOutputAssembly="false" />
+      ReferenceOutputAssembly="false"
+      GlobalPropertiesToRemove="PublishAot;PublishTrimmed;RuntimeIdentifier;SelfContained" />
   </ItemGroup>
 </Project>
 `;

@@ -129,7 +129,11 @@ public static class BetterAuthProtocol
                 user.CreatedAt);
 
             return ctx.Json(new BetterAuthSignInResponse(bUser, token));
-        });
+        })
+        .Produces<BetterAuthSignInResponse>(200)
+        .Produces<ValidationError>(400)
+        .Produces<ErrorBody>(401)
+        .Produces<ErrorBody>(429);
 
         app.Post<BetterAuthSignUpInput>("/sign-up/email", async (ctx, input) =>
         {
@@ -184,7 +188,10 @@ public static class BetterAuthProtocol
                 now);
 
             return ctx.Json(new BetterAuthSignInResponse(bUser, token), 201);
-        });
+        })
+        .Produces<BetterAuthSignInResponse>(201)
+        .Produces<ErrorBody>(400)
+        .Produces<ErrorBody>(409);
 
         app.Get("/get-session", async ctx =>
         {
