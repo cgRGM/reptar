@@ -103,6 +103,193 @@ public sealed record AgentSettings
 
     /// <summary>Effective retry policy.</summary>
     public AgentRetryPolicy EffectiveRetry => Retry ?? new AgentRetryPolicy();
+
+    /// <summary>
+    /// Renders these settings as JSON. Hand-written rather than reflected: the framework targets
+    /// Native AOT, where reflection-based serialization throws at runtime.
+    /// </summary>
+    public JsonObject ToJson()
+    {
+        var node = new JsonObject();
+
+        if (Model is { Length: > 0 }) node["model"] = Model;
+        if (Provider is { Length: > 0 }) node["provider"] = Provider;
+        if (Thinking is { Length: > 0 }) node["thinking"] = Thinking;
+        if (PromptCache is { } cache) node["promptCache"] = cache;
+        if (WarmPromptCache is { } warm) node["warmPromptCache"] = warm;
+        if (HideThinking is { } hide) node["hideThinking"] = hide;
+        if (AutocompleteMaxVisible is { } rows) node["autocompleteMaxVisible"] = rows;
+        if (SteeringMode is { } steering) node["steeringMode"] = ModeName(steering);
+        if (FollowUpMode is { } followUp) node["followUpMode"] = ModeName(followUp);
+        if (DefaultProjectTrust is { } trust) node["defaultProjectTrust"] = trust.ToString().ToLowerInvariant();
+
+        if (Compaction is { } compaction)
+        {
+            node["compaction"] = new JsonObject
+            {
+                ["enabled"] = compaction.Enabled,
+                ["reserveTokens"] = compaction.ReserveTokens,
+                ["keepRecentTokens"] = compaction.KeepRecentTokens
+            };
+        }
+
+        if (Retry is { } retry)
+        {
+            node["retry"] = new JsonObject
+            {
+                ["maxAttempts"] = retry.MaxAttempts,
+                ["baseDelayMs"] = (int)retry.BaseDelay.TotalMilliseconds,
+                ["maxDelayMs"] = (int)retry.MaxDelay.TotalMilliseconds
+            };
+        }
+
+        if (ScopedModels is { Count: > 0 } scoped)
+        {
+            var array = new JsonArray();
+            foreach (var entry in scoped)
+            {
+                array.Add(new JsonObject
+                {
+                    ["provider"] = entry.Provider,
+                    ["model"] = entry.Model,
+                    ["thinking"] = entry.Thinking
+                });
+            }
+            node["scopedModels"] = array;
+        }
+
+        return node;
+    }
+
+    /// <summary>
+    /// Parses settings from JSON. Unknown keys are ignored and bad values fall back to unset, so
+    /// one malformed field does not discard the whole file.
+    /// </summary>
+    public static AgentSettings FromJson(JsonNode? node)
+    {
+        if (node is not JsonObject root)
+            return new AgentSettings();
+
+        return new AgentSettings
+        {
+            Model = Text(root, "model"),
+            Provider = Text(root, "provider"),
+            Thinking = Text(root, "thinking"),
+            PromptCache = Bool(root, "promptCache"),
+            WarmPromptCache = Bool(root, "warmPromptCache"),
+            HideThinking = Bool(root, "hideThinking"),
+            AutocompleteMaxVisible = Number(root, "autocompleteMaxVisible"),
+            SteeringMode = ParseMode(Text(root, "steeringMode")),
+            FollowUpMode = ParseMode(Text(root, "followUpMode")),
+            DefaultProjectTrust = ParseTrust(Text(root, "defaultProjectTrust")),
+            Compaction = CompactionFrom(root["compaction"]),
+            Retry = RetryFrom(root["retry"]),
+            ScopedModels = ScopedFrom(root["scopedModels"])
+        };
+    }
+
+    private static CompactionSettings? CompactionFrom(JsonNode? node)
+    {
+        if (node is not JsonObject compaction)
+            return null;
+
+        var defaults = CompactionSettings.Default;
+
+        return new CompactionSettings
+        {
+            Enabled = Bool(compaction, "enabled") ?? defaults.Enabled,
+            ReserveTokens = Number(compaction, "reserveTokens") ?? defaults.ReserveTokens,
+            KeepRecentTokens = Number(compaction, "keepRecentTokens") ?? defaults.KeepRecentTokens
+        };
+    }
+
+    private static AgentRetryPolicy? RetryFrom(JsonNode? node)
+    {
+        if (node is not JsonObject retry)
+            return null;
+
+        var defaults = new AgentRetryPolicy();
+
+        return new AgentRetryPolicy
+        {
+            MaxAttempts = Number(retry, "maxAttempts") ?? defaults.MaxAttempts,
+            BaseDelay = Number(retry, "baseDelayMs") is { } baseMs
+                ? TimeSpan.FromMilliseconds(baseMs)
+                : defaults.BaseDelay,
+            MaxDelay = Number(retry, "maxDelayMs") is { } maxMs
+                ? TimeSpan.FromMilliseconds(maxMs)
+                : defaults.MaxDelay
+        };
+    }
+
+    private static IReadOnlyList<ScopedModel>? ScopedFrom(JsonNode? node)
+    {
+        if (node is not JsonArray array || array.Count == 0)
+            return null;
+
+        var entries = new List<ScopedModel>(array.Count);
+        foreach (var item in array)
+        {
+            if (item is not JsonObject entry)
+                continue;
+
+            var provider = Text(entry, "provider");
+            var model = Text(entry, "model");
+            if (provider is null || model is null)
+                continue;
+
+            entries.Add(new ScopedModel(provider, model, Text(entry, "thinking")));
+        }
+
+        return entries.Count > 0 ? entries : null;
+    }
+
+    private static string ModeName(AgentQueueMode mode) =>
+        mode == AgentQueueMode.All ? "all" : "one-at-a-time";
+
+    private static AgentQueueMode? ParseMode(string? value) => value switch
+    {
+        "all" => AgentQueueMode.All,
+        "one-at-a-time" => AgentQueueMode.OneAtATime,
+        _ => null
+    };
+
+    private static TrustDefault? ParseTrust(string? value) => value switch
+    {
+        "always" => TrustDefault.Always,
+        "never" => TrustDefault.Never,
+        "ask" => TrustDefault.Ask,
+        _ => null
+    };
+
+    private static string? Text(JsonObject node, string key) =>
+        node[key] is JsonValue value && value.TryGetValue<string>(out var text) && text.Length > 0
+            ? text
+            : null;
+
+    private static bool? Bool(JsonObject node, string key) =>
+        node[key] is JsonValue value && value.TryGetValue<bool>(out var flag) ? flag : null;
+
+    /// <summary>
+    /// Reads a number written as int, long, or double. <c>TryGetValue&lt;double&gt;</c> alone misses
+    /// values a JSON writer stored as integers, which is most of them.
+    /// </summary>
+    private static int? Number(JsonObject node, string key)
+    {
+        if (node[key] is not JsonValue value)
+            return null;
+
+        if (value.TryGetValue<int>(out var integer))
+            return integer;
+
+        if (value.TryGetValue<long>(out var wide))
+            return (int)Math.Clamp(wide, int.MinValue, int.MaxValue);
+
+        if (value.TryGetValue<double>(out var real))
+            return (int)Math.Clamp(real, int.MinValue, int.MaxValue);
+
+        return null;
+    }
 }
 
 /// <summary>
@@ -133,17 +320,10 @@ public enum TrustDefault
 /// </summary>
 public sealed class AgentSettingsStore
 {
-    private static readonly JsonSerializerOptions ReadOptions = new()
+    private static readonly JsonDocumentOptions DocumentOptions = new()
     {
-        PropertyNameCaseInsensitive = true,
-        ReadCommentHandling = JsonCommentHandling.Skip,
+        CommentHandling = JsonCommentHandling.Skip,
         AllowTrailingCommas = true
-    };
-
-    private static readonly JsonSerializerOptions WriteOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
 
     private readonly string _userPath;
@@ -224,7 +404,7 @@ public sealed class AgentSettingsStore
 
         await File.WriteAllTextAsync(
             _userPath,
-            JsonSerializer.Serialize(current, WriteOptions),
+            current.ToJson().ToJsonString(new JsonSerializerOptions { WriteIndented = true }),
             cancellationToken).ConfigureAwait(false);
 
         Settings = current.WithFallback(AgentSettings.Defaults);
@@ -249,7 +429,9 @@ public sealed class AgentSettingsStore
             if (string.IsNullOrWhiteSpace(text))
                 return null;
 
-            return JsonSerializer.Deserialize<AgentSettings>(text, ReadOptions);
+            // JsonNode rather than JsonSerializer: the framework targets Native AOT, where
+            // reflection-based serialization is disabled outright.
+            return AgentSettings.FromJson(JsonNode.Parse(text, documentOptions: DocumentOptions));
         }
         catch (Exception ex) when (ex is IOException or JsonException or UnauthorizedAccessException)
         {

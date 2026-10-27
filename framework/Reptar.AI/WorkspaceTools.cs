@@ -109,12 +109,20 @@ public sealed class WorkspaceRoot(WorkspaceToolOptions options)
 
     internal WorkspaceToolOptions Options { get; } = options;
 
+    /// <summary>
+    /// Resolves a tool-supplied path against the workspace root, rejecting any escape.
+    /// </summary>
+    /// <remarks>
+    /// An empty path means the workspace root, not an error. Models pass <c>""</c> or
+    /// <c>"."</c> constantly when they mean "here", and rejecting the first turns a trivial
+    /// <c>list_dir</c> into a tool error the model then has to recover from.
+    /// </remarks>
     public string Resolve(string path)
     {
         var normalized = (path ?? "").Trim();
 
         if (normalized.Length == 0)
-            throw new InvalidOperationException("Path is empty.");
+            normalized = ".";
 
         var combined = Path.IsPathRooted(normalized)
             ? Path.GetFullPath(normalized)

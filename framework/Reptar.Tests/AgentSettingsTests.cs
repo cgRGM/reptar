@@ -164,6 +164,65 @@ public sealed class AgentSettingsTests : IDisposable
     }
 
     // ------------------------------------------------------------------
+    // Reflection-free JSON
+    // ------------------------------------------------------------------
+
+    [Fact]
+    public void settings_round_trip_without_reflection()
+    {
+        var original = new AgentSettings
+        {
+            Model = "llama3.1:8b",
+            Provider = "ollama",
+            Thinking = "high",
+            PromptCache = false,
+            AutocompleteMaxVisible = 8,
+            SteeringMode = AgentQueueMode.All,
+            DefaultProjectTrust = TrustDefault.Never,
+            Compaction = new CompactionSettings { Enabled = false, KeepRecentTokens = 1234, ReserveTokens = 567 },
+            Retry = new AgentRetryPolicy { MaxAttempts = 5, BaseDelay = TimeSpan.FromSeconds(3) },
+            ScopedModels = [new ScopedModel("ollama", "llama3.1:8b", "high")]
+        };
+
+        var restored = AgentSettings.FromJson(original.ToJson());
+
+        Assert.Equal("llama3.1:8b", restored.Model);
+        Assert.Equal("ollama", restored.Provider);
+        Assert.Equal("high", restored.Thinking);
+        Assert.False(restored.PromptCache);
+        Assert.Equal(8, restored.AutocompleteMaxVisible);
+        Assert.Equal(AgentQueueMode.All, restored.SteeringMode);
+        Assert.Equal(TrustDefault.Never, restored.DefaultProjectTrust);
+        Assert.False(restored.EffectiveCompaction.Enabled);
+        Assert.Equal(1234, restored.EffectiveCompaction.KeepRecentTokens);
+        Assert.Equal(5, restored.EffectiveRetry.MaxAttempts);
+        Assert.Equal(TimeSpan.FromSeconds(3), restored.EffectiveRetry.BaseDelay);
+
+        var scoped = Assert.Single(restored.ScopedModels!);
+        Assert.Equal("ollama", scoped.Provider);
+        Assert.Equal("high", scoped.Thinking);
+    }
+
+    [Fact]
+    public void a_malformed_field_falls_back_to_unset_rather_than_discarding_the_file()
+    {
+        var restored = AgentSettings.FromJson(
+            System.Text.Json.Nodes.JsonNode.Parse("{ \"model\": 42, \"provider\": \"ollama\" }"));
+
+        Assert.Null(restored.Model);
+        Assert.Equal("ollama", restored.Provider);
+    }
+
+    [Fact]
+    public void an_empty_document_yields_defaults()
+    {
+        var restored = AgentSettings.FromJson(null);
+
+        Assert.Null(restored.Model);
+        Assert.Null(restored.ScopedModels);
+    }
+
+    // ------------------------------------------------------------------
     // Describe
     // ------------------------------------------------------------------
 
