@@ -124,13 +124,44 @@ public readonly record struct AiToolCall(string Id, string Name, string Argument
 
 public sealed record AgentImage(string MimeType, string Base64Data);
 
+/// <summary>
+/// Provider-reported token accounting for one model response. Ported from pi's
+/// <c>Usage</c>: <see cref="ReasoningTokens"/> is already counted inside
+/// <see cref="OutputTokens"/>, so it must not be added again.
+/// </summary>
+public sealed record AgentUsage(
+    int InputTokens,
+    int OutputTokens,
+    int CacheReadTokens = 0,
+    int CacheWriteTokens = 0,
+    int? ReasoningTokens = null,
+    double Cost = 0)
+{
+    /// <summary>Everything the provider billed for this response.</summary>
+    public int TotalTokens => InputTokens + OutputTokens + CacheReadTokens + CacheWriteTokens;
+
+    /// <summary>True when the provider reported nothing usable (aborted or errored turn).</summary>
+    public bool IsEmpty => TotalTokens == 0;
+
+    public AgentUsage Add(AgentUsage other) => new(
+        InputTokens + other.InputTokens,
+        OutputTokens + other.OutputTokens,
+        CacheReadTokens + other.CacheReadTokens,
+        CacheWriteTokens + other.CacheWriteTokens,
+        (ReasoningTokens ?? 0) + (other.ReasoningTokens ?? 0) is var r && r == 0 ? null : r,
+        Cost + other.Cost);
+}
+
 public sealed record ChatMessage(
     string Role,
     string Content,
     string? Name = null,
     string? ToolCallId = null,
     IReadOnlyList<AiToolCall>? ToolCalls = null,
-    IReadOnlyList<AgentImage>? Images = null);
+    IReadOnlyList<AgentImage>? Images = null,
+    AgentUsage? Usage = null,
+    long Timestamp = 0,
+    AI.BashExecutionDetails? Bash = null);
 
 public sealed record AgentStep(
     string? Content,

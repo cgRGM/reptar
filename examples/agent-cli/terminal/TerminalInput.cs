@@ -13,7 +13,8 @@ public readonly record struct TermKey(
     char Ch = '\0',
     bool Ctrl = false,
     string? PastedText = null,
-    AgentImage? ClipboardImage = null)
+    AgentImage? ClipboardImage = null,
+    bool Shift = false)
 {
     public bool IsKey => PastedText is null && ClipboardImage is null;
 }
@@ -316,7 +317,8 @@ public static class TerminalInput
                     (byte)'H' => new TermKey(ConsoleKey.Home),
                     (byte)'F' => new TermKey(ConsoleKey.End),
                     (byte)'~' => ParseTilde(parameters.ToString()),
-                    (byte)'Z' => new TermKey(ConsoleKey.Tab),
+                    // CSI Z is Shift+Tab (back-tab). pi binds it to the thinking-level cycle.
+                    (byte)'Z' => new TermKey(ConsoleKey.Tab, Shift: true),
                     _ => new TermKey() // unknown CSI: consumed, ignored
                 };
             }

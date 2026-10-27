@@ -314,25 +314,29 @@ public sealed class AgentEngineTests : IDisposable
         var toolStarts = new List<string>();
         var toolEnds = new List<bool>();
 
-        var summary = await StreamingAgentHarness.RunAsync(
+        var summary = await AgentLoop.RunAsync(
             history,
+            new AgentLoopConfig
+            {
+                Model = "test",
+                MaxSteps = 6,
+                ToolExecutor = AgentToolExecutors.FromNameArgs(
+                    (name, args) => app.ExecuteAiToolAsync(name, args))
+            },
             Stream,
-            (name, args) => app.ExecuteAiToolAsync(name, args),
             app.GetAiTools(onlyExplicit: true),
-            maxSteps: 6,
-            model: "test",
             onEvent: evt =>
             {
                 switch (evt)
                 {
-                    case AgentEvent.TextDelta delta when delta.Step == 1:
-                        textDeltas.Append(delta.Text);
+                    case AgentEvent.MessageUpdate { Kind: AgentContentKind.Text } delta when delta.Step == 1:
+                        textDeltas.Append(delta.Delta);
                         break;
-                    case AgentEvent.ToolCallStarted call:
-                        toolStarts.Add(call.Name);
+                    case AgentEvent.ToolExecutionStart call:
+                        toolStarts.Add(call.ToolName);
                         break;
-                    case AgentEvent.ToolCallFinished call:
-                        toolEnds.Add(call.Success);
+                    case AgentEvent.ToolExecutionEnd call:
+                        toolEnds.Add(!call.IsError);
                         break;
                 }
             });
@@ -355,13 +359,17 @@ public sealed class AgentEngineTests : IDisposable
         var app = CreateApp();
         var history = new List<ChatMessage> { new("user", "loop forever") };
 
-        var summary = await StreamingAgentHarness.RunAsync(
+        var summary = await AgentLoop.RunAsync(
             history,
+            new AgentLoopConfig
+            {
+                Model = "test",
+                MaxSteps = 2,
+                ToolExecutor = AgentToolExecutors.FromNameArgs(
+                    (name, args) => app.ExecuteAiToolAsync(name, args))
+            },
             ScriptedStream,
-            (name, args) => app.ExecuteAiToolAsync(name, args),
-            app.GetAiTools(onlyExplicit: true),
-            maxSteps: 2,
-            model: "test");
+            app.GetAiTools(onlyExplicit: true));
 
         Assert.Equal(AgentStopReason.MaxSteps, summary.StopReason);
         Assert.Equal(2, summary.StepsTaken);
@@ -624,17 +632,20 @@ public sealed class AgentEngineTests : IDisposable
 
         var callCount = 0;
 
-        var summary = await StreamingAgentHarness.RunAsync(
+        var summary = await AgentLoop.RunAsync(
             history,
-            (m, t, c) => ++callCount == 1 ? Stream(m, t, c) : StreamFinal(m, t, c),
-            (name, args) =>
+            new AgentLoopConfig
             {
-                executions++;
-                return app.ExecuteAiToolAsync(name, args);
+                Model = "test",
+                MaxSteps = 4,
+                ToolExecutor = AgentToolExecutors.FromNameArgs((name, args) =>
+                {
+                    executions++;
+                    return app.ExecuteAiToolAsync(name, args);
+                })
             },
-            app.GetAiTools(onlyExplicit: true),
-            maxSteps: 4,
-            model: "test");
+            (m, t, c) => ++callCount == 1 ? Stream(m, t, c) : StreamFinal(m, t, c),
+            app.GetAiTools(onlyExplicit: true));
 
         Assert.Equal(1, executions);
         Assert.Equal(1, summary.ToolCallsExecuted);
@@ -1666,8 +1677,8 @@ public sealed class AgentEngineTests : IDisposable
 
         // The trace saw the full tool lifecycle with timings.
         var events = trace.Events;
-        Assert.Contains(events, e => e is AgentEvent.ToolCallStarted { Name: "todos_add" });
-        Assert.Contains(events, e => e is AgentEvent.ToolCallFinished { Success: true });
+        Assert.Contains(events, e => e is AgentEvent.ToolExecutionStart { ToolName: "todos_add" });
+        Assert.Contains(events, e => e is AgentEvent.ToolExecutionEnd { IsError: false });
         Assert.NotEmpty(trace.ToolTimings);
 
         // The JSONL observer produced one parseable line per event.

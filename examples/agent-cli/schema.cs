@@ -16,5 +16,5 @@ public static partial class Schema
         Col.Text("tool_calls"),
         Col.Text("created_at").DefaultSql("CURRENT_TIMESTAMP"));
 
-    public static readonly TableDef[] All = [Sessions!, Messages!];
+    public static readonly TableDef[] All = [Sessions!, Messages!, .. SessionTreeSchema.All];
 }

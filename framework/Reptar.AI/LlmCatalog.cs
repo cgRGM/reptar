@@ -79,7 +79,22 @@ public static class LlmCatalog
         string Name,
         long ContextTokens,
         double InputCostPerMillion = 0,
-        double OutputCostPerMillion = 0);
+        double OutputCostPerMillion = 0,
+        bool Reasoning = false,
+        bool Vision = false,
+        bool ToolCall = true,
+        IReadOnlyList<ThinkingLevel>? Thinking = null,
+        string? ReasoningKind = null,
+        int MaxOutputTokens = 0)
+    {
+        /// <summary>
+        /// Levels this model actually accepts. Empty when it does not reason. Derived from
+        /// models.dev's <c>reasoning_options</c>, which is the only authoritative source: a model
+        /// can be a reasoning model and still reject <c>xhigh</c>.
+        /// </summary>
+        public IReadOnlyList<ThinkingLevel> SupportedThinking =>
+            Thinking ?? (Reasoning ? ThinkingLevels.Supported(true) : [ThinkingLevel.Off]);
+    }
 
     /// <summary>
     /// Per-million-token pricing and context limit for a model, from models.dev.
@@ -138,9 +153,28 @@ public static class LlmCatalog
 
                 var name = model["name"]?.GetValue<string>() ?? modelId;
                 var context = model["limit"]?["context"]?.GetValue<long>() ?? 0;
+                var maxOutput = model["limit"]?["output"]?.GetValue<long>() ?? 0;
                 var inputCost = model["cost"]?["input"]?.GetValue<double>() ?? 0;
                 var outputCost = model["cost"]?["output"]?.GetValue<double>() ?? 0;
-                result.Add(new CuratedModel(modelId, name, context, inputCost, outputCost));
+
+                // models.dev puts these at the top level. Read there first, then fall back to a
+                // `capabilities` object in case the catalog generation moves them.
+                var caps = model["capabilities"] as JsonObject;
+                var reasoning = ReadBool(model, "reasoning") || (caps is not null && ReadBool(caps, "reasoning"));
+
+                var inputs = model["modalities"]?["input"] as JsonArray;
+                var vision = inputs is not null &&
+                    inputs.Any(node => string.Equals(node?.GetValue<string>(), "image", StringComparison.OrdinalIgnoreCase));
+
+                var toolCall = ReadBool(model, "tool_call",
+                    caps is not null ? ReadBool(caps, "tool_call", fallback: true) : true);
+
+                var (levels, kind) = ParseReasoningOptions(model["reasoning_options"], reasoning);
+
+                result.Add(new CuratedModel(
+                    modelId, name, context, inputCost, outputCost,
+                    reasoning, vision, toolCall, levels, kind,
+                    (int)Math.Min(int.MaxValue, maxOutput)));
             }
 
             return result.OrderBy(m => m.Name, StringComparer.OrdinalIgnoreCase).ToList();
@@ -150,6 +184,83 @@ public static class LlmCatalog
             return [];
         }
     }
+
+    /// <summary>
+    /// Turns models.dev's <c>reasoning_options</c> into the levels a model accepts, mirroring pi's
+    /// <c>getEffortThinkingLevelMap</c>.
+    /// </summary>
+    /// <remarks>
+    /// models.dev describes reasoning in three shapes:
+    /// <list type="bullet">
+    /// <item><c>toggle</c> — on or off, so the only levels are <c>off</c> and <c>high</c>.</item>
+    /// <item><c>effort</c> — an explicit list of accepted effort names. <c>off</c> is only offered
+    /// when the list contains <c>none</c>, because a model that cannot disable thinking would
+    /// otherwise silently ignore the request.</item>
+    /// <item><c>budget_tokens</c> — a numeric range, which maps onto the standard ladder.</item>
+    /// </list>
+    /// </remarks>
+    private static (IReadOnlyList<ThinkingLevel>? Levels, string? Kind) ParseReasoningOptions(
+        JsonNode? node,
+        bool reasoning)
+    {
+        if (!reasoning)
+            return ([ThinkingLevel.Off], null);
+
+        if (node is not JsonArray options || options.Count == 0)
+            return (null, null);
+
+        foreach (var entry in options)
+        {
+            if (entry is not JsonObject option)
+                continue;
+
+            var type = option["type"]?.GetValue<string>();
+
+            if (type == "toggle")
+                return ([ThinkingLevel.Off, ThinkingLevel.High], "toggle");
+
+            if (type == "budget_tokens")
+                return (ThinkingLevels.Supported(true), "budget_tokens");
+
+            if (type != "effort")
+                continue;
+
+            var values = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (option["values"] is JsonArray array)
+            {
+                foreach (var value in array)
+                {
+                    if (value is JsonValue scalar && scalar.TryGetValue<string>(out var name))
+                        values.Add(name);
+                }
+            }
+
+            if (values.Count == 0)
+                continue;
+
+            var levels = new List<ThinkingLevel>();
+
+            // "off" is only selectable when the provider accepts an explicit "none".
+            if (values.Contains("none"))
+                levels.Add(ThinkingLevel.Off);
+
+            foreach (var level in ThinkingLevels.All)
+            {
+                if (level == ThinkingLevel.Off)
+                    continue;
+
+                if (values.Contains(ThinkingLevels.Name(level)))
+                    levels.Add(level);
+            }
+
+            return (levels.Count > 0 ? levels : null, "effort");
+        }
+
+        return (null, null);
+    }
+
+    private static bool ReadBool(JsonObject node, string key, bool fallback = false) =>
+        node[key] is JsonValue value && value.TryGetValue<bool>(out var flag) ? flag : fallback;
 
     private static async Task<JsonObject?> FetchModelsDevAsync()
     {

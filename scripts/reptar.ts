@@ -291,6 +291,37 @@ const run = (args: string[], cwd = repoRoot): void => {
   }
 };
 
+/**
+ * Runs a file-based app with stdout reserved for the app itself.
+ *
+ * `dotnet run` writes build diagnostics to stdout, which corrupts any stdout
+ * protocol (the agent's `--mode rpc` JSONL stream is the motivating case).
+ * Build first with output diverted to stderr, then run with --no-build so the
+ * app owns stdout from its first byte. Mirrors pi's "stdout is protocol only,
+ * diagnostics go to stderr" contract.
+ */
+const runWithCleanStdout = (args: string[], cwd = repoRoot): void => {
+  const build = spawnSync(dotnetPath(), ["build", args[0], "-v", "q", "--nologo"], {
+    cwd,
+    env: dotnetEnv(),
+    stdio: ["ignore", "ignore", "inherit"],
+  });
+
+  if (build.status !== 0) {
+    process.exit(build.status ?? 1);
+  }
+
+  const result = spawnSync(
+    dotnetPath(),
+    ["run", ...args, "--no-build"],
+    { cwd, env: dotnetEnv(), stdio: "inherit" }
+  );
+
+  if (result.status !== 0) {
+    process.exit(result.status ?? 1);
+  }
+};
+
 const formatPaths = (paths: string[]): void => {
   const result = spawnSync(
     process.execPath,
@@ -1094,10 +1125,26 @@ Slash commands inside the session: /reset /history /tools /model /sessions
             (_, index) => index !== workspaceFlag && index !== workspaceFlag + 1
           );
 
-    run(
-      ["run", "app.cs", "--", "--workspace", workspace, ...passThrough],
-      path.join(repoRoot, "examples/agent-cli")
+    // RPC mode owns stdout for its JSONL protocol, so keep build noise off it.
+    const isRpc = passThrough.some(
+      (arg, index) =>
+        (arg === "--mode" && passThrough[index + 1] === "rpc") ||
+        arg === "--mode=rpc"
     );
+
+    const agentArgs = [
+      "app.cs",
+      "--",
+      "--workspace",
+      workspace,
+      ...passThrough,
+    ];
+
+    if (isRpc) {
+      runWithCleanStdout(agentArgs, path.join(repoRoot, "examples/agent-cli"));
+    } else {
+      run(["run", ...agentArgs], path.join(repoRoot, "examples/agent-cli"));
+    }
     break;
   }
 

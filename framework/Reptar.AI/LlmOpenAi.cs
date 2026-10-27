@@ -34,6 +34,11 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
         if (Config.MaxTokens > 0)
             body["max_tokens"] = Config.MaxTokens;
 
+        // Reasoning models take an effort hint rather than a token budget. Sending it to a model
+        // that does not reason is a 400, so it is only set when a level was asked for.
+        if (ThinkingLevels.EffortFor(Config.Thinking) is { Length: > 0 } effort)
+            body["reasoning_effort"] = effort;
+
         if (tools.Count > 0)
             body["tools"] = LlmHttp.BuildOpenAiTools(tools);
 
@@ -43,6 +48,8 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
         var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrEmpty(Config.ApiKey))
             headers["authorization"] = "Bearer " + Config.ApiKey;
+
+        ClientIdentity.Apply(headers, Config.ProviderKey, baseUrl, Config.Attribution, Config.SessionId);
 
         using var response = await LlmHttp.PostJsonAsync(
             endpoint, body, headers, Config.Timeout, cancellationToken).ConfigureAwait(false);

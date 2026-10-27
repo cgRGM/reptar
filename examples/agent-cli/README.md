@@ -72,7 +72,96 @@ The prompt is a pi-style line editor (raw ANSI, zero dependencies):
 **Root cause:** …
 ```
 
-Slash commands: `/reset` `/history` `/tools` `/model <p/m>` `/sessions` `/session <id>` `/new <title>` `/help` `/exit`. Ctrl+C cancels the current turn; press twice to quit.
+Slash commands: `/reset` `/history` `/tools` `/model <p/m>` `/sessions` `/session <id>` `/new <title>` `/compact [focus]` `/help` `/exit`.
+
+**The prompt stays live while the agent works.** Typing Enter during a run queues a
+*steering* message, delivered after the current turn's tool calls and before the next
+model request. Esc or Ctrl+C aborts the turn and returns you to the editor with the
+queue drained back into it — press Ctrl+C again to quit.
+
+The status ribbon shows context pressure (`45.2k/200k (23%)`) and running cost. `PgUp` /
+`PgDn` scroll the transcript. When context crosses the window minus the reserve, the
+agent compacts automatically: older messages are replaced by a structured checkpoint,
+the raw transcript stays on screen, and the session continues.
+
+## RPC Mode — use Reptar as an agent server
+
+```bash
+bun reptar agent --mode rpc            # JSONL on stdin/stdout
+```
+
+A long-lived process that speaks the same protocol shape as pi's RPC mode, so the C#
+TUI, the web SPA, and a client in any other language drive **one** agent implementation.
+
+```
+stdin   → {"id":"1","type":"prompt","message":"review this repo"}
+stdout  ← {"id":"1","type":"response","command":"prompt","success":true,"data":{"disposition":"started"}}
+stdout  ← {"type":"agent_start","maxSteps":24}
+stdout  ← {"type":"turn_start","step":1}
+stdout  ← {"type":"message_update","step":1,"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Sure"}}
+stdout  ← {"type":"tool_execution_start","step":1,"toolCallId":"c1","toolName":"read_file","args":{"path":"a.cs"}}
+stdout  ← {"type":"tool_execution_update","step":1,"toolCallId":"c1","partialResult":{...}}
+stdout  ← {"type":"tool_execution_end","step":1,"toolCallId":"c1","isError":false,"durationMs":3.1}
+stdout  ← {"type":"agent_end","stopReason":"completed","finalContent":"..."}
+stdout  ← {"type":"agent_settled","aborted":false}
+```
+
+Rules that matter when writing a client:
+
+- **Split records on LF only.** Do not use a line reader that also splits on `U+2028`/
+  `U+2029` — they are legal inside JSON strings.
+- **Correlate by `id`, not order.** Commands are handled asynchronously; a long prompt
+  never blocks the next command.
+- **`prompt` succeeding means accepted, not finished.** Wait for `agent_settled`;
+  retries, compaction, and steering can follow `agent_end`.
+- **stdout is protocol only.** Build diagnostics and logs go to stderr.
+
+Commands: `prompt` `steer` `follow_up` `abort` `clear_queue` `new_session` `get_state`
+`get_messages` `get_last_assistant_text` `set_model` `get_available_models`
+`set_steering_mode` `set_follow_up_mode` `set_auto_compaction` `set_auto_retry`
+`compact` `get_session_stats` `set_session_name` `bash` `shutdown`.
+
+### Clients
+
+The **C# client is first-class**: [`rpc/RpcClient.cs`](rpc/RpcClient.cs) spawns the server,
+correlates responses by id, decodes events through the same `AgentEventJson` the server
+writes, and exposes typed helpers.
+
+```bash
+bun reptar agent --rpc-demo "explain this repo"   # C# client → C# server, round trip
+```
+
+```csharp
+await using var rpc = RpcClient.Start(workspace: "/path/to/project");
+
+var result = await rpc.PromptAndWaitAsync(
+    "fix the failing test",
+    onText: delta => Console.Write(delta));
+
+Console.Error.WriteLine($"{result.Summary.StopReason} in {result.Summary.StepsTaken} steps");
+```
+
+Because the protocol is plain JSONL, any language works. This Python client is complete:
+
+```python
+import json, subprocess
+
+proc = subprocess.Popen(["bun", "reptar", "agent", "--mode", "rpc"],
+                        stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+proc.stdin.write(json.dumps({"id": "1", "type": "prompt",
+                             "message": "hello"}).encode() + b"\n")
+proc.stdin.flush()
+
+for line in proc.stdout:                      # binary read: splits on LF only
+    record = json.loads(line)
+    if record.get("type") == "message_update":
+        update = record["assistantMessageEvent"]
+        if update["type"] == "text_delta":
+            print(update["delta"], end="", flush=True)
+    elif record.get("type") == "agent_settled":
+        break
+```
 
 ## Workspace Tools (mounted by `app.UseWorkspaceTools`)
 
@@ -82,9 +171,13 @@ Slash commands: `/reset` `/history` `/tools` `/model <p/m>` `/sessions` `/sessio
 | `write_file` | Creates/overwrites files (auto-mkdirs) and returns a unified diff. |
 | `edit_file` | Exact string replacement (first match or all) with diff preview. |
 | `list_dir` | Recursive tree (depth 1–6) ignoring `.git`, `bin`, `obj`, `node_modules`, `.reptar`, `dist`. |
-| `run_command` | Runs shell commands in the workspace root with a clamped timeout. |
+| `run_command` | Runs shell commands in the workspace root with a clamped timeout. Streams output line-by-line while it runs. |
 
 Every path is resolved against the workspace root and **any escape is rejected** (`../../`, absolute paths outside the root). Tool calls dispatch **in-process** through `app.ExecuteAiToolAsync` — same route pipeline, same validation, zero HTTP overhead.
+
+Tool output is bounded, never silently clipped: `run_command` keeps the **tail** (that is
+where a failing build says why) capped at 2 000 lines / 50 KB, spills the full log to
+`.reptar/tool-output/`, and reports the path so the model can read it back.
 
 ## Web UI & API
 
@@ -123,6 +216,177 @@ curl -N -X POST localhost:4040/api/chat \
 ```
 
 The same endpoints work with `@reptar/client`'s typed `createClient()` in any frontend; the built-in SPA keeps everything in one binary by loading React from an ESM CDN with zero build step.
+
+## The SDK — five lines to an agent
+
+`framework/Reptar.AI/AgentSdk.cs` is the C# equivalent of pi's `createAgentSession`:
+
+```csharp
+await using var agent = await ReptarAgent.CreateAsync(new ReptarAgentOptions
+{
+    WorkspaceRoot = "/path/to/project",
+    AllowShell = true,
+    Tools = ToolSelection.Only("read_file", "edit_file", "*_dir"),
+});
+
+var summary = await agent.PromptAsync("fix the failing test", onText: Console.Write);
+Console.WriteLine($"{summary.StopReason} · {agent.Stats().ContextPercent}% context");
+```
+
+`CreateAsync` resolves the provider (flags → env → saved auth → echo), mounts the workspace
+tools, opens or resumes a session, applies the tool selection, and looks up the context window
+so auto-compaction works. `Attach` does the same over an app you already configured.
+
+**Tool selection** has three shapes, and the differences matter:
+
+| Shape | Meaning |
+| --- | --- |
+| `Only("read_file", "*_dir")` | Allowlist — nothing outside it is callable |
+| `AllExcept("run_command")` | Denylist, applied after the allowlist |
+| `Adjusting("+run_command", "-write_file")` | Not an allowlist — edits the default selection |
+
+Mixing bare names with `+`/`-` throws, because "only these" and "add this one" are contradictory.
+
+## Codemode — let the model write a script
+
+`framework/Reptar.AI/CodeMode.cs` registers a `codemode` tool: the model writes a small script
+that calls other tools, and **only the script's output enters the conversation**. That turns
+"find every TODO and group it by file" from dozens of context-filling tool calls into one turn.
+
+```csharp
+var agentTools = app.GetAiTools(onlyExplicit: true).ToList();
+var codemode = CodeMode.Register(app, agentTools);
+
+var prompt = mySystemPrompt + CodeMode.DescribeTools(agentTools);
+// agent tool list: agentTools.Append(codemode)
+```
+
+```
+let files = tools.list_dir({ path: ".", depth: 3 });
+foreach (let f in files.entries) {
+    if (f.type == "file" && f.path.endsWith(".cs")) {
+        let src = tools.read_file({ path: f.path });
+        if (src.content.includes("TODO")) { text(f.path); }
+    }
+}
+```
+
+pi runs JavaScript in a QuickJS VM. Reptar targets Native AOT and NetWasm, so there is no JS
+engine to embed — `ScriptInterpreter` is a hand-written interpreter for a C#-flavoured subset
+instead. Same capability model:
+
+- **Tools are the only way out.** No filesystem, no network, no timers, no `eval`.
+- **Only `text()`, `log()`, and the return value reach the model** — a script can read a 2 MB
+  log and hand back three lines.
+- **`spawn()` + `join()`** run tool calls concurrently inside one turn.
+- **Bounded three ways:** step budget, cancellation token, output cap. An infinite loop returns
+  `StepLimit`, not a hang.
+
+Lambdas work: `xs.filter((x) => x > 1)`, `xs.map(x => x * 2)`, block bodies, and closures that
+capture their defining scope.
+
+Not yet: `image()`, script-level key/value store (`store`/`load`).
+
+## MCP — every MCP server is a tool source
+
+`framework/Reptar.AI/McpClient.cs` speaks MCP over stdio: JSON-RPC 2.0, `initialize` →
+`tools/list` → `tools/call`.
+
+```csharp
+await using var source = await McpToolSource.ConnectAsync([
+    McpServerConfig.Npx("files", "@modelcontextprotocol/server-filesystem", "/tmp"),
+    McpServerConfig.Npx("github", "@modelcontextprotocol/server-github"),
+]);
+
+source.Mount(app);                                // tools become in-process Reptar routes
+var tools = app.GetAiTools(onlyExplicit: true);   // mcp__files__read_file, ...
+```
+
+Tools are namespaced `mcp__<server>__<tool>` (pi's convention), with `-` → `_` so the name is
+also a valid codemode identifier — MCP tools are therefore scriptable:
+
+```
+let hits = tools.mcp__files__search_files({ path: ".", pattern: "TODO" });
+text(hits.length);
+```
+
+A server that fails to start is reported and skipped; one bad server does not take the agent
+down. Only stdio transport is implemented.
+
+## Prompt templates
+
+Drop markdown files under `.reptar/prompts/` and they become slash commands:
+
+```markdown
+---
+description: Fix failing tests
+argument-hint: <path>
+---
+Look at $1 and make the tests pass. Run the suite before answering.
+```
+
+`/fix-tests src/storage.cs` expands to the body with `$1` substituted. Also supports `$@`,
+`$ARGUMENTS`, and `$0` (the template name). `/templates` lists what is loaded.
+
+Project templates shadow user templates. They only load when the workspace is **trusted** —
+see below.
+
+## Model aliases
+
+`--model fast` resolves through an alias instead of a full `provider/model` spec:
+
+```
+alias    model                        description
+fast     openai/gpt-4o-mini           Cheap and quick
+deep     anthropic/claude-sonnet-4-5  Stronger reasoning
+local    ollama/qwen2.5-coder         Runs on your machine
+offline  echo/echo                    Deterministic echo provider
+```
+
+`bun reptar agent --aliases` prints the table. Layer your own with `ModelAliases.Merge`.
+
+## Project trust
+
+An agent that reads `.reptar/settings.json` or `.agents/skills/*` from a directory it did not
+create will follow instructions someone else wrote. Cloning a repo should not execute that
+repo's configuration.
+
+So nothing project-local loads until the absolute path is trusted, and trust lives in
+`~/.reptar/trust.json` — never in the project. `Unknown` is not trust; a corrupt store fails
+closed. A directory with no agent resources auto-trusts so you are not prompted for nothing.
+
+## Durable Mode — crash-safe agent runs
+
+`framework/Reptar.AI/DurableAgent.cs` is a focused port of pi's `pi-durable` harness: the
+transcript and task state are committed **before** anything is reported, so a process that
+dies mid-turn resumes where it stopped instead of starting over.
+
+```csharp
+await using var harness = await DurableAgentHarness.OpenAsync(app, new DurableHarnessOptions
+{
+    Agent = new DurableAgentChoices { Model = "anthropic/claude-sonnet-4-5" }
+});
+
+var submission = await harness.SubmitAndRunAsync("migrate the storage layer", client);
+
+// After a crash, on the next process start:
+await harness.ResumeAsync(client);      // picks up orphaned tasks
+var again = await harness.SubmissionAsync(submission.Id);   // same submission
+```
+
+What it guarantees:
+
+- **Commit before reveal.** The submission and its input entry land in one transaction; a
+  crash either admits both or neither.
+- **Idempotent submits.** Re-submitting with the same `requestId` returns the original.
+- **Resume.** A task left `running` is marked `orphaned` on open and re-run. The transcript is
+  rebuilt *from storage*, so the resumed run sees exactly what the model saw.
+- **Per-turn checkpoints.** `AgentLoopConfig.FinishTurn` commits after every assistant turn
+  plus its tool results.
+- **Read-only observers.** `ReadOnly = true` refuses writes and task execution.
+
+Deliberately not ported yet: extensions, code mode, forks, child tasks, telemetry spans.
+`agent_entries.parent_id` is already there for branching.
 
 ## Session Persistence
 

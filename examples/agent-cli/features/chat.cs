@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 #if !NETWASM
@@ -26,9 +27,89 @@ public static class Chat
             var model = root?["model"]?.GetValue<string>();
             var client = LlmClientFactory.Create(LlmConfig.FromEnvironment(provider, model));
 
-            var events = RunStreaming(app, client, store, session, history, message, workspaceRoot);
+            AgentRunRegistry.Begin(session.Id, out var runToken);
+            var events = RunStreaming(
+                app, client, store, session, history, message, workspaceRoot, runToken);
             return ctx.StreamLlmAsync(events);
         }).WithSummary("Stream an agent reply over SSE");
+
+        // Steer a run that is already streaming. This is what makes the web client feel like the
+        // terminal: you can redirect the agent without waiting for it to stop.
+        app.Post("/api/chat/steer", ctx =>
+        {
+            var root = ParseBody(ctx);
+            var sessionId = root?["sessionId"]?.GetValue<string>() ?? "";
+            var message = root?["message"]?.GetValue<string>() ?? "";
+
+            if (message.Trim().Length == 0)
+                return ctx.BadRequest("Body field 'message' is required.");
+
+            if (!AgentRunRegistry.Steer(sessionId, message))
+                return ctx.Error(409, "no_active_run", "No run is streaming for that session.");
+
+            return ctx.JsonRaw("{\"ok\":true}");
+        }).WithSummary("Queue a steering message for a streaming run");
+
+        app.Post("/api/chat/abort", ctx =>
+        {
+            var root = ParseBody(ctx);
+            var sessionId = root?["sessionId"]?.GetValue<string>() ?? "";
+
+            if (!AgentRunRegistry.Abort(sessionId))
+                return ctx.Error(409, "no_active_run", "No run is streaming for that session.");
+
+            return ctx.JsonRaw("{\"ok\":true}");
+        }).WithSummary("Abort a streaming run");
+
+        app.Get("/api/chat/status/:sessionId", ctx =>
+        {
+            var sessionId = ctx.Param("sessionId");
+            var (running, elapsed) = AgentRunRegistry.Status(sessionId);
+
+            return ctx.JsonRaw(new JsonObject
+            {
+                ["running"] = running,
+                ["elapsedMs"] = Math.Round(elapsed, 1)
+            }.ToJsonString());
+        }).WithSummary("Whether a session is currently streaming");
+
+        // Compact on demand: the same checkpoint the terminal's /compact produces.
+        app.Post("/api/chat/compact", async ctx =>
+        {
+            var root = ParseBody(ctx);
+            var sessionId = root?["sessionId"]?.GetValue<string>() ?? "";
+            var instructions = root?["customInstructions"]?.GetValue<string>();
+
+            var session = sessionId.Length > 0
+                ? await store.FindSessionAsync(sessionId)
+                : await store.LatestSessionAsync();
+
+            if (session is null)
+                return ctx.Error(404, "not_found", "No session to compact.");
+
+            var history = await store.LoadMessagesAsync(session.Id);
+            var provider = root?["provider"]?.GetValue<string>();
+            var model = root?["model"]?.GetValue<string>();
+            var client = LlmClientFactory.Create(LlmConfig.FromEnvironment(provider, model));
+
+            var outcome = await ContextCompactor.CompactAsync(
+                history, client, CompactionSettings.Default, CompactionReason.Manual,
+                customInstructions: instructions);
+
+            if (outcome is null)
+                return ctx.Error(409, "nothing_to_compact", "Nothing worth compacting yet.");
+
+            var (result, projection) = outcome.Value;
+
+            return ctx.JsonRaw(new JsonObject
+            {
+                ["summary"] = result.Summary,
+                ["tokensBefore"] = result.TokensBefore,
+                ["estimatedTokensAfter"] = result.EstimatedTokensAfter,
+                ["projectedMessages"] = projection.Count
+            }.ToJsonString());
+        }).WithSummary("Compact the conversation into a checkpoint");
+
 
         app.Get("/api/sessions", async ctx =>
         {
@@ -343,7 +424,8 @@ public static class Chat
         AgentSessionRow session,
         List<ChatMessage> history,
         string message,
-        string workspaceRoot)
+        string workspaceRoot,
+        CancellationToken runToken)
     {
         history.Add(new ChatMessage("user", message));
         await store.AppendMessageAsync(session.Id, history[^1]);
@@ -365,11 +447,21 @@ public static class Chat
                     history,
                     systemPrompt: SystemPrompt(workspaceRoot),
                     maxSteps: 24,
+                    configure: config => config with
+                    {
+                        GetSteeringMessages = () => AgentRunRegistry.DrainSteering(session.Id)
+                    },
+                    cancellationToken: runToken,
                     onEvent: evt =>
                     {
+                        // Event names follow pi's JSON/RPC stream so a single client
+                        // implementation can consume the terminal, SSE, and JSONL modes.
                         switch (evt)
                         {
-                            case AgentEvent.TurnStarted turn:
+                            case AgentEvent.AgentStart:
+                                channel.Writer.TryWrite(Json(new JsonObject { ["type"] = "agent_start" }));
+                                break;
+                            case AgentEvent.TurnStart turn:
                                 step = turn.Step;
                                 channel.Writer.TryWrite(Json(new JsonObject
                                 {
@@ -377,29 +469,52 @@ public static class Chat
                                     ["step"] = step
                                 }));
                                 break;
-                            case AgentEvent.TextDelta delta:
-                                channel.Writer.TryWrite(JsonText("text", delta.Text, step));
+                            case AgentEvent.MessageUpdate { Kind: AgentContentKind.Text } delta:
+                                channel.Writer.TryWrite(JsonText("text", delta.Delta, step));
                                 break;
-                            case AgentEvent.ToolCallStarted call:
+                            case AgentEvent.MessageUpdate { Kind: AgentContentKind.Thinking } delta:
+                                channel.Writer.TryWrite(JsonText("thinking", delta.Delta, step));
+                                break;
+                            case AgentEvent.MessageEnd end:
                                 channel.Writer.TryWrite(Json(new JsonObject
                                 {
-                                    ["type"] = "tool_start",
+                                    ["type"] = "message_end",
                                     ["step"] = step,
-                                    ["id"] = call.Id,
-                                    ["name"] = call.Name,
+                                    ["role"] = end.Message.Role,
+                                    ["content"] = end.Message.Content,
+                                    ["toolCallId"] = end.Message.ToolCallId
+                                }));
+                                break;
+                            case AgentEvent.ToolExecutionStart call:
+                                channel.Writer.TryWrite(Json(new JsonObject
+                                {
+                                    ["type"] = "tool_execution_start",
+                                    ["step"] = step,
+                                    ["id"] = call.ToolCallId,
+                                    ["name"] = call.ToolName,
                                     ["args"] = call.ArgumentsJson
                                 }));
                                 break;
-                            case AgentEvent.ToolCallFinished call:
+                            case AgentEvent.ToolExecutionUpdate update:
                                 channel.Writer.TryWrite(Json(new JsonObject
                                 {
-                                    ["type"] = "tool_end",
+                                    ["type"] = "tool_execution_update",
                                     ["step"] = step,
-                                    ["id"] = call.Id,
-                                    ["name"] = call.Name,
-                                    ["success"] = call.Success,
+                                    ["id"] = update.ToolCallId,
+                                    ["name"] = update.ToolName,
+                                    ["partialResult"] = update.PartialResult
+                                }));
+                                break;
+                            case AgentEvent.ToolExecutionEnd call:
+                                channel.Writer.TryWrite(Json(new JsonObject
+                                {
+                                    ["type"] = "tool_execution_end",
+                                    ["step"] = step,
+                                    ["id"] = call.ToolCallId,
+                                    ["name"] = call.ToolName,
+                                    ["isError"] = call.IsError,
                                     ["result"] = call.Result.Length > 2000 ? call.Result[..2000] + "\n...(truncated)" : call.Result,
-                                    ["elapsedMs"] = Math.Round(call.ElapsedMs, 1)
+                                    ["durationMs"] = Math.Round(call.DurationMs, 1)
                                 }));
                                 break;
                             case AgentEvent.UsageReported usage:
@@ -411,11 +526,18 @@ public static class Chat
                                     ["outputTokens"] = usage.OutputTokens
                                 }));
                                 break;
-                            case AgentEvent.RunFailed failed:
+                            case AgentEvent.AgentError failed:
                                 channel.Writer.TryWrite(Json(new JsonObject
                                 {
                                     ["type"] = "error",
                                     ["message"] = failed.Message
+                                }));
+                                break;
+                            case AgentEvent.AgentSettled settled:
+                                channel.Writer.TryWrite(Json(new JsonObject
+                                {
+                                    ["type"] = "agent_settled",
+                                    ["aborted"] = settled.Aborted
                                 }));
                                 break;
                         }
@@ -454,6 +576,7 @@ public static class Chat
             }
             finally
             {
+                AgentRunRegistry.End(session.Id);
                 channel.Writer.TryComplete();
             }
         });

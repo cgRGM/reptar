@@ -150,9 +150,18 @@ public static class LoopRunner
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            lastRun = await StreamingAgentHarness.RunAsync(
-                history, stream, toolExecutor, tools,
-                maxStepsPerRun, model, onEvent, cancellationToken).ConfigureAwait(false);
+            lastRun = await AgentLoop.RunAsync(
+                history,
+                new AgentLoopConfig
+                {
+                    Model = model,
+                    MaxSteps = maxStepsPerRun,
+                    ToolExecutor = AgentToolExecutors.FromNameArgs(toolExecutor)
+                },
+                stream,
+                tools,
+                onEvent,
+                cancellationToken).ConfigureAwait(false);
 
             // The agent failed or was cancelled inside the harness — don't
             // loop a dead run.

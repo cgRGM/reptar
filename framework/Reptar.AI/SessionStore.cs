@@ -131,7 +131,7 @@ public sealed record AgentMessageRow(
         return new ChatMessage(Role, Content, ToolCalls: toolCalls);
     }
 
-    internal static string? SerializeToolCalls(IReadOnlyList<AiToolCall>? calls)
+    public static string? SerializeToolCalls(IReadOnlyList<AiToolCall>? calls)
     {
         if (calls is null || calls.Count == 0)
             return null;
@@ -150,8 +150,11 @@ public sealed record AgentMessageRow(
         return array.ToJsonString();
     }
 
-    private static IReadOnlyList<AiToolCall>? DeserializeToolCalls(string json)
+    public static IReadOnlyList<AiToolCall>? DeserializeToolCalls(string? json)
     {
+        if (string.IsNullOrEmpty(json))
+            return null;
+
         try
         {
             if (JsonNode.Parse(json) is not JsonArray array)

@@ -208,9 +208,17 @@ public sealed class BackgroundAgentsModule
                     new("user", taskText),
                 };
 
-                var summary = await StreamingAgentHarness.RunAsync(
-                    history, agent.Stream, agent.ExecuteTool, agent.Tools,
-                    agent.MaxSteps, model: $"background:{agent.Name}", onEvent: null,
+                var summary = await AgentLoop.RunAsync(
+                    history,
+                    new AgentLoopConfig
+                    {
+                        Model = $"background:{agent.Name}",
+                        MaxSteps = agent.MaxSteps,
+                        ToolExecutor = AgentToolExecutors.FromNameArgs(agent.ExecuteTool)
+                    },
+                    agent.Stream,
+                    agent.Tools,
+                    onEvent: null,
                     cancellationToken: default).ConfigureAwait(false);
 
                 record.Result.Value = summary.StopReason == AgentStopReason.Completed

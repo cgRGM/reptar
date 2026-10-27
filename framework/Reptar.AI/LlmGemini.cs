@@ -49,6 +49,8 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
             ["x-goog-api-key"] = Config.ApiKey ?? ""
         };
 
+        ClientIdentity.Apply(headers, Config.ProviderKey, baseUrl, Config.Attribution, Config.SessionId);
+
         using var response = await LlmHttp.PostJsonAsync(
             $"{baseUrl}/v1beta/models/{Config.Model}:streamGenerateContent?alt=sse",
             body, headers, Config.Timeout, cancellationToken).ConfigureAwait(false);

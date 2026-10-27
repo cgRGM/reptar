@@ -3,6 +3,32 @@ using System.Text;
 
 namespace Reptar.AI;
 
+/// <summary>
+/// Resolves the provider config for the CLI. A model spec may be an alias (<c>fast</c>), a
+/// <c>provider/model</c> pair, or a bare model id.
+/// </summary>
+public static class AgentConfigResolver
+{
+    public static LlmConfig Resolve(TerminalAgentOptions options)
+    {
+        if (options.Provider is null && options.Model is { Length: > 0 } spec)
+        {
+            var resolved = ModelAliases.Resolve(spec);
+
+            // A bare model id should keep whatever provider the environment selected, so only
+            // alias and provider/model specs bypass the environment lookup.
+            if (spec.Contains('/') || ModelAliases.Defaults.Any(a =>
+                    string.Equals(a.Name, spec, StringComparison.OrdinalIgnoreCase)))
+            {
+                return resolved with { Attribution = ClientIdentity.Reptar };
+            }
+        }
+
+        return LlmConfig.FromEnvironment(options.Provider, options.Model, options.BaseUrl)
+            with { Attribution = ClientIdentity.Reptar };
+    }
+}
+
 public sealed record TerminalAgentOptions
 {
     public string WorkspaceRoot { get; init; } = ".";
@@ -13,6 +39,9 @@ public sealed record TerminalAgentOptions
     public string? SystemPrompt { get; init; }
     public int MaxSteps { get; init; } = 24;
     public bool ShowToolCalls { get; init; } = true;
+
+    /// <summary>Show reasoning blocks. pi hides them behind a setting.</summary>
+    public bool ShowThinking { get; init; } = true;
     public string? ResumeSessionId { get; init; }
     public Func<string, string>? TitleNamer { get; init; } = null;
 }
@@ -23,7 +52,11 @@ public sealed record TerminalAgentOptions
 /// mounted Reptar AI tools, and persists the conversation when a session store
 /// is configured.
 /// </summary>
-public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, AgentSessionStore? store = null)
+public sealed class TerminalAgent(
+    ReptarApp app,
+    SessionTreeStore? tree,
+    TerminalAgentOptions options,
+    AgentSessionStore? store = null)
 {
     private readonly LlmAuthFile _auth = LlmAuthFile.LoadActive();
     private readonly WorkspaceRoot _workspace =
@@ -40,34 +73,34 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
     private double _inputCostPerMillion;
     private double _outputCostPerMillion;
 
-    private ILlmClient _client = LlmClientFactory.Create(LlmConfig.FromEnvironment(
-        options.Provider, options.Model, options.BaseUrl));
+    private ILlmClient _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(options));
 
     private AgentSessionRow? _session;
+    private int _persistedCount;
     private readonly List<ChatMessage> _history = [];
     private readonly AnsiMarkdown _markdown = new();
     private readonly CancellationTokenSource _shutdown = new();
+    private CancellationTokenSource? _turnCts;
     private bool _running = true;
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
     {
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token, cancellationToken);
-
         Console.CancelKeyPress += (_, args) =>
         {
             args.Cancel = true;
-            if (!_shutdown.IsCancellationRequested)
+
+            // First interrupt aborts the turn and returns to the editor (pi behaviour).
+            // Only when nothing is running does it mean quit.
+            var turn = Volatile.Read(ref _turnCts);
+            if (turn is not null && !turn.IsCancellationRequested)
             {
                 Ansi.WriteLine(Ansi.Yellow, "\ninterrupt: cancelling current turn (press ctrl+c again to exit)");
-                _shutdown.Cancel();
+                turn.Cancel();
+                return;
             }
-            else
-            {
-                _running = false;
-                _screen.Dispose();
-                TerminalInput.Deactivate();
-                Environment.Exit(0);
-            }
+
+            _running = false;
+            _shutdown.Cancel();
         };
 
         Ansi.Enable();
@@ -75,8 +108,8 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
         if (!Console.IsInputRedirected && !Console.IsOutputRedirected && Ansi.Enabled &&
             !string.Equals(Environment.GetEnvironmentVariable("REPTAR_CLI_MODE"), "line", StringComparison.OrdinalIgnoreCase))
         {
-            using var term = new ReptarTerm(app, options, store);
-            await term.RunAsync(linked.Token).ConfigureAwait(false);
+            using var term = new ReptarTerm(app, options, store, tree);
+            await term.RunAsync(cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -114,7 +147,7 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
 
         try
         {
-            await RunPromptLoopAsync(linked.Token).ConfigureAwait(false);
+            await RunPromptLoopAsync(cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -320,16 +353,28 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
         return _workspaceFiles;
     }
 
+    /// <summary>
+    /// Runs a shell command outside the model and records it in the transcript.
+    /// </summary>
+    /// <remarks>
+    /// <c>!cmd</c> is a bash-execution message: the model did not decide to run it, so it is not
+    /// a tool result, but it *is* conversation context — otherwise you cannot ask a follow-up
+    /// question about output you just saw. <c>!!cmd</c> keeps it on screen and out of context.
+    /// </remarks>
     private async Task RunShellPassthroughAsync(string command)
     {
         if (command.Length == 0)
             return;
 
-        Ansi.WriteLine(Ansi.Color(Ansi.Gray, $"! {command}"));
+        var excludeFromContext = command.StartsWith('!');
+        if (excludeFromContext)
+            command = command[1..].TrimStart();
+
+        Ansi.WriteLine(Ansi.Color(Ansi.Gray, $"{(excludeFromContext ? "!!" : "!")} {command}"));
         var result = await WorkspaceTools.RunCommandAsync(_workspace, command, 30_000).ConfigureAwait(false);
 
         if (result.TimedOut)
-            Ansi.WriteLine(Ansi.Yellow, $"  timed out after 30s");
+            Ansi.WriteLine(Ansi.Yellow, "  timed out after 30s");
 
         if (result.Stdout.Length > 0)
             Ansi.WriteLine(Ansi.Color(Ansi.Dim, Indent(result.Stdout)));
@@ -337,6 +382,21 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
             Ansi.WriteLine(Ansi.Color(Ansi.Yellow, Indent(result.Stderr)));
         if (result.Stdout.Length == 0 && result.Stderr.Length == 0)
             Ansi.WriteLine(Ansi.Color(Ansi.Gray, $"  exit {result.ExitCode}"));
+
+        var message = AgentMessages.BashExecution(
+            command,
+            result.Stdout,
+            result.Stderr,
+            result.ExitCode,
+            cancelled: result.TimedOut,
+            excludeFromContext: excludeFromContext);
+
+        _history.Add(message);
+
+        await PersistAsync(message).ConfigureAwait(false);
+
+        if (excludeFromContext)
+            Ansi.WriteLine(Ansi.Gray, "  (kept out of model context)");
 
         static string Indent(string text) =>
             string.Join("\n", text.Split('\n').Select(l => "  " + l));
@@ -526,72 +586,99 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
         }
 
         _history.Add(userMessage);
-        if (store is not null && _session is not null)
-            await store.AppendMessageAsync(_session.Id, userMessage).ConfigureAwait(false);
+        await PersistAsync(userMessage).ConfigureAwait(false);
+        _persistedCount = _history.Count;
 
         var pending = new StringBuilder();
-        var steps = 0;
 
-        var summary = await StreamingAgentHarness.RunAsync(
-            app,
-            _client,
-            _history,
-            systemPrompt: DefaultSystemPrompt(),
-            maxSteps: options.MaxSteps,
-            onEvent: evt =>
-            {
-                switch (evt)
+        // A fresh per-turn token so Ctrl+C aborts this turn without tearing down the REPL.
+        var turnCts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token, cancellationToken);
+        Volatile.Write(ref _turnCts, turnCts);
+
+        AgentRunSummary summary;
+        try
+        {
+            summary = await StreamingAgentHarness.RunAsync(
+                app,
+                _client,
+                _history,
+                systemPrompt: DefaultSystemPrompt(),
+                maxSteps: options.MaxSteps,
+                onEvent: evt =>
                 {
-                    case AgentEvent.TurnStarted turn:
-                        steps = turn.Step;
-                        break;
+                    switch (evt)
+                    {
+                        case AgentEvent.MessageUpdate { Kind: AgentContentKind.Text } delta:
+                            pending.Append(delta.Delta);
+                            FlushCompleteLines(pending);
+                            break;
 
-                    case AgentEvent.TextDelta delta:
-                        pending.Append(delta.Text);
-                        FlushCompleteLines(pending);
-                        break;
+                        case AgentEvent.UsageReported usage:
+                            _sessionInputTokens += usage.InputTokens;
+                            _sessionOutputTokens += usage.OutputTokens;
+                            _sessionCost +=
+                                usage.InputTokens / 1_000_000.0 * _inputCostPerMillion +
+                                usage.OutputTokens / 1_000_000.0 * _outputCostPerMillion;
+                            break;
 
-                    case AgentEvent.UsageReported usage:
-                        _sessionInputTokens += usage.InputTokens;
-                        _sessionOutputTokens += usage.OutputTokens;
-                        _sessionCost +=
-                            usage.InputTokens / 1_000_000.0 * _inputCostPerMillion +
-                            usage.OutputTokens / 1_000_000.0 * _outputCostPerMillion;
-                        break;
+                        case AgentEvent.ToolExecutionStart call when options.ShowToolCalls:
+                            FlushPending(pending);
+                            Ansi.WriteLine(Ansi.Color(
+                                Ansi.Color(Ansi.Cyan, "→ ") + Ansi.Color(Ansi.Yellow, call.ToolName) + " ",
+                                SummarizeArgs(call.ArgumentsJson)));
+                            break;
 
-                    case AgentEvent.ToolCallStarted call when options.ShowToolCalls:
-                        FlushPending(pending);
-                        Ansi.WriteLine(Ansi.Color(
-                            Ansi.Color(Ansi.Cyan, "→ ") + Ansi.Color(Ansi.Yellow, call.Name) + " ",
-                            SummarizeArgs(call.ArgumentsJson)));
-                        break;
-
-                    case AgentEvent.ToolCallFinished call when options.ShowToolCalls:
-                        var glyph = call.Success ? Ansi.Color(Ansi.Green, "✓") : Ansi.Color(Ansi.Red, "✗");
-                        var tail = call.ElapsedMs >= 1000
-                            ? $"{call.ElapsedMs / 1000.0:0.0}s"
-                            : $"{call.ElapsedMs:0}ms";
-                        Ansi.WriteLine(Ansi.Color(
-                            glyph + " " + Ansi.Color(Ansi.Yellow, call.Name) + " ",
-                            Ansi.Color(Ansi.Gray, tail)));
-                        break;
-                }
-            },
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+                        case AgentEvent.ToolExecutionEnd call when options.ShowToolCalls:
+                            var glyph = call.IsError ? Ansi.Color(Ansi.Red, "✗") : Ansi.Color(Ansi.Green, "✓");
+                            var tail = call.DurationMs >= 1000
+                                ? $"{call.DurationMs / 1000.0:0.0}s"
+                                : $"{call.DurationMs:0}ms";
+                            Ansi.WriteLine(Ansi.Color(
+                                glyph + " " + Ansi.Color(Ansi.Yellow, call.ToolName) + " ",
+                                Ansi.Color(Ansi.Gray, tail)));
+                            break;
+                    }
+                },
+                cancellationToken: turnCts.Token).ConfigureAwait(false);
+        }
+        finally
+        {
+            Volatile.Write(ref _turnCts, null);
+            turnCts.Dispose();
+        }
 
         FlushPending(pending);
 
         if (pending.Length == 0 && summary.StopReason is AgentStopReason.Completed or AgentStopReason.MaxSteps)
             Console.WriteLine();
 
-        if (store is not null && _session is not null)
+        if (summary.StopReason == AgentStopReason.Cancelled)
+            Ansi.WriteLine(Ansi.Gray, "cancelled.");
+
+        // Persist everything the run appended: assistant turns and tool results both belong in
+        // the tree, and the tree is what /tree and /fork read.
+        for (var i = _persistedCount; i < _history.Count; i++)
         {
-            var last = _history.LastOrDefault(m => m.Role == "assistant");
-            if (last is not null)
-                await store.AppendMessageAsync(_session.Id, last).ConfigureAwait(false);
+            var message = _history[i];
+            if (message.Role is AgentRoles.Assistant or AgentRoles.Tool)
+                await PersistAsync(message).ConfigureAwait(false);
         }
 
+        _persistedCount = _history.Count;
+
         return summary;
+    }
+
+    /// <summary>Appends to the tree when configured, else to the flat table.</summary>
+    private async Task PersistAsync(ChatMessage message)
+    {
+        if (_session is null)
+            return;
+
+        if (tree is not null)
+            await tree.AppendAsync(_session.Id, message, store?.PersistFilter).ConfigureAwait(false);
+        else if (store is not null)
+            await PersistAsync(message).ConfigureAwait(false);
     }
 
     private async Task StartSessionAsync()
@@ -721,8 +808,48 @@ public sealed class TerminalAgent(ReptarApp app, TerminalAgentOptions options, A
 
                 _session = target;
                 _history.Clear();
-                _history.AddRange(store.LoadMessagesAsync(target.Id).GetAwaiter().GetResult());
+                if (tree is not null)
+                    tree.ImportFlatAsync(target.Id, store.Messages).GetAwaiter().GetResult();
+
+                _history.AddRange(tree is not null
+                    ? tree.LoadBranchAsync(target.Id).GetAwaiter().GetResult()
+                    : store.LoadMessagesAsync(target.Id).GetAwaiter().GetResult());
                 Ansi.WriteLine(Ansi.Green, $"✓ Resumed {target.Id} — {_history.Count} message(s).");
+                return true;
+
+            case "/tree":
+                if (tree is null || _session is null)
+                {
+                    Ansi.WriteLine(Ansi.Gray, "Session tree is not available.");
+                    return true;
+                }
+
+                Ansi.WriteLine(Ansi.Gray,
+                    tree.DescribeTreeAsync(_session.Id).GetAwaiter().GetResult());
+                return true;
+
+            case "/fork":
+                if (tree is null || store is null || _session is null)
+                {
+                    Ansi.WriteLine(Ansi.Gray, "Forking is not available.");
+                    return true;
+                }
+
+                var forked = store.CreateSessionAsync(
+                    (_session.Title ?? "session") + " (fork)").GetAwaiter().GetResult();
+
+                if (!tree.ForkAsync(_session.Id, forked.Id).GetAwaiter().GetResult())
+                {
+                    store.DeleteSessionAsync(forked.Id).GetAwaiter().GetResult();
+                    Ansi.WriteLine(Ansi.Gray, "Nothing to fork yet.");
+                    return true;
+                }
+
+                _session = forked;
+                _history.Clear();
+                _history.AddRange(tree.LoadBranchAsync(forked.Id).GetAwaiter().GetResult());
+                Ansi.WriteLine(Ansi.Green,
+                    $"✓ Forked into {forked.Id} — {_history.Count} message(s) carried over.");
                 return true;
 
             case "/new":

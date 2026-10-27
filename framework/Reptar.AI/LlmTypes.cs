@@ -39,6 +39,43 @@ public sealed record LlmConfig
     public int MaxTokens { get; init; } = 4096;
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// Ask the provider to cache the static prefix (system prompt plus tool definitions).
+    /// Honoured by Anthropic, where that prefix is re-sent on every turn of a session and a cached
+    /// read costs a tenth of a normal input token. Ignored by providers that cache automatically.
+    /// </summary>
+    public bool PromptCache { get; init; } = true;
+
+    /// <summary>
+    /// Reasoning effort for models that support it. Providers that do not reason ignore this;
+    /// <see cref="ThinkingLevels.Supported"/> decides what a given model offers.
+    /// </summary>
+    public ThinkingLevel Thinking { get; init; } = ThinkingLevel.Off;
+
+    /// <summary>
+    /// The model's context window, when known. Used to clamp <c>max_tokens</c> to the space
+    /// actually left; 0 means unknown and disables the clamp.
+    /// </summary>
+    public int ContextWindow { get; init; }
+
+    /// <summary>
+    /// The model's response ceiling, when known. A thinking budget has to fit inside it, so an
+    /// invented value either wastes capability or produces a 400.
+    /// </summary>
+    public int MaxOutputTokens { get; init; }
+
+    /// <summary>
+    /// How requests identify this app to the provider. Null sends no attribution headers, which
+    /// is the right default for a library; the SDK sets <see cref="ClientIdentity.Reptar"/>.
+    /// </summary>
+    public ClientAttribution? Attribution { get; init; }
+
+    /// <summary>
+    /// Provider-facing session id. Forwarded to OpenCode so its prompt cache stays warm across
+    /// turns, and ignored by providers that do not use one.
+    /// </summary>
+    public string? SessionId { get; init; }
+
     public string DisplayName =>
         $"{(ProviderKey.Length > 0 ? ProviderKey : Provider.ToString().ToLowerInvariant())}/{Model}";
 
@@ -297,7 +334,11 @@ public abstract record LlmStreamEvent
     public sealed record ReasoningDelta(string Text) : LlmStreamEvent;
     public sealed record ToolCallDelta(int Index, string? Id, string? Name, string ArgumentsJson) : LlmStreamEvent;
     public sealed record ToolCall(string Id, string Name, string ArgumentsJson) : LlmStreamEvent;
-    public sealed record Usage(int InputTokens, int OutputTokens) : LlmStreamEvent;
+    public sealed record Usage(
+        int InputTokens,
+        int OutputTokens,
+        int CacheReadTokens = 0,
+        int CacheWriteTokens = 0) : LlmStreamEvent;
     public sealed record Completed(string? FinishReason) : LlmStreamEvent;
     public sealed record Failed(string Message) : LlmStreamEvent;
 }
@@ -334,7 +375,7 @@ public static class LlmClientFactory
         Create(LlmConfig.FromEnvironment(provider, model));
 }
 
-internal static class LlmHttp
+public static class LlmHttp
 {
     internal static readonly HttpClient Client = new()
     {
@@ -408,6 +449,35 @@ internal static class LlmHttp
 
     public static JsonArray BuildAnthropicTools(IReadOnlyList<AiToolDefinition> tools) =>
         ToArray(tools, AiToolFormat.Anthropic);
+
+    /// <summary>
+    /// Same tool array with a cache breakpoint on the last entry, so the whole tool block is
+    /// cached. Anthropic allows at most four breakpoints per request; the system prompt uses one
+    /// and this uses another.
+    /// </summary>
+    public static JsonArray BuildAnthropicToolsCached(IReadOnlyList<AiToolDefinition> tools)
+    {
+        var array = ToArray(tools, AiToolFormat.Anthropic);
+
+        if (array.Count > 0 && array[^1] is JsonObject last)
+            last["cache_control"] = new JsonObject { ["type"] = "ephemeral" };
+
+        return array;
+    }
+
+    /// <summary>
+    /// Wraps a system prompt as a cacheable content block. Returns the plain string form when
+    /// caching is off so the request shape stays minimal.
+    /// </summary>
+    public static JsonNode BuildAnthropicSystem(string systemText, bool cache) =>
+        cache
+            ? new JsonArray(new JsonObject
+            {
+                ["type"] = "text",
+                ["text"] = systemText,
+                ["cache_control"] = new JsonObject { ["type"] = "ephemeral" }
+            })
+            : JsonValue.Create(systemText)!;
 
     public static JsonArray BuildGeminiTools(IReadOnlyList<AiToolDefinition> tools)
     {
