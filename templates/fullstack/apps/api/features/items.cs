@@ -47,6 +47,7 @@ public static class ItemsFeature
             })
             .Produces<Item>(201)
             .Produces<ValidationError>(400)
+            .Produces<ErrorBody>(401)
             // One line exports this route to OpenAI/Anthropic/Gemini tool schemas.
             .AsAiTool("create_item", "Create an item for the signed-in user");
 
@@ -68,6 +69,8 @@ public static class ItemsFeature
                 ? ctx.Json(new ActionSuccessResponse(true))
                 : ctx.NotFound("Item not found.");
         })
-        .Produces<ActionSuccessResponse>(200);
+        .Produces<ActionSuccessResponse>(200)
+        .Produces<ErrorBody>(401)
+        .Produces<ErrorBody>(404);
     }
 }

@@ -176,11 +176,13 @@ const run = async (): Promise<void> => {
     "../../.."
   );
   const frameworkDir = path.join(repoRoot, "framework");
-  const inRepo =
-    existsSync(path.join(frameworkDir, "Reptar", "Reptar.csproj")) &&
-    targetDir.startsWith(repoRoot + path.sep);
+  // Source availability belongs to the CLI's installation, not the target's
+  // ancestry. External projects must not silently select unpublished NuGet packages.
+  const sourceFrameworkAvailable = existsSync(
+    path.join(frameworkDir, "Reptar", "Reptar.csproj")
+  );
 
-  if (inRepo) {
+  if (sourceFrameworkAvailable) {
     console.log(
       "   • Build mode: file-based (#:project) against the in-repo framework"
     );
@@ -196,7 +198,7 @@ const run = async (): Promise<void> => {
   const options: ScaffoldOptions = {
     auth: config.auth,
     database: config.database,
-    frameworkDir: inRepo ? frameworkDir : undefined,
+    frameworkDir: sourceFrameworkAvailable ? frameworkDir : undefined,
     projectName: config.projectName,
     targetDir,
     template: config.template,

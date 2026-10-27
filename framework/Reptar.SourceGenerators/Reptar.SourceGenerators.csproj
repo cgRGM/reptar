@@ -1,5 +1,12 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk" TreatAsLocalProperty="PublishAot;PublishTrimmed;SelfContained;RuntimeIdentifier">
   <PropertyGroup>
+    <!-- Roslyn loads this build-time analyzer as IL, even when its consumer is
+         published as a self-contained Native AOT executable. Restore graph
+         evaluation can propagate consumer globals past ProjectReference metadata. -->
+    <PublishAot>false</PublishAot>
+    <PublishTrimmed>false</PublishTrimmed>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier />
     <TargetFramework>netstandard2.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
