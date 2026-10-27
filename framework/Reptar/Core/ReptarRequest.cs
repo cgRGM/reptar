@@ -89,16 +89,16 @@ public sealed class ReptarRequest
         {
             var index = pair.IndexOf('=');
 
-            if (index < 0)
-            {
-                if (pair == name)
-                    return "";
-
+            var encodedName = index < 0 ? pair : pair[..index];
+            // URLSearchParams/form encoding uses '+' for spaces. Replace
+            // before percent-decoding so a literal %2B remains a plus.
+            var decodedName = Uri.UnescapeDataString(encodedName.Replace('+', ' '));
+            if (decodedName != name)
                 continue;
-            }
 
-            if (pair[..index] == name)
-                return Uri.UnescapeDataString(pair[(index + 1)..]);
+            return index < 0
+                ? ""
+                : Uri.UnescapeDataString(pair[(index + 1)..].Replace('+', ' '));
         }
 
         return null;

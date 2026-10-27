@@ -1243,9 +1243,10 @@ public sealed class ReptarApp
         foreach (var cookie in ctx.Cookies.Pending)
             response.SetCookies.Add(cookie);
 
-        if (request.Method.Length == 4 &&
-            string.Equals(request.Method, "HEAD", StringComparison.OrdinalIgnoreCase) &&
-            (response.Body is not null || response.BodyStream is not null))
+        var statusHasNoBody = response.Status is 204 or 205 or 304;
+        var isHead = request.Method.Length == 4 &&
+            string.Equals(request.Method, "HEAD", StringComparison.OrdinalIgnoreCase);
+        if (statusHasNoBody || (isHead && (response.Body is not null || response.BodyStream is not null)))
         {
             var head = new ReptarResponse
             {
@@ -1258,7 +1259,13 @@ public sealed class ReptarApp
 
             head.SetCookies.AddRange(response.SetCookies);
 
-            if (response.Body is { } headBody &&
+            // RFC 9110: 204 must not send Content-Length; 205 is explicitly
+            // zero-length. A declared representation length is permitted on 304.
+            if (response.Status == 204)
+                head.Headers.Remove("Content-Length");
+            else if (response.Status == 205)
+                head.Headers["Content-Length"] = "0";
+            else if (!statusHasNoBody && response.Body is { } headBody &&
                 !head.Headers.ContainsKey("Content-Length"))
             {
                 head.Headers["Content-Length"] =
