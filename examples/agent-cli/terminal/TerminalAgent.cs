@@ -508,7 +508,7 @@ public sealed class TerminalAgent(
                 bar.Append("  ·  ").Append(Ansi.Color(Ansi.Green, $"${_sessionCost:0.###}"));
         }
 
-        bar.Append(Ansi.Color(Ansi.Gray, "  ·  ctrl+p palette"));
+        bar.Append(Ansi.Color(Ansi.Gray, "  ·  ctrl+k palette · ctrl+p model"));
 
         return bar.ToString();
     }

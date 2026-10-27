@@ -23,7 +23,10 @@ public enum TermOverlay
     Settings = 3,
 
     /// <summary>The session tree, for moving the leaf between branches (<c>/tree</c>).</summary>
-    Tree = 4
+    Tree = 4,
+
+    /// <summary>Which models <c>Ctrl+P</c> cycles through (<c>/scoped-models</c>).</summary>
+    ScopedModels = 5
 }
 
 /// <summary>
@@ -64,8 +67,6 @@ public sealed class ReptarTerm : IDisposable
     private AgentSessionRow? _session;
     private readonly List<ChatMessage> _messages = [];
     private readonly List<AgentSessionRow> _sessionsList = [];
-    private int _selectedSessionIdx = 0;
-    private int _selectedToolIdx = 0;
 
     // Execution / streaming state.
     //
@@ -155,6 +156,12 @@ public sealed class ReptarTerm : IDisposable
 
     /// <summary>Auth-method selector shown first by <c>/connect</c>.</summary>
     private TermSelector? _authSelector;
+
+    /// <summary>Saved-session picker.</summary>
+    private TermSelector? _sessionSelector;
+
+    /// <summary>Model-scope editor for <c>Ctrl+P</c> cycling.</summary>
+    private TermSelector? _scopeSelector;
     private int _selectedProviderIdx;
 
     /// <summary>Searchable model list, built from configured providers only.</summary>
@@ -179,8 +186,10 @@ public sealed class ReptarTerm : IDisposable
             ProviderStage.Models => _modelSelector,
             _ => null
         },
+        TermOverlay.Sessions => _sessionSelector,
         TermOverlay.Settings => _settingsSelector,
         TermOverlay.Tree => _treeSelector,
+        TermOverlay.ScopedModels => _scopeSelector,
         _ => null
     };
 
@@ -478,7 +487,21 @@ public sealed class ReptarTerm : IDisposable
                 {
                     AbortAgent();
                 }
-                else if (key.Ctrl && key.Key == ConsoleKey.P)
+                else if (key.Ctrl && key.Key == ConsoleKey.P && !key.Shift)
+                {
+                    // pi binds ctrl+p to cycling the scoped models, not to a command palette.
+                    CycleModel(forward: true);
+                }
+                else if (key.Ctrl && key.Shift && key.Key == ConsoleKey.P)
+                {
+                    CycleModel(forward: false);
+                }
+                else if (key.Ctrl && key.Key == ConsoleKey.L)
+                {
+                    OpenModelCatalog();
+                    _dirty = true;
+                }
+                else if (key.Ctrl && key.Key == ConsoleKey.K)
                 {
                     _showPalette = !_showPalette;
                     _paletteFilter = "";
@@ -606,6 +629,7 @@ public sealed class ReptarTerm : IDisposable
             {
                 _ = ForkSessionAsync();
             }),
+            new("scoped-models", "/scoped-models", "Choose the models Ctrl+P cycles through", OpenScopedModels),
             new("settings", "/settings", "Open the settings menu", OpenSettingsMenu),
             new("help", "/help", "Show tips and shortcuts", () => { ShowHelpMessage(); }),
             new("exit", "/exit", "Quit ReptarTerm", () => { _running = false; }),
@@ -674,7 +698,8 @@ public sealed class ReptarTerm : IDisposable
             "**Completion**\n" +
             "• `/` — command list; `Tab` or `Enter` completes the name, then `Enter` submits\n" +
             "• `@` — attach a workspace file (text inlines, images attach as vision)\n" +
-            "• `Ctrl+P` — searchable command palette\n" +
+            "• `Ctrl+P` — cycle to the next model in scope (`/scoped-models` to choose) \n" +
+            "• `Ctrl+L` — open the model picker · `Ctrl+K` — command palette\n" +
             "• `Ctrl+O` — show or hide loaded resources (skills, context, conflicts)\n" +
             "• `Shift+Tab` — cycle reasoning effort (off → minimal → low → medium → high)\n\n" +
             "**Commands**\n" +
@@ -683,6 +708,7 @@ public sealed class ReptarTerm : IDisposable
             "• `/providers` — credential status table\n" +
             "• `/sessions` — switch session · `/new` — start one · `/clear` — clear this one\n" +
             "• `/tools` — mounted tool list · `/templates` — prompt templates\n" +
+            "• `/scoped-models` — choose what `Ctrl+P` cycles through\n" +
             "• `/compact [focus]` — checkpoint the context now\n" +
             "• `/help` — this · `/exit` — quit"));
     }
@@ -821,6 +847,61 @@ public sealed class ReptarTerm : IDisposable
         };
 
         return $"{role}: {text}";
+    }
+
+    /// <summary>
+    /// <c>/scoped-models</c>: choose the models <c>Ctrl+P</c> cycles through. Enter toggles a
+    /// model in or out of the scope; with nothing in scope, cycling walks every available model,
+    /// which stops being useful once a provider offers a few hundred.
+    /// </summary>
+    /// <summary>Adds or removes one model from the cycling scope and persists it.</summary>
+    private async Task ToggleScopeAsync(CatalogModelItem model)
+    {
+        var current = _settings.Settings.ScopedModels ?? [];
+        var existing = current.FirstOrDefault(entry =>
+            string.Equals(entry.Provider, model.ProviderKey, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(entry.Model, model.ModelId, StringComparison.OrdinalIgnoreCase));
+
+        IReadOnlyList<ScopedModel> next = existing is null
+            ? [.. current, new ScopedModel(model.ProviderKey, model.ModelId)]
+            : [.. current.Where(entry => !ReferenceEquals(entry, existing))];
+
+        await _settings.SaveUserAsync(settings => settings with { ScopedModels = next })
+            .ConfigureAwait(false);
+
+        OpenScopedModels();
+    }
+
+    private void OpenScopedModels()
+    {
+        var scoped = _settings.Settings.ScopedModels ?? [];
+        var inScope = scoped
+            .Select(entry => (entry.Provider, entry.Model))
+            .ToHashSet();
+
+        var items = _catalog.Select(model => new TermSelectorItem(
+            model.ModelId,
+            model.ProviderDisplayName,
+            inScope.Contains((model.ProviderKey, model.ModelId)) ? "✓ in scope" : "",
+            inScope.Contains((model.ProviderKey, model.ModelId)),
+            "Enter toggles this model in or out of the Ctrl+P cycle.",
+            model));
+
+        if (_scopeSelector is null)
+            _scopeSelector = new TermSelector("Models in the Ctrl+P cycle", items, Math.Max(6, ComposerRow - 12));
+        else
+            _scopeSelector.SetItems(items);
+
+        _scopeSelector.Notice = scoped.Count == 0
+            ? "Nothing in scope — Ctrl+P currently walks every available model."
+            : $"{scoped.Count} model(s) in scope.";
+
+        _scopeSelector.Hint = "Type to search · Enter toggle · Esc done";
+
+        _overlay = TermOverlay.ScopedModels;
+        _input = "";
+        _inputCursor = 0;
+        _dirty = true;
     }
 
     private void OpenSettingsMenu()
@@ -1091,6 +1172,64 @@ public sealed class ReptarTerm : IDisposable
     /// credentials, and closes the overlay.
     /// </summary>
     /// <summary>
+    /// Models reachable by cycling: the configured scope, filtered to what is actually available.
+    /// An empty scope falls back to every configured model, which is what pi does — but a scope
+    /// is the point once a provider offers a few hundred models.
+    /// </summary>
+    private List<CatalogModelItem> CycleScope()
+    {
+        var scoped = _settings.Settings.ScopedModels;
+
+        if (scoped is not { Count: > 0 })
+            return [.. _catalog];
+
+        var wanted = scoped
+            .Select(entry => (entry.Provider, entry.Model))
+            .ToHashSet();
+
+        return [.. _catalog.Where(model => wanted.Contains((model.ProviderKey, model.ModelId)))];
+    }
+
+    /// <summary>
+    /// Ctrl+P: step to the next model in scope, applying that entry's thinking level.
+    /// </summary>
+    private void CycleModel(bool forward)
+    {
+        var scope = CycleScope();
+
+        if (scope.Count <= 1)
+        {
+            _statusNote = scope.Count == 0
+                ? "no models available — /connect to add a provider"
+                : "only one model in scope — /scoped-models to add more";
+            _dirty = true;
+            return;
+        }
+
+        var current = scope.FindIndex(model =>
+            string.Equals(model.ModelId, _client.Config.Model, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(model.ProviderKey, _client.Config.ProviderKey, StringComparison.OrdinalIgnoreCase));
+
+        var next = forward
+            ? (current + 1) % scope.Count
+            : (current <= 0 ? scope.Count - 1 : current - 1);
+
+        var target = scope[next];
+
+        // A scoped entry may carry its own thinking level; clamp it to what the model supports.
+        var requested = _settings.Settings.ScopedModels?
+            .FirstOrDefault(entry =>
+                string.Equals(entry.Provider, target.ProviderKey, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(entry.Model, target.ModelId, StringComparison.OrdinalIgnoreCase))
+            ?.Thinking;
+
+        var level = ThinkingLevels.Parse(requested) ?? _thinking;
+
+        ActivateProvider(target.ProviderKey, target.ModelId, level);
+        _statusNote = $"model {next + 1}/{scope.Count}";
+    }
+
+    /// <summary>
     /// Levels the active model offers. A model that does not reason offers only <c>off</c>, which
     /// is why the footer can say "thinking off" instead of hiding the control.
     /// </summary>
@@ -1131,16 +1270,27 @@ public sealed class ReptarTerm : IDisposable
         _dirty = true;
     }
 
-    private void ActivateProvider(string providerKey, string modelId)
+    private void ActivateProvider(string providerKey, string modelId) =>
+        ActivateProvider(providerKey, modelId, _thinking);
+
+    /// <summary>
+    /// Switches to a provider and model, optionally setting the thinking level at the same time.
+    /// Cycling passes the level from the scope entry so a cheap model does not inherit the deep
+    /// model's reasoning budget.
+    /// </summary>
+    private void ActivateProvider(string providerKey, string modelId, ThinkingLevel thinking)
     {
         var provider = LlmProviders.Find(providerKey);
         var display = provider?.DisplayName ?? providerKey;
 
+        _thinking = thinking;
+
         _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(
-            _options with { Provider = providerKey, Model = modelId }));
+            _options with { Provider = providerKey, Model = modelId }) with { Thinking = thinking });
 
         _auth.SetDefault(providerKey);
         _ = _settings.SaveModelAsync(providerKey, modelId);
+        _ = _settings.SaveThinkingAsync(thinking);
 
         _keyInputActive = false;
         _keyInputBuffer = "";
@@ -1268,10 +1418,8 @@ public sealed class ReptarTerm : IDisposable
             case TermOverlay.None:
                 await HandleChatKeyAsync(key).ConfigureAwait(false);
                 break;
-            case TermOverlay.Sessions:
-                await HandleSessionsKeyAsync(key).ConfigureAwait(false);
-                break;
             case TermOverlay.Providers:
+                // Only the key-entry stage reaches here; the list stages are selectors.
                 HandleProvidersKey(key);
                 break;
         }
@@ -1440,7 +1588,11 @@ public sealed class ReptarTerm : IDisposable
                 }
                 else if (cmdPart is "/clear")
                 {
-                    ReplaceTranscript([]);
+                    // Start a new session rather than blanking the view: a cleared screen that
+                    // still sends the old history to the model is a trap.
+                    await StartNewSessionAsync().ConfigureAwait(false);
+                    _messages.Add(new ChatMessage("assistant", "Cleared. Started a new session."));
+                    _dirty = true;
                 }
                 else if (cmdPart is "/new")
                 {
@@ -1456,7 +1608,7 @@ public sealed class ReptarTerm : IDisposable
                 }
                 else if (cmdPart is "/sessions")
                 {
-                    _overlay = TermOverlay.Sessions;
+                    await OpenSessionsAsync().ConfigureAwait(false);
                 }
                 else if (cmdPart is "/tools")
                 {
@@ -1479,6 +1631,10 @@ public sealed class ReptarTerm : IDisposable
                 else if (cmdPart is "/settings")
                 {
                     OpenSettingsMenu();
+                }
+                else if (cmdPart is "/scoped-models")
+                {
+                    OpenScopedModels();
                 }
                 else if (cmdPart is "/tree")
                 {
@@ -1654,76 +1810,40 @@ public sealed class ReptarTerm : IDisposable
         _fileDropdownOpen = false;
     }
 
-    private async Task HandleSessionsKeyAsync(TermKey key)
+    /// <summary>
+    /// The session picker, searchable like every other list. Sessions are identified by title and
+    /// id, so both are searchable.
+    /// </summary>
+    private async Task OpenSessionsAsync()
     {
-        if (key.Key == ConsoleKey.Escape || key.Ch is 'q' or 'Q')
+        if (_store is null)
         {
-            _overlay = TermOverlay.None;
-            _input = "";
-            _inputCursor = 0;
+            _messages.Add(new ChatMessage("assistant", "Session persistence is not configured."));
+            _dirty = true;
             return;
         }
 
-        if (key.Key == ConsoleKey.Tab)
-            return;
+        await RefreshSessionsListAsync().ConfigureAwait(false);
 
-        if (key.Key == ConsoleKey.UpArrow && _sessionsList.Count > 0)
-        {
-            _selectedSessionIdx = (_selectedSessionIdx - 1 + _sessionsList.Count) % _sessionsList.Count;
-        }
-        else if (key.Key == ConsoleKey.DownArrow && _sessionsList.Count > 0)
-        {
-            _selectedSessionIdx = (_selectedSessionIdx + 1) % _sessionsList.Count;
-        }
-        else if (key.Key == ConsoleKey.Enter && _sessionsList.Count > 0 && _store is not null)
-        {
-            var target = _sessionsList[_selectedSessionIdx];
-            _session = target;
-            ReplaceTranscript(await LoadBranchAsync(target.Id).ConfigureAwait(false));
-            _overlay = TermOverlay.None;
-            _input = "";
-            _inputCursor = 0;
-        }
-        else if (key.Ch is 'n' or 'N')
-        {
-            await StartNewSessionAsync().ConfigureAwait(false);
-            _overlay = TermOverlay.None;
-            _input = "";
-            _inputCursor = 0;
-        }
-        else if (key.Ch is 'd' or 'D' && _sessionsList.Count > 0 && _store is not null)
-        {
-            var target = _sessionsList[_selectedSessionIdx];
-            await _store.DeleteSessionAsync(target.Id).ConfigureAwait(false);
-            await RefreshSessionsListAsync().ConfigureAwait(false);
-            if (_session?.Id == target.Id)
-                await StartNewSessionAsync().ConfigureAwait(false);
-        }
-    }
+        var items = _sessionsList.Select(session => new TermSelectorItem(
+            string.IsNullOrWhiteSpace(session.Title) ? session.Id : session.Title!,
+            session.Id,
+            session.Id == _session?.Id ? "◀ current" : "",
+            session.Id == _session?.Id,
+            $"Created {session.CreatedAt}",
+            session));
 
-    private void HandleToolsKey(TermKey key)
-    {
-        if (key.Key == ConsoleKey.Escape || key.Ch is 'q' or 'Q')
-        {
-            _overlay = TermOverlay.None;
-            _input = "";
-            _inputCursor = 0;
-            return;
-        }
+        if (_sessionSelector is null)
+            _sessionSelector = new TermSelector("Sessions", items, Math.Max(6, ComposerRow - 10));
+        else
+            _sessionSelector.SetItems(items);
 
-        if (key.Key == ConsoleKey.Tab)
-        {
-            _overlay = TermOverlay.Providers;
-            _input = "";
-            _inputCursor = 0;
-            return;
-        }
+        _sessionSelector.Hint = "Type to search · Enter resume · n new · d delete · Esc cancel";
 
-        var tools = _app.GetAiTools(onlyExplicit: true);
-        if (key.Key == ConsoleKey.UpArrow && tools.Count > 0)
-            _selectedToolIdx = (_selectedToolIdx - 1 + tools.Count) % tools.Count;
-        else if (key.Key == ConsoleKey.DownArrow && tools.Count > 0)
-            _selectedToolIdx = (_selectedToolIdx + 1) % tools.Count;
+        _overlay = TermOverlay.Sessions;
+        _input = "";
+        _inputCursor = 0;
+        _dirty = true;
     }
 
     /// <summary>
@@ -1776,6 +1896,29 @@ public sealed class ReptarTerm : IDisposable
         {
             selector.Paste(paste);
             _dirty = true;
+            return;
+        }
+
+        // Two single-key actions that only make sense in the session picker. They are checked
+        // before the search so they cannot be swallowed by a query.
+        if (selector == _sessionSelector && !selector.IsSearching && key.Ch is 'n' or 'N')
+        {
+            await StartNewSessionAsync().ConfigureAwait(false);
+            CloseOverlay();
+            return;
+        }
+
+        if (selector == _sessionSelector && !selector.IsSearching && key.Ch is 'd' or 'D')
+        {
+            if (selector.Selected?.Value is AgentSessionRow target && _store is not null)
+            {
+                await _store.DeleteSessionAsync(target.Id).ConfigureAwait(false);
+
+                if (_session?.Id == target.Id)
+                    await StartNewSessionAsync().ConfigureAwait(false);
+
+                await OpenSessionsAsync().ConfigureAwait(false);
+            }
             return;
         }
 
@@ -1851,6 +1994,20 @@ public sealed class ReptarTerm : IDisposable
     {
         if (selector.Selected is not { } item)
             return;
+
+        if (selector == _scopeSelector && item.Value is CatalogModelItem scopedModel)
+        {
+            await ToggleScopeAsync(scopedModel).ConfigureAwait(false);
+            return;
+        }
+
+        if (selector == _sessionSelector && item.Value is AgentSessionRow session)
+        {
+            _session = session;
+            ReplaceTranscript(await LoadBranchAsync(session.Id).ConfigureAwait(false));
+            CloseOverlay();
+            return;
+        }
 
         if (selector == _authSelector && item.Value is ProviderAuth method)
         {
@@ -2672,8 +2829,6 @@ public sealed class ReptarTerm : IDisposable
         // 2. The conversation, preceded by the resource panel while it is open.
         RenderChatTab();
 
-        if (_overlay == TermOverlay.Sessions)
-            RenderSessionsOverlay();
 
         // 3. The composer slot. A selector takes it over entirely — pi does not draw the prompt
         //    behind a picker, because the picker *is* the input.
@@ -3234,38 +3389,6 @@ public sealed class ReptarTerm : IDisposable
 
         var single = argumentsJson.Replace('\n', ' ');
         return single.Length > 64 ? single[..64] + "…" : single;
-    }
-
-    private void RenderSessionsOverlay()
-    {
-        var boxW = Math.Min(90, _width - 4);
-        var boxH = Math.Min(20, _height - 6);
-        var x = (_width - boxW) / 2;
-        var y = Math.Max(2, (_height - boxH) / 2);
-
-        _back.DrawShadow(x + 2, y + 1, boxW, boxH);
-        _back.DrawBox(x, y, boxW, boxH, "Sessions", borderFg: "\x1b[38;2;16;185;129m");
-        _back.Print(x + 3, y + 1, "enter: resume · d: delete · n: new · esc: close", fg: "\x1b[90m");
-
-        if (_sessionsList.Count == 0)
-        {
-            _back.Print(x + 4, y + 4, "No saved sessions yet.", fg: "\x1b[90m");
-            return;
-        }
-
-        var listY = y + 3;
-        for (var i = 0; i < _sessionsList.Count && listY < y + boxH - 2; i++, listY++)
-        {
-            var s = _sessionsList[i];
-            var selected = i == _selectedSessionIdx;
-            var ptr = selected ? "❯ " : "  ";
-            var fg = selected ? "\x1b[37m" : "\x1b[90m";
-            var bg = selected ? "\x1b[48;2;20;35;30m" : "";
-
-            var title = s.Title ?? s.Id;
-            var line = $"{ptr}{title}  ({s.CreatedAt:yyyy-MM-dd HH:mm})";
-            _back.Print(x + 2, listY, line, fg: fg, bg: bg, bold: selected, maxWidth: boxW - 4);
-        }
     }
 
     /// <summary>
