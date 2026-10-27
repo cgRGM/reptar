@@ -1014,15 +1014,28 @@ public sealed class ReptarApp
         return new QueueBatchResult(failed.Count == 0, failed.ToArray(), retries);
     }
 
+    /// <summary>
+    /// Resolves the host's body-reading policy with one route lookup. Hosts
+    /// need both values before reading a body; resolving them separately
+    /// repeats parameterized matching and its temporary allocations.
+    /// </summary>
+    public (long MaxBodyBytes, bool StreamingBody) GetRequestBodyOptions(
+        string method,
+        string path)
+    {
+        var meta = Match(method, path)?.Entry.Meta;
+        return (meta?.MaxBodyBytes ?? _config.MaxBodyBytes, meta?.StreamingBody ?? false);
+    }
+
     public long GetMaxBodyBytes(string method, string path) =>
-        Match(method, path)?.Entry.Meta.MaxBodyBytes ?? _config.MaxBodyBytes;
+        GetRequestBodyOptions(method, path).MaxBodyBytes;
 
     /// <summary>
     /// True when the matched route opted into a streaming request body via
     /// <see cref="RouteBuilder.StreamBody"/>.
     /// </summary>
     public bool IsStreamingBody(string method, string path) =>
-        Match(method, path)?.Entry.Meta.StreamingBody ?? false;
+        GetRequestBodyOptions(method, path).StreamingBody;
 
     private static bool IsBodyOverLimit(ReptarRequest request, long maxBodyBytes)
     {
@@ -1123,14 +1136,8 @@ public sealed class ReptarApp
         var ctx = new Ctx(request, Services);
         ctx.RequestAborted = request.Aborted;
         var traceParent = TraceParent.Parse(request.Header("traceparent"));
-        ctx.TraceId = traceParent?.TraceId ?? TraceContext.NewTraceId();
-        ctx.SpanId = TraceContext.NewSpanId();
-        ctx.ParentSpanId = traceParent?.SpanId;
-        using var traceScope = TraceContext.Begin(new TraceContext(
-            ctx.TraceId,
-            ctx.SpanId,
-            ctx.ParentSpanId,
-            traceParent?.Sampled ?? true));
+        ctx.InitializeTrace(traceParent);
+        using var traceScope = TraceContext.BeginDeferred(ctx);
         using var dbScope = DbMetrics.Begin(ctx.DbMetrics);
 
         var match = Match(request.Method, request.Path);

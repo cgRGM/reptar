@@ -14,6 +14,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import fixturesJson from "../out/fixtures.json";
+import { buildRequestHeaders } from "./request-headers";
 import type { Fixtures } from "./scenarios";
 
 interface WeightedScenario {
@@ -44,6 +45,10 @@ const label = argValue("--label") ?? "unknown";
 const duration = Number(argValue("--duration") ?? "15");
 const warmup = Number(argValue("--warmup") ?? "3");
 const concurrency = Number(argValue("--concurrency") ?? "100");
+const acceptEncoding =
+  argValue("--accept-encoding") ??
+  process.env.BENCH_ACCEPT_ENCODING ??
+  "identity";
 
 const fixtures = fixturesJson as Fixtures;
 const { sample, login } = fixtures;
@@ -97,6 +102,13 @@ const weighted: WeightedScenario[] = [
     weight: 10,
   },
 ];
+
+// Construct once rather than adding header-allocation work to every client request.
+for (const scenario of weighted) {
+  scenario.headers = Object.fromEntries(
+    buildRequestHeaders(scenario.headers, acceptEncoding)
+  );
+}
 
 const totalWeight = weighted.reduce(
   (sum, scenario) => sum + scenario.weight,
@@ -223,7 +235,7 @@ for (const scenario of weighted) {
 const payload = {
   baseUrl,
   byScenario,
-  config: { concurrency, duration, warmup },
+  config: { acceptEncoding, concurrency, duration, warmup },
   elapsedSeconds: elapsed,
   generatedAt: new Date().toISOString(),
   label,

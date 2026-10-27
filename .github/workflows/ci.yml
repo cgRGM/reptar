@@ -102,7 +102,7 @@ jobs:
         run: bun reptar test
 
       - name: Host boundary and CLI regression tests
-        run: bun test packages/host/src packages/rpc/src/client.test.ts scripts/diff-composite.test.ts scripts/inspect-db.test.ts apps/docs/worker/index.test.ts
+        run: bun test packages/host/src packages/rpc/src/client.test.ts scripts/diff-composite.test.ts scripts/inspect-db.test.ts apps/docs/worker/index.test.ts bench/load/request-headers.test.ts
 
       - name: Rebuild all deployed Worker artifacts
         run: |

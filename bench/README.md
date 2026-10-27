@@ -8,6 +8,12 @@ A calibrated, three-stack benchmark for Reptar:
 
 All three implement the **same issue-tracker schema, seed data, SQL, JSON, and routes**. The point is to separate framework overhead from database I/O instead of collapsing everything into one RealWorld-style number.
 
+## Encoding and historical comparisons
+
+Both endpoint and mixed-workload drivers now explicitly request and record `Accept-Encoding: identity` by default. To measure compression, use `--accept-encoding br` or set `BENCH_ACCEPT_ENCODING=br` for `run-vps.sh`; label those results separately. A server that compresses a response is doing different work from a control that does not.
+
+See the [2026-10-27 historical performance investigation](results/investigation-20261027/README.md) for the compression/trace setup findings, correctness-preserving fixes, measured improvements, and historical write-error caveat. The older [release comparison](results/release-20261026/README.md) remains unchanged as evidence of its original protocol.
+
 ## Layout
 
 ```text

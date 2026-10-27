@@ -166,15 +166,28 @@ public readonly record struct TraceContext(
     string? ParentSpanId,
     bool Sampled)
 {
-    private static readonly AsyncLocal<TraceContext?> CurrentSlot = new();
+    private static readonly AsyncLocal<Source?> CurrentSlot = new();
 
-    public static TraceContext? Current => CurrentSlot.Value;
+    public static TraceContext? Current => CurrentSlot.Value?.Capture();
 
-    public static IDisposable Begin(TraceContext context)
+    public static IDisposable Begin(TraceContext context) =>
+        Begin(new Source(context, null));
+
+    internal static IDisposable BeginDeferred(Ctx context) =>
+        Begin(new Source(null, context));
+
+    private static IDisposable Begin(Source source)
     {
         var previous = CurrentSlot.Value;
-        CurrentSlot.Value = context;
+        CurrentSlot.Value = source;
         return new Scope(previous);
+    }
+
+    // Keep ambient propagation available, but avoid random IDs and string
+    // allocations when no logger, exporter, handler or outbound call uses it.
+    private sealed class Source(TraceContext? context, Ctx? request)
+    {
+        public TraceContext Capture() => context ?? request!.CaptureTraceContext();
     }
 
     public string ToTraceParent() =>
@@ -199,7 +212,7 @@ public readonly record struct TraceContext(
         return new string(chars);
     }
 
-    private sealed class Scope(TraceContext? previous) : IDisposable
+    private sealed class Scope(Source? previous) : IDisposable
     {
         public void Dispose() => CurrentSlot.Value = previous;
     }
