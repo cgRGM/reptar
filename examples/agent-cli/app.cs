@@ -8,10 +8,8 @@
 #:include rpc/RpcClient.cs
 #:include web.cs
 #:include terminal/Ansi.cs
-#:include terminal/Fuzzy.cs
 #:include terminal/TermSelector.cs
 #:include terminal/TermLayout.cs
-#:include terminal/SlashCommands.cs
 #:include terminal/ReptarTerm.cs
 #:include terminal/TerminalAgent.cs
 #:include terminal/TerminalBuffer.cs

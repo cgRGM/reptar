@@ -56,6 +56,12 @@ public sealed record AgentSettings
     /// <summary>What to do when a directory with agent config is opened for the first time.</summary>
     public TrustDefault? DefaultProjectTrust { get; init; }
 
+    /// <summary>
+    /// Models reachable by cycling. When empty, cycling walks every available model instead —
+    /// which is unusable once you have a few hundred, so a short list is the point.
+    /// </summary>
+    public IReadOnlyList<ScopedModel>? ScopedModels { get; init; }
+
     /// <summary>Runtime defaults, matching pi's <c>SETTINGS_DEFAULTS</c>.</summary>
     public static AgentSettings Defaults { get; } = new()
     {
@@ -85,7 +91,8 @@ public sealed record AgentSettings
         AutocompleteMaxVisible = AutocompleteMaxVisible ?? fallback.AutocompleteMaxVisible,
         Compaction = Compaction ?? fallback.Compaction,
         Retry = Retry ?? fallback.Retry,
-        DefaultProjectTrust = DefaultProjectTrust ?? fallback.DefaultProjectTrust
+        DefaultProjectTrust = DefaultProjectTrust ?? fallback.DefaultProjectTrust,
+        ScopedModels = ScopedModels ?? fallback.ScopedModels
     };
 
     /// <summary>The thinking level this file asks for, parsed and validated.</summary>
@@ -97,6 +104,16 @@ public sealed record AgentSettings
     /// <summary>Effective retry policy.</summary>
     public AgentRetryPolicy EffectiveRetry => Retry ?? new AgentRetryPolicy();
 }
+
+/// <summary>
+/// One entry in the cycling scope: a provider, a model, and optionally the thinking level to use
+/// when cycling to it.
+/// </summary>
+/// <remarks>
+/// The per-entry thinking level is what makes a scope useful: the cheap model should not inherit
+/// the deep model's reasoning budget, and vice versa.
+/// </remarks>
+public sealed record ScopedModel(string Provider, string Model, string? Thinking = null);
 
 /// <summary>First-open behaviour for a directory that carries agent configuration.</summary>
 public enum TrustDefault

@@ -1,0 +1,248 @@
+---
+title: Agent Runtime
+description: The streaming agent loop, sessions, compaction, durability, and the SDK in Reptar.AI.
+---
+
+`Reptar.AI` ships a complete coding-agent runtime, not just tool plumbing. This page covers the pieces added after the tool layer described in [AI Tools & Agent Harness](/ai/agent-harness).
+
+Everything here is in the framework package. The terminal UI and the RPC server live in `examples/agent-cli` as reference clients.
+
+## 1. The agent loop
+
+`AgentLoop` is a provider-agnostic streaming ReAct loop. It takes a transcript, a config, and a stream function, and emits events. It knows nothing about sessions, files, or terminals.
+
+```csharp
+var summary = await AgentLoop.RunAsync(
+    history,
+    new AgentLoopConfig
+    {
+        Model = "claude-sonnet-4-5",
+        MaxSteps = 24,
+        ToolExecutor = (invocation, ct) => app.ExecuteAiToolAsync(invocation.ToolName, invocation.ArgumentsJson)
+    },
+    client.StreamAsync,
+    app.GetAiTools(onlyExplicit: true),
+    onEvent: evt => Console.WriteLine(evt.ToJson()));
+```
+
+### Event vocabulary
+
+The event names match pi's JSONL protocol, so one client implementation can consume the terminal, the SSE stream, and an RPC pipe without translation:
+
+| Event | Meaning |
+| --- | --- |
+| `agent_start` | A run began |
+| `turn_start` | One assistant turn began |
+| `message_start` / `message_update` / `message_end` | Message lifecycle; `message_end` is authoritative |
+| `tool_execution_start` / `_update` / `_end` | Tool lifecycle, including partial output |
+| `usage` | Token counts, including cache reads and writes |
+| `turn_end` | One response plus its tool results |
+| `agent_end` | The low-level run ended |
+| `agent_settled` | No further automatic work will run |
+| `retry_scheduled` / `retry_attempt_start` / `retry_finished` | Transient provider failures |
+| `compaction_start` / `compaction_end` | Context checkpointing |
+
+`agent_end` closes one run; **`agent_settled`** is what a client waits on, because retry, compaction, and steering can each start another.
+
+### Guarantees
+
+- **Independent tool calls run concurrently.** `SequentialTools` opts individual tools out.
+- **A `length` stop fails the whole tool batch.** Truncated arguments can still parse, so executing them runs a half-formed command.
+- **Cancellation is observed between tool calls and mid-stream.**
+- **Tool output can stream.** `AgentToolStreaming.Report(chunk)` from inside a tool body becomes a `tool_execution_update`; `run_command` uses this so a long build shows progress.
+
+### Serialization
+
+`evt.ToJson()` produces one JSONL record; `AgentEventJson.TryParse` reads it back. Client and server share one definition, so the protocol cannot drift.
+
+## 2. Sessions and queues
+
+`AgentSession` owns the mutable state a client talks to: the transcript, the steering and follow-up queues, and the in-flight run.
+
+```csharp
+session.Steer(new ChatMessage("user", "actually check the tests"));   // after this turn's tools
+session.FollowUp(new ChatMessage("user", "then summarize"));          // once it would stop
+session.Abort();
+var (steering, followUp) = session.ClearQueue();                       // Esc behaviour
+```
+
+Steering is polled **before each provider request**, not after the run, which is what lets a message typed at second 3 land before the fourth model call.
+
+`AgentRunRegistry` is the same idea for an HTTP host: it maps a key (session id, job id) to a cancellable run with a queue, so a second request can steer or abort the first.
+
+## 3. Context compaction
+
+`ContextCompaction` estimates tokens, finds a cut point, and builds the summary prompt.
+
+```csharp
+var outcome = await ContextCompactor.CompactAsync(
+    history, client, CompactionSettings.Default, CompactionReason.Manual);
+
+if (outcome is { } result)
+    history = result.Projection;   // summary + retained tail; the raw history is untouched
+```
+
+Three details that matter:
+
+- **Token estimation trusts the provider.** The last assistant message's reported usage is authoritative; only the trailing messages are estimated.
+- **Cut points never land on a tool result.** A tool result detached from its call is rejected by every provider.
+- **A `length`-truncated summary is refused.** A partial checkpoint silently corrupts a session.
+
+Wire it into the loop with `AgentLoopConfig.PrepareNextTurn`, returning `new AgentNextTurn(ContextMessages: projection)`.
+
+## 4. Tool output
+
+`ToolOutput` bounds tool results with two independent limits and never returns a partial line.
+
+```csharp
+var tail = ToolOutput.Tail(stdout, maxLines: 2000, maxBytes: 50 * 1024);
+var path = ToolOutput.SpillToFile(stdout, ".reptar/tool-output", "run_command");
+```
+
+Silent truncation is a correctness bug: the model reasons about a command's output, and a clipped tail makes it draw the wrong conclusion. `DescribeTruncation` reports which limit hit and where the full log lives.
+
+## 5. Durability
+
+`DurableAgentHarness` commits the transcript and task state **before** anything is reported, so a process that dies mid-turn resumes where it stopped.
+
+```csharp
+await using var harness = await DurableAgentHarness.OpenAsync(app, new DurableHarnessOptions
+{
+    Agent = new DurableAgentChoices { Model = "claude-sonnet-4-5" }
+});
+
+var submission = await harness.SubmitAndRunAsync("migrate the storage layer", client);
+
+// After a crash, on the next start:
+await harness.ResumeAsync(client);
+```
+
+- The submission and its input entry land in one transaction.
+- Re-submitting with the same `requestId` returns the original.
+- A task left `running` is marked `orphaned` on open and re-run.
+- `ForkAsync` copies a branch into a new conversation.
+
+## 6. The session tree
+
+`SessionTreeStore` stores an append-only tree: every entry names its parent, and the leaf is the only mutable state.
+
+| Operation | Implementation                                       |
+| --------- | ---------------------------------------------------- |
+| append    | new entry whose parent is the leaf; advance the leaf |
+| branch    | move the leaf to an earlier entry, keep appending    |
+| fork      | copy the path into a new session                     |
+
+`ImportFlatAsync` lifts an older flat session into the tree on first open, so existing databases keep working. The tables are separate from the message table for exactly that reason — no `ALTER TABLE` on a database already in the wild.
+
+## 7. The SDK
+
+`ReptarAgent` is the five-line entry point.
+
+```csharp
+await using var agent = await ReptarAgent.CreateAsync(new ReptarAgentOptions
+{
+    WorkspaceRoot = "/path/to/project",
+    AllowShell = true,
+    Tools = ToolSelection.Only("read_file", "edit_file", "*_dir"),
+});
+
+var summary = await agent.PromptAsync("fix the failing test", onText: Console.Write);
+var stats = agent.Stats();
+```
+
+`CreateAsync` resolves the provider, mounts the tools, opens or resumes a session, applies the tool selection, looks up the context window, and wires compaction and retry.
+
+### Tool selection
+
+| Shape | Meaning |
+| --- | --- |
+| `Only("read_file", "*_dir")` | Allowlist — nothing outside it is callable |
+| `AllExcept("run_command")` | Denylist, applied after the allowlist |
+| `Adjusting("+run_command", "-write_file")` | Not an allowlist — edits the default selection |
+
+Mixing bare names with `+`/`-` throws, because "only these" and "add this one" are contradictory.
+
+## 8. Codemode
+
+`CodeMode.Register(app, tools)` adds a `codemode` tool: the model writes a script that calls other tools, and **only the script's output enters the conversation**.
+
+```
+let files = tools.list_dir({ path: ".", depth: 3 });
+foreach (let f in files.entries) {
+    if (f.path.endsWith(".cs")) {
+        let src = tools.read_file({ path: f.path });
+        if (src.content.includes("TODO")) { text(f.path); }
+    }
+}
+```
+
+The interpreter is a hand-written C#-flavoured subset — Reptar targets Native AOT and NetWasm, so there is no JavaScript engine to embed. The capability model is the same: tools are the only way out, only `text()`/`log()`/the return value reach the model, `spawn()`/`join()` run calls concurrently, and step budget, cancellation, and output caps bound the run.
+
+## 9. MCP
+
+`McpToolSource` connects stdio MCP servers and mounts their tools as ordinary Reptar AI tools.
+
+```csharp
+await using var source = await McpToolSource.ConnectAsync([
+    McpServerConfig.Npx("files", "@modelcontextprotocol/server-filesystem", "/tmp")
+]);
+
+source.Mount(app);   // tools named mcp__files__read_file
+```
+
+A server that fails to start is reported and skipped, so one bad server does not take the agent down.
+
+## 10. Thinking levels
+
+`ThinkingLevels` maps a level onto provider parameters.
+
+```csharp
+var (maxTokens, budget) = ThinkingLevels.AdjustMaxTokens(
+    baseMaxTokens: 4096, modelMaxTokens: 64000, ThinkingLevel.Medium);
+```
+
+| Level   | Budget |
+| ------- | ------ |
+| minimal | 1 024  |
+| low     | 2 048  |
+| medium  | 8 192  |
+| high    | 16 384 |
+
+Thinking shares the response ceiling with the answer, so the ceiling is raised to fit and the budget is squeezed to leave room to reply. `LlmCatalog` reads each model's real capability from models.dev `reasoning_options`, so a level the provider would reject is never offered.
+
+## 11. Prompt caching
+
+`LlmConfig.PromptCache` puts `cache_control` breakpoints on three places: the system prompt, the last tool definition, and **the last content block of the last message**. The third is the one that matters — without it every turn re-bills the entire conversation at full input price.
+
+`CacheWarmer.WarmAsync` sends one throwaway request when the prefix is large enough to pay for itself. `LlmStreamEvent.Usage` carries `cache_read_input_tokens` and `cache_creation_input_tokens` so the saving is measurable.
+
+## 12. Settings
+
+`AgentSettingsStore` layers `~/.reptar/settings.json` under `<workspace>/.reptar/settings.json`. Every field is nullable so "not set here" differs from "set to the default", which is what makes layering work. The project file only loads when the workspace is trusted.
+
+Writes always go to the user file: the agent should not modify a repository's configuration.
+
+## 13. Trust
+
+`ProjectTrustStore` gates project-local resources — settings, prompt templates, skills — behind an explicit decision recorded per absolute path in `~/.reptar/trust.json`. `Unknown` is not trust; an unreadable store fails closed.
+
+`AgentResourcesReport` gathers what was loaded and what was rejected, which is what makes a shadowed skill or an unparseable `SKILL.md` visible instead of silent.
+
+## 14. Provider identity
+
+`ClientIdentity` sends the attribution headers a provider expects:
+
+| Target     | Headers                                                         |
+| ---------- | --------------------------------------------------------------- |
+| OpenRouter | `HTTP-Referer`, `X-OpenRouter-Title`, `X-OpenRouter-Categories` |
+| NVIDIA NIM | `X-BILLING-INVOKE-ORIGIN`                                       |
+| OpenCode   | `x-opencode-client`, `x-opencode-session`                       |
+
+OpenRouter only credits an application in its rankings when the first two are present.
+
+## See also
+
+- [AI Tools & Agent Harness](/ai/agent-harness) — the tool layer underneath this
+- [Structured LLM Outputs](/cookbook/structured-llm-outputs)
+- [Human in the Loop](/cookbook/human-in-the-loop)
+- [Agent Evals](/cookbook/agent-evals)

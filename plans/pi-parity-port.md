@@ -1330,3 +1330,48 @@ That is the general shape of the remaining gap: pi's interactions preserve _cont
 ### Cleanup
 
 `HandleProvidersKey` was half dead: the list stages became `TermSelector`s, so its `PickProvider` and model-list branches could never run. It is now only the key-entry handler, and `AdvanceKeyEntry` owns the key → account-id → activate sequence.
+
+---
+
+## 32. State preservation sweep
+
+The settings jump was one instance of a pattern: **rebuilding a thing from scratch instead of updating it**. This pass found and fixed the rest.
+
+### `TermSelector.SetItems` preserves context
+
+The rule now lives in one place: replacing the items keeps the search text and restores the selection by label, falling back to the same index when the item genuinely disappeared. Every `Rebuild*` method reuses its selector instance instead of constructing a new one, which fixes:
+
+- **Model picker losing your search** when `RefreshCatalogAsync` runs after a `/connect`.
+- **Provider list jumping to the top** when you back out of a key prompt.
+- **Settings list jumping** after a toggle (this was the original report).
+
+`ClearQuery` exists for the opposite case — reopening a picker you had closed should start from the full list, but reopening one that is already open should not wipe what you typed.
+
+### `ReplaceTranscript` resets everything derived from the transcript
+
+Switching sessions only swapped `_messages`, so scroll position, tool cards, and the persistence cursor all carried over from the previous conversation. You could land in a new session scrolled halfway up, looking at another session's tool output.
+
+Eight call sites now go through one method: session switch, fork, branch switch, compaction, `/clear`, `/new`, and both resume paths.
+
+### `/sessions` became a real picker
+
+It was the last bespoke list — arrow keys and a hand-rolled overlay, no search. pi's session selector is searchable, and now ours is too, through the same `TermSelector` as everything else. `n` creates a session and `d` deletes one, both only when the search box is empty so they cannot be swallowed by a query.
+
+### `/clear` starts a new session
+
+It used to blank the view while leaving the history in the tree — so the screen said "cleared" and the model still received the conversation. That is a trap. It now starts a fresh session, which is what the line-mode agent already did.
+
+### Dead code removed
+
+Three handlers could no longer run once the lists became selectors: `HandleSessionsKeyAsync`, `HandleToolsKey`, and the list branches of `HandleProvidersKey`. `RenderSessionsOverlay` and `RenderProviderList` went with them. The TUI is now: one chat view, one selector component, and a key-entry stage.
+
+### What is left in this category
+
+| Interaction | Current behaviour | pi |
+| --- | --- | --- |
+| `Ctrl+P` | opens a command palette | cycles scoped models |
+| Slash dropdown | selection resets to the best match per keystroke | same |
+| Model picker | query preserved across refresh | same |
+| Scroll position | resets on session change | same |
+
+`Ctrl+P` is the remaining divergence, and it needs `scoped-models` (a subset of models chosen for cycling) before it can match.
