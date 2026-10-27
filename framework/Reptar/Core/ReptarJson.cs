@@ -71,9 +71,20 @@ public static class ReptarJson
     {
         var info = FindTypeInfo(typeof(T)) as
             System.Text.Json.Serialization.Metadata.JsonTypeInfo<T>;
+        if (info is null)
+            EnsureReflectionJsonAllowed(typeof(T));
         return info is not null
             ? JsonSerializer.Deserialize(json, info)
             : JsonSerializer.Deserialize<T>(json, Options);
+    }
+
+    internal static void EnsureReflectionJsonAllowed(Type type)
+    {
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported ||
+            !JsonSerializer.IsReflectionEnabledByDefault)
+            throw new InvalidOperationException(
+                $"No JSON metadata registered for {type}; reflection-based codec fallback is disabled. " +
+                "Register a source-generated JsonSerializerContext or configure SourceGenJsonCodec.");
     }
 
     public static void RegisterContext(JsonSerializerContext context)

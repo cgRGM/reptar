@@ -21,6 +21,12 @@ internal static class RowMapper
                 : (T)ConvertValue(readerInstance.GetValue(0), targetType)!;
         }
 
+        if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported)
+            throw new NotSupportedException(
+                $"No source-generated row mapper registered for {typeof(T)}. " +
+                "Use a [ReptarEntity] partial record with the Reptar source generator, " +
+                "register an explicit EntityMapper<T>, or use QueryMappedAsync with an explicit mapper.");
+
         var constructors = typeof(T).GetConstructors();
         if (constructors.Length == 0)
         {

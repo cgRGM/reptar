@@ -151,6 +151,8 @@ public sealed class DefaultJsonCodec : IJsonCodec
         // with the wrong resolver on AOT/NetWasm.
         var info = ReptarJson.FindTypeInfo(value?.GetType() ?? typeof(T))
             ?? ReptarJson.FindTypeInfo(typeof(T));
+        if (info is null)
+            ReptarJson.EnsureReflectionJsonAllowed(value?.GetType() ?? typeof(T));
         return info is not null
             ? JsonSerializer.Serialize(value, info)
             : JsonSerializer.Serialize(value, ReptarJson.Options);
@@ -163,6 +165,8 @@ public sealed class DefaultJsonCodec : IJsonCodec
     {
         var info = ReptarJson.FindTypeInfo(value?.GetType() ?? typeof(T))
             ?? ReptarJson.FindTypeInfo(typeof(T));
+        if (info is null)
+            ReptarJson.EnsureReflectionJsonAllowed(value?.GetType() ?? typeof(T));
         return info is not null
             ? JsonSerializer.SerializeToUtf8Bytes(value, info)
             : JsonSerializer.SerializeToUtf8Bytes(value, ReptarJson.Options);
@@ -174,6 +178,8 @@ public sealed class DefaultJsonCodec : IJsonCodec
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(string json)
     {
         var info = ReptarJson.FindTypeInfo(typeof(T)) as JsonTypeInfo<T>;
+        if (info is null)
+            ReptarJson.EnsureReflectionJsonAllowed(typeof(T));
         return info is not null
             ? JsonSerializer.Deserialize<T>(json, info)
             : JsonSerializer.Deserialize<T>(json, ReptarJson.Options);
@@ -185,6 +191,8 @@ public sealed class DefaultJsonCodec : IJsonCodec
             DynamicallyAccessedMemberTypes.PublicProperties)] T>(ReadOnlySpan<byte> utf8Json)
     {
         var info = ReptarJson.FindTypeInfo(typeof(T)) as JsonTypeInfo<T>;
+        if (info is null)
+            ReptarJson.EnsureReflectionJsonAllowed(typeof(T));
         return info is not null
             ? JsonSerializer.Deserialize<T>(utf8Json, info)
             : JsonSerializer.Deserialize<T>(utf8Json, ReptarJson.Options);
