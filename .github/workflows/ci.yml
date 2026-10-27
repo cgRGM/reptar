@@ -145,6 +145,13 @@ jobs:
             -o "$RUNNER_TEMP/reptar-agent-native"
           python3 scripts/test-agent-native.py "$RUNNER_TEMP/reptar-agent-native/app"
 
+      - name: Published Native AOT HTTP boundary and stream fault smoke
+        run: |
+          dotnet publish scripts/fixtures/native-boundaries/app.cs -c Release -r linux-x64 --self-contained \
+            -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+            -o "$RUNNER_TEMP/reptar-http-native"
+          python3 scripts/test-native-boundaries.py "$RUNNER_TEMP/reptar-http-native/app"
+
       - name: Doctor (strict)
         run: bun reptar doctor --strict
 
