@@ -212,7 +212,7 @@ def snapshots(root, databases):
     return evidence
 
 
-def run(args, root):
+def run(args, root, prepared=None):
     workspace = root / "workspace"
     workspace.mkdir()
     (workspace / "README.md").write_text("Disposable offline reliability workspace.\n")
@@ -241,7 +241,7 @@ def run(args, root):
             shutil.copy2(file, owned / file.name)
         binaries[name] = str(owned / supplied.name)
         native_hashes[name] = {file.name: hashlib.sha256(file.read_bytes()).hexdigest() for file in owned.iterdir()}
-    manifest = {"scope": "local-disposable-NativeAOT-Echo-only", "sourceCommit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
+    manifest = {"scope": "isolated-staging-NativeAOT-Echo-only" if prepared else "local-disposable-NativeAOT-Echo-only", "sourceCommit": prepared["sourceCommit"] if prepared else subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=REPO, text=True).strip(),
                 "startedAt": time.time(), "requestedSeconds": args.seconds, "cadenceSeconds": args.cadence, "ports": ports,
                 "binarySha256": {name: hashlib.sha256(Path(path).read_bytes()).hexdigest() for name, path in binaries.items()}, "nativeFilesSha256": native_hashes,
                 "runnerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "bunSha256": hashlib.sha256(Path(args.bun).read_bytes()).hexdigest(),
@@ -253,7 +253,10 @@ def run(args, root):
         probes = root / "probes"
         probes.mkdir()
         for label, source, target in (("switchyard", "examples/switchyard/acceptance.test.ts", "acceptance.test.js"), ("rooms", "examples/realtime-rooms/smoke.ts", "rooms.js")):
-            owner.run(f"bundle-{label}", [args.bun, "build", source, "--target=bun", "--outfile", str(probes / target)], cwd=REPO)
+            if prepared:
+                shutil.copy2(prepared["root"] / "probes" / target, probes / target)
+            else:
+                owner.run(f"bundle-{label}", [args.bun, "build", source, "--target=bun", "--outfile", str(probes / target)], cwd=REPO)
         manifest["probeSha256"] = {file.name: hashlib.sha256(file.read_bytes()).hexdigest() for file in probes.iterdir()}
         (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
         children = {}
@@ -327,7 +330,7 @@ def run(args, root):
                 time.sleep(pause)
         elapsed = time.monotonic() - started
         require(time.time() - previous_cycle <= args.cadence + 90, "Final observation gap invalidates continuous proving")
-        require(result["cycles"] > 0, "No synthetic workflows completed")
+        require(result["cycles"] == math.ceil(args.seconds / args.cadence), "Scheduled cycle count missing or exceeded")
         backup = snapshots(root, databases)
         require(backup["rooms"]["counts"]["room_messages"] == result["cycles"] * 2, "Rooms backup lost/duplicated snapshots")
         for child in children.values():
@@ -349,8 +352,11 @@ def run(args, root):
         restored_rpc = Rpc(owner, Path(binaries["agent"]), workspace, Path(backup["agent-rpc"]["path"]), rpc_session)
         require(len(restored_rpc.call("get_entries")["entries"]) == result["cycles"] * 2, "Restored RPC history changed")
         require(restored_rpc.call("get_entries", since=cursor)["entries"] == [], "Restored RPC duplicated replay")
-        result.update({"status": "passed", "actualElapsedSeconds": elapsed, "earnedTwoHourElapsed": elapsed >= 7200 and args.seconds >= 7200, "nativePeakRssKiB": peak_rss, "backupRecovery": backup,
-                       "scope": "two-hour-local-proving" if elapsed >= 7200 and args.seconds >= 7200 else "short-harness-validation-only"})
+        result.update({"status": "passed", "actualElapsedSeconds": elapsed, "earnedTwoHourElapsed": not prepared and elapsed >= 7200 and args.seconds >= 7200, "nativePeakRssKiB": peak_rss, "backupRecovery": backup,
+                       "scope": "two-hour-local-proving" if not prepared and elapsed >= 7200 and args.seconds >= 7200 else "short-harness-validation-only"})
+        if prepared:
+            result["earnedTwentyFourHourElapsed"] = args.seconds == 86400 and elapsed >= 86400
+            result["scope"] = "24-hour-isolated-staging" if result["earnedTwentyFourHourElapsed"] else "short-isolated-staging-control-only"
     except BaseException as error:
         result["error"] = f"{type(error).__name__}: {error}"
         raise
