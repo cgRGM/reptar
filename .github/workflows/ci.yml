@@ -252,6 +252,45 @@ jobs:
             --agent "$RUNNER_TEMP/reptar-agent-native/app" \
             --bun "$(command -v bun)"
 
+      - name: Pinned prior native application upgrade and same-schema backup rollback
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          previous=0be66d9d61d14765608fe654106fb03363a6be7b
+          git fetch --no-tags origin "$previous"
+          prior="$RUNNER_TEMP/reptar-reliability-prior-source"
+          mkdir "$prior"
+          git archive "$previous" | tar -x -C "$prior"
+          for app in switchyard agent-cli; do
+            (
+              cd "$prior"
+              dotnet publish "examples/$app/app.cs" -c Release -r linux-x64 --self-contained \
+                -p:PublishAot=true -p:DebugType=None -p:DebugSymbols=false \
+                -o "$RUNNER_TEMP/reptar-prior-$app-native"
+            ) 2>&1 | tee "$RUNNER_TEMP/reptar-prior-$app-publish.log"
+            test ! -e "$RUNNER_TEMP/reptar-prior-$app-native/app.dll"
+            if grep -Ei 'will always throw|warning IL2104|warning IL3053' "$RUNNER_TEMP/reptar-prior-$app-publish.log"; then
+              exit 1
+            fi
+          done
+          python3 scripts/test-native-upgrade.py \
+            --previous-switchyard "$RUNNER_TEMP/reptar-prior-switchyard-native/app" \
+            --previous-agent "$RUNNER_TEMP/reptar-prior-agent-cli-native/app" \
+            --current-switchyard "$RUNNER_TEMP/reptar-operational-switchyard/reptar" \
+            --current-agent "$RUNNER_TEMP/reptar-agent-native/app" \
+            --previous-source-commit "$previous" --bun "$(command -v bun)"
+          if python3 scripts/test-native-upgrade.py \
+            --previous-switchyard "$RUNNER_TEMP/reptar-operational-switchyard/reptar" \
+            --previous-agent "$RUNNER_TEMP/reptar-agent-native/app" \
+            --current-switchyard "$RUNNER_TEMP/reptar-operational-switchyard/reptar" \
+            --current-agent "$RUNNER_TEMP/reptar-agent-native/app" \
+            --previous-source-commit "$previous" --bun "$(command -v bun)" \
+            > "$RUNNER_TEMP/reptar-false-upgrade-negative.log" 2>&1; then
+            echo 'False previous-version control unexpectedly passed' >&2
+            exit 1
+          fi
+          grep -q 'Supplied previous artifacts are identical to current' "$RUNNER_TEMP/reptar-false-upgrade-negative.log"
+
       - name: Documentation snippet check
         run: bun run docs:check:snippets
 
@@ -261,3 +300,46 @@ jobs:
           # Compare the same canonical formatting enforced by pre-commit.
           bunx oxfmt --write apps/docs/src/content/docs/api/
           git diff --exit-code apps/docs/src/content/docs/api/
+
+      - name: Package verified native artifacts without runtime data or credentials
+        env:
+          REVIEWED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, shutil, subprocess
+          temp = pathlib.Path(os.environ['RUNNER_TEMP'])
+          destination = temp / 'reptar-reliability-native-linux'
+          destination.mkdir()
+          sources = {
+              'switchyard': (temp / 'reptar-operational-switchyard', 'reptar'),
+              'rooms': (temp / 'reptar-rooms-native', 'app'),
+              'agent': (temp / 'reptar-agent-native', 'app'),
+          }
+          hashes = {}
+          for name, (source, executable) in sources.items():
+              target = destination / name
+              target.mkdir()
+              for original, filename in ((executable, 'app'), ('libe_sqlite3.so', 'libe_sqlite3.so')):
+                  shutil.copy2(source / original, target / filename)
+                  hashes[f'{name}/{filename}'] = hashlib.sha256((target / filename).read_bytes()).hexdigest()
+          image_id = subprocess.check_output(['docker', 'image', 'inspect', 'reptar-switchyard:verify', '--format', '{{.Id}}'], text=True).strip()
+          assert image_id.startswith('sha256:'), 'Require the actual tested image identity, not an unrelated image version'
+          manifest = {
+              'sourceBuildCommit': subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip(),
+              'reviewedHeadCommit': os.environ['REVIEWED_HEAD'],
+              'sourceTree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+              'hostDotnetVersion': subprocess.check_output(['dotnet', '--version'], text=True).strip(),
+              'switchyardBuildToolchain': 'Docker SDK stage; see actual build log, not inferred from host SDK',
+              'verifiedSwitchyardImageId': image_id, 'rid': 'linux-x64', 'sha256': hashes,
+              'limits': ['Native artifacts only, not a deployment or elapsed proving result', 'Restore executable permission after artifact download', 'Review build/head/tree provenance before staging', 'CI image ID is not a pullable runtime base digest; pin and validate the staging runtime separately'],
+          }
+          (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2))
+          PY
+
+      - name: Retain verified native artifact bundle for bounded isolated proving
+        uses: actions/upload-artifact@v4
+        with:
+          name: reptar-reliability-native-linux-${{ github.run_id }}
+          path: ${{ runner.temp }}/reptar-reliability-native-linux/
+          retention-days: 3
+          if-no-files-found: error

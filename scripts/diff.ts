@@ -343,6 +343,11 @@ export const planMigrations = (
     );
   }
   const inspection = inspectProject(repoRoot, cwd, options);
+  if (existsSync(databaseTarget.path) && !inspection.database.connected) {
+    throw new Error(
+      `Cannot inspect existing SQLite database at ${databaseTarget.path}; refusing to plan against an assumed empty schema.`
+    );
+  }
   const { tables: codeTables, source } = discoverProjectTablesWithSource(
     repoRoot,
     cwd

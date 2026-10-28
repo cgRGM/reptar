@@ -1,10 +1,17 @@
 import { Database } from "bun:sqlite";
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { planMigrations } from "./diff";
+import { inspectProject } from "./inspect";
 
 const column = (name: string, primaryKey = false) => ({
   indexed: false,
@@ -67,6 +74,63 @@ test("migration planner emits one composite key, enforces uniqueness, and preser
     expect(planMigrations(root, root, { dbPath }).status).toBe("in_sync");
     db.run("DELETE FROM projects WHERE id='p'");
     expect(db.query("SELECT * FROM flags").all()).toEqual([]);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("migration planning refuses an existing unreadable store instead of inventing an empty schema", () => {
+  const { root, dbPath } = fixture();
+  const corrupt = "not a SQLite database\n";
+  try {
+    writeFileSync(dbPath, corrupt);
+    expect(() => planMigrations(root, root, { dbPath })).toThrow(
+      "Cannot inspect existing SQLite database"
+    );
+    expect(readFileSync(dbPath, "utf-8")).toBe(corrupt);
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("migration planning refuses a locked existing store without changing its data", () => {
+  const { root, dbPath } = fixture();
+  try {
+    const initial = planMigrations(root, root, { dbPath });
+    using db = new Database(dbPath);
+    db.run(initial.sql);
+    db.run("INSERT INTO projects VALUES ('preserved')");
+    db.run("PRAGMA journal_mode = DELETE");
+    db.run("BEGIN EXCLUSIVE");
+    try {
+      expect(() => planMigrations(root, root, { dbPath })).toThrow(
+        "Cannot inspect existing SQLite database"
+      );
+    } finally {
+      db.run("ROLLBACK");
+    }
+    expect(db.query("SELECT id FROM projects").all()).toEqual([
+      { id: "preserved" },
+    ]);
+    expect(planMigrations(root, root, { dbPath }).status).toBe("in_sync");
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
+test("SQLite metadata inspection preserves quoted table and index identifiers", () => {
+  const { root, dbPath } = fixture();
+  try {
+    using db = new Database(dbPath);
+    db.run('CREATE TABLE "odd""name" ("id" TEXT)');
+    db.run('CREATE INDEX "odd""index" ON "odd""name"("id")');
+    const inspection = inspectProject(root, root, { dbPath });
+    expect(inspection.database.connected).toBe(true);
+    const table = inspection.databaseTables?.find(
+      (item) => item.name === 'odd"name'
+    );
+    expect(table?.columns.map((item) => item.name)).toEqual(["id"]);
+    expect(table?.indexes).toEqual(['odd"index']);
   } finally {
     rmSync(root, { force: true, recursive: true });
   }

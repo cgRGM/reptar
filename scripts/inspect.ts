@@ -330,7 +330,7 @@ export const inspectProject = (
     );
   } else if (existsSync(dbPath)) {
     try {
-      const db = new Database(dbPath, { readonly: true });
+      using db = new Database(dbPath, { readonly: true });
       dbConnected = true;
 
       const tableRows = db
@@ -344,8 +344,9 @@ export const inspectProject = (
         const indexes: string[] = [];
 
         try {
+          const quotedName = row.name.replaceAll('"', '""');
           const colRows = db
-            .query(`PRAGMA table_info("${row.name}")`)
+            .query(`PRAGMA table_info("${quotedName}")`)
             .all() as {
             name: string;
             type: string;
@@ -365,7 +366,7 @@ export const inspectProject = (
           }
 
           const idxRows = db
-            .query(`PRAGMA index_list("${row.name}")`)
+            .query(`PRAGMA index_list("${quotedName}")`)
             .all() as {
             name: string;
             unique: number;
@@ -376,7 +377,12 @@ export const inspectProject = (
               indexes.push(idx.name);
             }
           }
-        } catch {}
+        } catch (error) {
+          throw new Error(
+            `Cannot inspect SQLite metadata for table ${row.name}`,
+            { cause: error }
+          );
+        }
 
         tables.push({
           columns,
@@ -440,7 +446,6 @@ export const inspectProject = (
           table: "reptar_jobs",
         };
       }
-      db.close();
     } catch {
       dbConnected = false;
     }
