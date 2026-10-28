@@ -2,7 +2,7 @@
 
 ## Status
 
-**In progress.** The harness has actual-artifact short validation, negative controls and pinned previous-application recovery checks. The two-hour local run started at **2026-10-28T03:30:10Z** on `7cfacca6ce1097ad529c50ea3e36dbf66c9f498c`, with frozen native/probe copies; its completion and the 24-hour isolated staging are not yet accepted. Production and multi-release maturity remain separate. Execution limits and stop/cleanup rules are in [the reviewed plan](r6-operational-plan.md).
+**Local stage passed; R6 remains open.** The harness has actual-artifact short validation, negative controls and pinned previous-application recovery checks. The two-hour local run started at **2026-10-28T03:30:10Z** on `7cfacca6ce1097ad529c50ea3e36dbf66c9f498c`, with frozen native/probe copies, and completed **7200.0118 actual seconds / 120 cycles** plus backup/cold native recovery and independently verified owned-process cleanup. The 24-hour isolated staging has not started. Production and multi-release maturity remain separate. Execution limits and stop/cleanup rules are in [the reviewed plan](r6-operational-plan.md).
 
 ## Implemented boundary
 
@@ -37,6 +37,20 @@ Evidence root: `/tmp/reptar-reliability-evidence-20261027/`.
 
 CI exercises the actual-artifact short success/budget/TERM controls after extracting the already-tested Switchyard native image and reusing published Rooms/agent binaries. CI explicitly does **not** label this as elapsed operational proving.
 
+## Actual two-hour local stage
+
+[Derived attestation](evidence/r6-local-20261028.json) records exact source/runner/Bun/native/probe hashes, bounds, observations, backup counts, cleanup and original journal/result hashes. Raw private journals and disposable signing configuration remain in the owned evidence directory, not the repository.
+
+- **120/120** serial minute-cadence cycles; **7200.011815791018** measured workload seconds. Maximum observation interval **60.1634 seconds**; no suspend/observation-gap refusal.
+- Peak **observed aggregate native RSS 127648 KiB (~124.7 MiB)**; peak observed owned storage **62282881 bytes (~59.4 MiB)**, including copied artifacts. These are 120 idle-boundary samples, not continuous peaks or a hard allocation cap.
+- Rooms: **240 persisted messages**, zero persistence failures/drops, zero fanout failures; **840/840 delivered fanout attempts**, settled peers/queue/active writes.
+- Integrity/FK-checked backups and cold native recovery: Switchyard **241 users/sessions,121 projects,240 flags,360 versions/audit rows**; Rooms **240 messages**; Echo web **240 messages**; RPC **240 entries** with exact cursor replay.
+- `ownedProcessesCleaned: true`; independent process-group absence checks found **250/250 reaped records**, no remaining/unconfirmed groups and no manager process. This checks owned identities only, never kills unrelated processes.
+
+`r6-two-hour-verified-summary.json` / `r6-two-hour-cleanup-verified.json` retain the post-run checks. The application/framework and example source trees are unchanged between the frozen soak pin and `2bc23d8`; tooling follow-ups did not substitute a new application workload into the active run. That head also passed complete Linux CI/security (`r6-2bc-head-checks.log`) and its six-file native artifact bundle matched all hashes and the reviewed source tree. Subsequent documentation commits still require their own final-head checks before merge.
+
+Read-only VPS inventory found resource headroom, systemd255/glibc2.39 and scoped sudo availability; **no staging resource has been created**. The installed host Bun is **1.4.4**, not the local/CI **1.3.10**, so do not silently reuse or replace it. Staging needs an independently pinned tool/runtime and separately validated hard CPU/memory/PID/storage/expiry/cleanup controls before starting its actual 24-hour clock.
+
 ## Pinned previous native applications: no-op schema upgrade and backup/old-code read
 
 `scripts/test-native-upgrade.py` runs actual prior Switchyard and agent web/RPC executables built from **`0be66d9d61d14765608fe654106fb03363a6be7b`** with SDK10.0.401/osx-arm64, then current pinned executables, then the old executables against current SQLite backups. Prior tracked framework/application sources were not patched. Publications are retained in `r6-previous-{switchyard,agent-cli}-publish.log`; no fatal 'will always throw'/IL2104/IL3053 diagnostics were observed in these local publications.
@@ -67,7 +81,7 @@ CI also retains a three-day **native-artifact-only** bundle for subsequent bound
 
 ## Limits and remaining work
 
-- Actual two-hour completion and final-head CI/security still required for this package; 24-hour remote staging has not started.
+- The actual two-hour local stage passed; final-head CI/security is required after documentation changes. The separately bounded 24-hour remote stage has not started; R6 is not complete.
 - Low-rate synthetic traffic and idle-boundary samples are not peak capacity, continuous profiling, multi-node queue claiming, power-loss testing or exactly-once delivery.
 - Existing R3 prior-version/session crash/backup evidence remains useful, but does not establish upgrades across every released schema or multiple operational release cycles.
 - No remote infrastructure, production data, existing services, DNS or paid-model usage has been changed for this package.
