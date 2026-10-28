@@ -235,7 +235,12 @@ public sealed class BackgroundAgentsModule
             }
         });
 
-        return AiToolResult.Ok(200, JsonSerializer.Serialize(new { id, agent = agent.Name, status = "running" }, ReptarJson.Options));
+        return AiToolResult.Ok(200, new System.Text.Json.Nodes.JsonObject
+        {
+            ["id"] = id,
+            ["agent"] = agent.Name,
+            ["status"] = "running"
+        }.ToJsonString());
     }
 
     private async Task<AiToolResult> WaitForFirstAsync(string argsJson)
@@ -262,16 +267,28 @@ public sealed class BackgroundAgentsModule
             if (finished is { Length: > 0 })
             {
                 var task = _tasks[finished];
-                return AiToolResult.Ok(200, JsonSerializer.Serialize(
-                    new { id = finished, status = task.Status.Value }, ReptarJson.Options));
+                return AiToolResult.Ok(200, new System.Text.Json.Nodes.JsonObject
+                {
+                    ["id"] = finished,
+                    ["status"] = task.Status.Value
+                }.ToJsonString());
             }
 
             await Task.Delay(100);
         }
 
-        return AiToolResult.Ok(200, JsonSerializer.Serialize(
-            new { status = "timeout", ids_still_running = ids.Where(id => _tasks.TryGetValue(id, out var t) && t.Status.Value == "running") },
-            ReptarJson.Options));
+        var stillRunning = new System.Text.Json.Nodes.JsonArray();
+        foreach (var id in ids)
+        {
+            if (_tasks.TryGetValue(id, out var task) && task.Status.Value == "running")
+                stillRunning.Add((System.Text.Json.Nodes.JsonNode)System.Text.Json.Nodes.JsonValue.Create(id)!);
+        }
+
+        return AiToolResult.Ok(200, new System.Text.Json.Nodes.JsonObject
+        {
+            ["status"] = "timeout",
+            ["ids_still_running"] = stillRunning
+        }.ToJsonString());
     }
 
     private AiToolResult GetResults(string argsJson)
@@ -282,30 +299,47 @@ public sealed class BackgroundAgentsModule
             return AiToolResult.Failure(400, "invalid_arguments", "get_task_results requires 'ids'.");
         }
 
-        var results = new List<object>();
+        var results = new System.Text.Json.Nodes.JsonArray();
         foreach (var idElement in idsElement.EnumerateArray())
         {
             var id = idElement.GetString() ?? "";
+
             if (!_tasks.TryGetValue(id, out var task))
             {
-                results.Add(new { id, status = "unknown" });
+                results.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+                {
+                    ["id"] = id,
+                    ["status"] = "unknown"
+                });
                 continue;
             }
 
-            results.Add(new { id, status = task.Status.Value, result = task.Result.Value });
+            results.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            {
+                ["id"] = id,
+                ["status"] = task.Status.Value,
+                ["result"] = task.Result.Value
+            });
         }
 
-        return AiToolResult.Ok(200, JsonSerializer.Serialize(results, ReptarJson.Options));
+        return AiToolResult.Ok(200, results.ToJsonString());
     }
 
     private AiToolResult GetAll()
     {
-        var all = _tasks.Values
-            .OrderBy(task => task.Id)
-            .Select(task => new { id = task.Id, agent = task.AgentName, status = task.Status.Value, task = task.Task })
-            .ToList();
+        var all = new System.Text.Json.Nodes.JsonArray();
+        foreach (var task in _tasks.Values.OrderBy(task => task.Id, StringComparer.Ordinal))
+        {
+            all.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            {
+                ["id"] = task.Id,
+                ["agent"] = task.AgentName,
+                ["status"] = task.Status.Value,
+                ["task"] = task.Task
+            });
+        }
 
-        return AiToolResult.Ok(200, JsonSerializer.Serialize(all, ReptarJson.Options));
+        return AiToolResult.Ok(200, all.ToJsonString());
     }
 
     private static AiToolDefinition Tool(string name, string description, string parametersJson) => new()
@@ -317,8 +351,44 @@ public sealed class BackgroundAgentsModule
         Path = $"/agent/module/{name}"
     };
 
-    private static Dictionary<string, object?> ParseParameters(string parametersJson) =>
-        JsonSerializer.Deserialize<Dictionary<string, object?>>(parametersJson, ReptarJson.Options) ?? [];
+    /// <summary>
+    /// Parses a parameter schema without reflection. A tool schema is plain JSON, so it is walked
+    /// into the dictionary shape <see cref="AiToolDefinition"/> wants.
+    /// </summary>
+    private static Dictionary<string, object?> ParseParameters(string parametersJson)
+    {
+        try
+        {
+            return System.Text.Json.Nodes.JsonNode.Parse(parametersJson) is System.Text.Json.Nodes.JsonObject obj
+                ? ToPlain(obj)
+                : [];
+        }
+        catch (JsonException)
+        {
+            return [];
+        }
+    }
+
+    private static Dictionary<string, object?> ToPlain(System.Text.Json.Nodes.JsonObject obj)
+    {
+        var result = new Dictionary<string, object?>(StringComparer.Ordinal);
+
+        foreach (var (key, value) in obj)
+            result[key] = ToPlainValue(value);
+
+        return result;
+    }
+
+    private static object? ToPlainValue(System.Text.Json.Nodes.JsonNode? node) => node switch
+    {
+        System.Text.Json.Nodes.JsonObject obj => ToPlain(obj),
+        System.Text.Json.Nodes.JsonArray array => array.Select(ToPlainValue).ToList(),
+        System.Text.Json.Nodes.JsonValue value => value.TryGetValue<string>(out var text) ? text
+            : value.TryGetValue<bool>(out var flag) ? flag
+            : value.TryGetValue<double>(out var number) ? number
+            : null,
+        _ => null
+    };
 }
 
 /// <summary>

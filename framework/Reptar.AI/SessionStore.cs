@@ -139,7 +139,7 @@ public sealed record AgentMessageRow(
         var array = new JsonArray();
         foreach (var call in calls)
         {
-            array.Add(new JsonObject
+            array.Add((JsonNode)new JsonObject
             {
                 ["id"] = call.Id,
                 ["name"] = call.Name,

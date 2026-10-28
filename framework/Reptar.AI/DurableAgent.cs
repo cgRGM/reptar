@@ -741,7 +741,7 @@ public sealed class DurableAgentHarness : IAsyncDisposable
                 parentId = (string?)null,
                 seq,
                 kind = message.Role,
-                payload = JsonSerializer.Serialize(message, Json)
+                payload = SerializeMessage(message)
             }).ConfigureAwait(false);
 
         return id;
@@ -768,16 +768,100 @@ public sealed class DurableAgentHarness : IAsyncDisposable
         return Convert.ToHexString(bytes)[..16].ToLowerInvariant();
     }
 
+    /// <summary>
+    /// Serializes a message by hand. Reflection-based <c>JsonSerializer</c> is unavailable under
+    /// Native AOT, which is a supported target, so the durable payload format is explicit.
+    /// </summary>
+    private static string SerializeMessage(ChatMessage message)
+    {
+        var node = new JsonObject
+        {
+            ["role"] = message.Role,
+            ["content"] = message.Content
+        };
+
+        if (message.Name is { Length: > 0 }) node["name"] = message.Name;
+        if (message.ToolCallId is { Length: > 0 }) node["toolCallId"] = message.ToolCallId;
+
+        if (message.ToolCalls is { Count: > 0 } calls)
+        {
+            var array = new JsonArray();
+            foreach (var call in calls)
+            {
+                array.Add((JsonNode)new JsonObject
+                {
+                    ["id"] = call.Id,
+                    ["name"] = call.Name,
+                    ["arguments"] = call.Arguments
+                });
+            }
+            node["toolCalls"] = array;
+        }
+
+        if (message.Usage is { } usage)
+        {
+            node["usage"] = new JsonObject
+            {
+                ["input"] = usage.InputTokens,
+                ["output"] = usage.OutputTokens,
+                ["cacheRead"] = usage.CacheReadTokens,
+                ["cacheWrite"] = usage.CacheWriteTokens
+            };
+        }
+
+        return node.ToJsonString();
+    }
+
     private static ChatMessage? Deserialize(DurableEntryRow entry)
     {
+        JsonObject? node;
         try
         {
-            return JsonSerializer.Deserialize<ChatMessage>(entry.Payload, Json);
+            node = JsonNode.Parse(entry.Payload) as JsonObject;
         }
         catch (JsonException)
         {
             return null;
         }
+
+        if (node is null)
+            return null;
+
+        IReadOnlyList<AiToolCall>? calls = null;
+        if (node["toolCalls"] is JsonArray array && array.Count > 0)
+        {
+            var list = new List<AiToolCall>(array.Count);
+            foreach (var item in array)
+            {
+                if (item is not JsonObject call)
+                    continue;
+
+                list.Add(new AiToolCall(
+                    call["id"]?.GetValue<string>() ?? "",
+                    call["name"]?.GetValue<string>() ?? "",
+                    call["arguments"]?.GetValue<string>() ?? "{}"));
+            }
+
+            calls = list.Count > 0 ? list : null;
+        }
+
+        AgentUsage? usage = null;
+        if (node["usage"] is JsonObject usageNode)
+        {
+            usage = new AgentUsage(
+                usageNode["input"]?.GetValue<int>() ?? 0,
+                usageNode["output"]?.GetValue<int>() ?? 0,
+                usageNode["cacheRead"]?.GetValue<int>() ?? 0,
+                usageNode["cacheWrite"]?.GetValue<int>() ?? 0);
+        }
+
+        return new ChatMessage(
+            node["role"]?.GetValue<string>() ?? AgentRoles.User,
+            node["content"]?.GetValue<string>() ?? "",
+            node["name"]?.GetValue<string>(),
+            node["toolCallId"]?.GetValue<string>(),
+            calls,
+            Usage: usage);
     }
 
     private sealed record SeqRow(long Value);

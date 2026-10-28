@@ -301,26 +301,44 @@ public sealed class McpClient : IAsyncDisposable
 
     private static string Sanitize(string value) => value.Replace('-', '_');
 
-    private static Dictionary<string, object?> ToParameterDictionary(JsonObject schema)
-    {
-        // AiToolDefinition wants a plain dictionary; round-trip through JSON to convert.
-        try
-        {
-            var deserialized = JsonSerializer.Deserialize<Dictionary<string, object?>>(schema.ToJsonString());
-            if (deserialized is not null)
-                return deserialized;
-        }
-        catch (JsonException)
-        {
-            // fall through
-        }
-
-        return new Dictionary<string, object?>
+    /// <summary>
+    /// Converts a JSON Schema into the plain dictionary <see cref="AiToolDefinition"/> expects.
+    /// </summary>
+    /// <remarks>
+    /// Converted node by node rather than through <c>JsonSerializer</c>: reflection-based
+    /// serialization is disabled under Native AOT, so a schema with nested objects would throw at
+    /// runtime rather than produce a tool definition.
+    /// </remarks>
+    private static Dictionary<string, object?> ToParameterDictionary(JsonObject schema) =>
+        ToPlainObject(schema) ?? new Dictionary<string, object?>
         {
             ["type"] = "object",
             ["properties"] = new Dictionary<string, object?>()
         };
+
+    private static Dictionary<string, object?>? ToPlainObject(JsonNode? node)
+    {
+        if (node is not JsonObject obj)
+            return null;
+
+        var result = new Dictionary<string, object?>(obj.Count, StringComparer.Ordinal);
+
+        foreach (var (key, value) in obj)
+            result[key] = ToPlainValue(value);
+
+        return result;
     }
+
+    private static object? ToPlainValue(JsonNode? node) => node switch
+    {
+        JsonObject obj => ToPlainObject(obj),
+        JsonArray array => array.Select(ToPlainValue).ToList(),
+        JsonValue value => value.TryGetValue<string>(out var text) ? text
+            : value.TryGetValue<bool>(out var flag) ? flag
+            : value.TryGetValue<double>(out var number) ? number
+            : null,
+        _ => null
+    };
 
     private static string FlattenContent(JsonNode? content)
     {

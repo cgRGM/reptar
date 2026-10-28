@@ -218,7 +218,7 @@ public static class ToolApprovalGate
                 sessionId,
                 ApprovalPortName,
                 approval.DescribeCall(name, argsJson),
-                JsonSerializer.Serialize(history, options),
+                AgentMessageJson.SerializeList(history),
                 pendingToolCallId: callId,
                 pendingToolName: name,
                 pendingToolArgs: argsJson).ConfigureAwait(false);

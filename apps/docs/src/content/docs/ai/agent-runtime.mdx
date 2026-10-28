@@ -3,13 +3,41 @@ title: Agent Runtime
 description: The streaming agent loop, sessions, compaction, durability, and the SDK in Reptar.AI.
 ---
 
-`Reptar.AI` ships a complete coding-agent runtime, not just tool plumbing. This page covers the pieces added after the tool layer described in [AI Tools & Agent Harness](/ai/agent-harness).
+`Reptar.AI` ships a complete coding-agent runtime. This page covers the engine — the loop, sessions, context management, durability, the SDK, and the integrations. The tool layer underneath it (`.AsAiTool()`, `app.GetAiTools()`, `ExecuteAiToolAsync`) is documented in [AI Tools & Agent Harness](/ai/agent-harness); the terminal UI is its own package, [Reptar.Term](/ai/term-package).
 
-Everything here is in the framework package. The terminal UI and the RPC server live in `examples/agent-cli` as reference clients.
+## Capabilities
+
+| Capability | Entry point |
+| --- | --- |
+| Streaming ReAct loop with parallel tools | `AgentLoop.RunAsync` |
+| Session state, steering and follow-up queues | `AgentSession` |
+| In-flight run registry for an HTTP host | `AgentRunRegistry` |
+| JSONL protocol in and out | `AgentEventJson.ToJson` / `TryParse` |
+| Rich message roles flattened at the provider boundary | `AgentMessages.ConvertToLlm` |
+| Context compaction | `ContextCompactor.CompactAsync` |
+| Bounded tool output with spill-to-file | `ToolOutput.Head` / `Tail` / `SpillToFile` |
+| Crash-safe runs, resume, forks | `DurableAgentHarness` |
+| Append-only session tree with branching | `SessionTreeStore` |
+| Five-line agent construction | `ReptarAgent.CreateAsync` |
+| Tool allow/deny selection | `ToolSelection` |
+| Sandboxed tool-calling scripts | `CodeMode.Register` |
+| MCP client (Reptar consumes MCP servers) | `McpToolSource.ConnectAsync` |
+| Thinking levels mapped to provider parameters | `ThinkingLevels` |
+| Prompt caching plus a warmer | `LlmConfig.PromptCache`, `CacheWarmer` |
+| Layered settings | `AgentSettingsStore` |
+| Project trust gating | `ProjectTrustStore` |
+| Skill discovery with conflict diagnostics | `SkillsDirectory.DiscoverAll` |
+| Loaded-and-rejected resource report | `AgentResourcesReport.Gather` |
+| Prompt templates | `PromptTemplates` |
+| Model aliases | `ModelAliases` |
+| Todos as first-class tools | `TodoModule` |
+| Nested tool calls through the same hooks | `AgentToolContext` |
+| Provider attribution headers | `ClientIdentity` |
+| Diagnostic log | `AgentLog` |
 
 ## 1. The agent loop
 
-`AgentLoop` is a provider-agnostic streaming ReAct loop. It takes a transcript, a config, and a stream function, and emits events. It knows nothing about sessions, files, or terminals.
+`AgentLoop` is a provider-agnostic streaming ReAct loop. It takes a transcript, a config, and a stream function, and emits events. It knows nothing about sessions, files, or terminals — which is what makes it testable and reusable across clients.
 
 ```csharp
 var summary = await AgentLoop.RunAsync(
@@ -18,7 +46,8 @@ var summary = await AgentLoop.RunAsync(
     {
         Model = "claude-sonnet-4-5",
         MaxSteps = 24,
-        ToolExecutor = (invocation, ct) => app.ExecuteAiToolAsync(invocation.ToolName, invocation.ArgumentsJson)
+        ToolExecutor = (invocation, ct) =>
+            app.ExecuteAiToolAsync(invocation.ToolName, invocation.ArgumentsJson)
     },
     client.StreamAsync,
     app.GetAiTools(onlyExplicit: true),
@@ -27,7 +56,7 @@ var summary = await AgentLoop.RunAsync(
 
 ### Event vocabulary
 
-The event names match pi's JSONL protocol, so one client implementation can consume the terminal, the SSE stream, and an RPC pipe without translation:
+The names match pi's JSONL protocol, so one client implementation consumes the terminal, an SSE stream, and an RPC pipe without translation:
 
 | Event | Meaning |
 | --- | --- |
@@ -46,14 +75,35 @@ The event names match pi's JSONL protocol, so one client implementation can cons
 
 ### Guarantees
 
-- **Independent tool calls run concurrently.** `SequentialTools` opts individual tools out.
+- **Independent tool calls run concurrently.** `AgentLoopConfig.SequentialTools` opts individual tools out; `run_command` is sequential by default because two shells share a working directory.
 - **A `length` stop fails the whole tool batch.** Truncated arguments can still parse, so executing them runs a half-formed command.
 - **Cancellation is observed between tool calls and mid-stream.**
 - **Tool output can stream.** `AgentToolStreaming.Report(chunk)` from inside a tool body becomes a `tool_execution_update`; `run_command` uses this so a long build shows progress.
 
 ### Serialization
 
-`evt.ToJson()` produces one JSONL record; `AgentEventJson.TryParse` reads it back. Client and server share one definition, so the protocol cannot drift.
+`evt.ToJson()` produces one JSONL record; `AgentEventJson.TryParse` reads it back. Client and server share one definition, so the protocol cannot drift. `AgentMessageJson` does the same for transcripts.
+
+### Declaring a tool's arguments
+
+A route that binds a typed body gets its schema generated from the type. A route that reads the raw body — which is how the workspace tools parse JSON — must declare one:
+
+```csharp
+app.Post("/workspace/run_command", handler)
+    .AsAiTool("run_command", "Execute a shell command in the workspace root")
+    .WithAiToolSchema(new Dictionary<string, object?>
+    {
+        ["type"] = "object",
+        ["properties"] = new Dictionary<string, object?>
+        {
+            ["command"] = new() { ["type"] = "string", ["description"] = "Shell command" },
+            ["wait_ms"] = new() { ["type"] = "integer", ["description"] = "Timeout in ms" }
+        },
+        ["required"] = new List<object?> { "command" }
+    });
+```
+
+Without it the model receives `{"type":"object","properties":{}}` and guesses: it invents `waitMs`, or sends `"wait_ms": "10000"` as a string. With it, arguments are **coerced against the declared types** before dispatch — a string-typed integer becomes an integer — while string fields are never rewritten, so a value like `"12345"` stays text.
 
 ## 2. Sessions and queues
 
@@ -70,6 +120,8 @@ Steering is polled **before each provider request**, not after the run, which is
 
 `AgentRunRegistry` is the same idea for an HTTP host: it maps a key (session id, job id) to a cancellable run with a queue, so a second request can steer or abort the first.
 
+`AgentRetryPolicy` covers transient provider failures — 408, 409, 429, and 5xx — with jittered exponential backoff. Defaults: 4 attempts, 2 s base, 30 s cap.
+
 ## 3. Context compaction
 
 `ContextCompaction` estimates tokens, finds a cut point, and builds the summary prompt.
@@ -81,6 +133,8 @@ var outcome = await ContextCompactor.CompactAsync(
 if (outcome is { } result)
     history = result.Projection;   // summary + retained tail; the raw history is untouched
 ```
+
+Defaults: keep the last 20 000 tokens verbatim, reserve 16 384 tokens of headroom, cap the summary at 4 096 tokens.
 
 Three details that matter:
 
@@ -126,11 +180,12 @@ await harness.ResumeAsync(client);
 
 `SessionTreeStore` stores an append-only tree: every entry names its parent, and the leaf is the only mutable state.
 
-| Operation | Implementation                                       |
-| --------- | ---------------------------------------------------- |
-| append    | new entry whose parent is the leaf; advance the leaf |
-| branch    | move the leaf to an earlier entry, keep appending    |
-| fork      | copy the path into a new session                     |
+| Operation | Method |
+| --- | --- |
+| append | `AppendAsync` — new entry whose parent is the leaf; advance the leaf |
+| branch | `SetLeafAsync` — move the leaf to an earlier entry, keep appending |
+| fork | `ForkAsync` — copy the path into a new session |
+| read | `LoadBranchAsync`, `EntriesAsync`, `TreeAsync`, `DescribeTreeAsync` |
 
 `ImportFlatAsync` lifts an older flat session into the tree on first open, so existing databases keep working. The tables are separate from the message table for exactly that reason — no `ALTER TABLE` on a database already in the wild.
 
@@ -150,7 +205,7 @@ var summary = await agent.PromptAsync("fix the failing test", onText: Console.Wr
 var stats = agent.Stats();
 ```
 
-`CreateAsync` resolves the provider, mounts the tools, opens or resumes a session, applies the tool selection, looks up the context window, and wires compaction and retry.
+`CreateAsync` resolves the provider, mounts the tools, opens or resumes a session, applies the tool selection, looks up the context window, and wires compaction and retry. `Attach` does the same over an app you already configured.
 
 ### Tool selection
 
@@ -159,6 +214,8 @@ var stats = agent.Stats();
 | `Only("read_file", "*_dir")` | Allowlist — nothing outside it is callable |
 | `AllExcept("run_command")` | Denylist, applied after the allowlist |
 | `Adjusting("+run_command", "-write_file")` | Not an allowlist — edits the default selection |
+| `NoTools` | Nothing callable |
+| `ReadOnly` | `read_file`, `list_dir`, `run_command` |
 
 Mixing bare names with `+`/`-` throws, because "only these" and "add this one" are contradictory.
 
@@ -176,11 +233,11 @@ foreach (let f in files.entries) {
 }
 ```
 
-The interpreter is a hand-written C#-flavoured subset — Reptar targets Native AOT and NetWasm, so there is no JavaScript engine to embed. The capability model is the same: tools are the only way out, only `text()`/`log()`/the return value reach the model, `spawn()`/`join()` run calls concurrently, and step budget, cancellation, and output caps bound the run.
+The interpreter is a hand-written C#-flavoured subset — Reptar targets Native AOT and NetWasm, so there is no JavaScript engine to embed. The capability model is the same: tools are the only way out, only `text()`/`log()`/the return value reach the model, `spawn()`/`join()` run calls concurrently, and a step budget (5 000 by default), a timeout (60 s), and an output cap (100 items) bound the run. `image()` accepts a base64 `data:` URL and refuses remote ones. `store()`/`load()` persist across calls.
 
 ## 9. MCP
 
-`McpToolSource` connects stdio MCP servers and mounts their tools as ordinary Reptar AI tools.
+`McpToolSource` connects stdio MCP servers and mounts their tools as ordinary Reptar AI tools — Reptar **consuming** MCP, as opposed to `bun reptar mcp`, which exposes Reptar as an MCP server.
 
 ```csharp
 await using var source = await McpToolSource.ConnectAsync([
@@ -190,7 +247,7 @@ await using var source = await McpToolSource.ConnectAsync([
 source.Mount(app);   // tools named mcp__files__read_file
 ```
 
-A server that fails to start is reported and skipped, so one bad server does not take the agent down.
+A server that fails to start is reported and skipped, so one bad server does not take the agent down. Only stdio transport is implemented.
 
 ## 10. Thinking levels
 
@@ -208,13 +265,13 @@ var (maxTokens, budget) = ThinkingLevels.AdjustMaxTokens(
 | medium  | 8 192  |
 | high    | 16 384 |
 
-Thinking shares the response ceiling with the answer, so the ceiling is raised to fit and the budget is squeezed to leave room to reply. `LlmCatalog` reads each model's real capability from models.dev `reasoning_options`, so a level the provider would reject is never offered.
+`xhigh` and `max` collapse to `high` for budget purposes and are only offered when a model declares them. Thinking shares the response ceiling with the answer, so the ceiling is raised to fit and the budget is squeezed to leave room to reply. `LlmCatalog` reads each model's real capability from models.dev `reasoning_options`, so a level the provider would reject is never offered.
 
 ## 11. Prompt caching
 
 `LlmConfig.PromptCache` puts `cache_control` breakpoints on three places: the system prompt, the last tool definition, and **the last content block of the last message**. The third is the one that matters — without it every turn re-bills the entire conversation at full input price.
 
-`CacheWarmer.WarmAsync` sends one throwaway request when the prefix is large enough to pay for itself. `LlmStreamEvent.Usage` carries `cache_read_input_tokens` and `cache_creation_input_tokens` so the saving is measurable.
+`CacheWarmer.WarmAsync` sends one throwaway request when the prefix is large enough to pay for itself (≥1 024 estimated tokens, Anthropic only). `LlmStreamEvent.Usage` carries `cache_read_input_tokens` and `cache_creation_input_tokens` so the saving is measurable.
 
 ## 12. Settings
 
@@ -222,13 +279,36 @@ Thinking shares the response ceiling with the answer, so the ceiling is raised t
 
 Writes always go to the user file: the agent should not modify a repository's configuration.
 
+It is mapped by hand through `JsonNode` rather than reflection, because reflection-based serialization is disabled under Native AOT.
+
 ## 13. Trust
 
 `ProjectTrustStore` gates project-local resources — settings, prompt templates, skills — behind an explicit decision recorded per absolute path in `~/.reptar/trust.json`. `Unknown` is not trust; an unreadable store fails closed.
 
-`AgentResourcesReport` gathers what was loaded and what was rejected, which is what makes a shadowed skill or an unparseable `SKILL.md` visible instead of silent.
+`SkillsDirectory.DiscoverAll` walks the user root then the project root and reports what it rejected: a shadowed skill names the losing file and the winner, and an unusable one names the reason (`description is required`, `name must be a lowercase slug`). `AgentResourcesReport.Gather` collects that with the loaded context files and settings warnings into one report — which is what makes a shadowed skill visible instead of silent.
 
-## 14. Provider identity
+## 14. Prompt templates and model aliases
+
+`PromptTemplates` loads `.reptar/prompts/*.md` as slash commands, expanding `$1`, `$@`, `$ARGUMENTS`, and `$0`. Project templates shadow user templates, and they only load from a trusted workspace.
+
+```markdown
+---
+description: Fix failing tests
+argument-hint: <path>
+---
+
+Look at $1 and make the tests pass.
+```
+
+`ModelAliases` maps a short name to a concrete provider and model, so `--model fast` works and the mapping can move when a new model ships. `ModelAliases.Merge` layers project aliases over the defaults.
+
+## 15. Todos and nested tools
+
+`TodoModule` gives the model `todos_add`, `todos_complete`, `todos_remove`, `todos_get_remaining`, and `todos_get_all`. `Mount(app)` registers them as ordinary tools so the standard dispatcher reaches them; `Items`, `RemainingCount`, and `CompletedCount` let a UI render a count without a separate query.
+
+`AgentToolContext.ExecuteAsync(name, args)` lets a running tool call other tools **through the same hooks**, so `BeforeToolCall` and `AfterToolCall` apply transitively — a "search" tool cannot quietly do what "write" was denied. Nesting is depth-limited to 4 and returns a failed result rather than throwing when no loop is active.
+
+## 16. Provider identity
 
 `ClientIdentity` sends the attribution headers a provider expects:
 
@@ -240,9 +320,102 @@ Writes always go to the user file: the agent should not modify a repository's co
 
 OpenRouter only credits an application in its rankings when the first two are present.
 
+## 17. Matching primitives
+
+`Fuzzy` is the ranking used by every picker: all query characters in order, with bonuses for consecutive matches, word boundaries, and early positions. `SlashCommands` applies it to command names — **name only**, because matching descriptions as well makes a single letter match half the list.
+
+## 18. Diagnostics
+
+Set `REPTAR_AGENT_LOG` to write a line per event and a record per tool call, including the exact arguments the model sent and the exact result:
+
+```bash
+REPTAR_AGENT_LOG=/tmp/agent.log bun reptar agent
+REPTAR_AGENT_LOG=1 bun reptar agent        # defaults to ~/.reptar/agent/agent.log
+```
+
+```
+tool.start  run_command  {"command":"echo hello","wait_ms":15000}
+tool.end    run_command  ok  57ms  {"exitCode":0,"stdout":"hello\n",...}
+agent.end   Completed  2 steps  1 tool calls  5127ms
+```
+
+The terminal shows the outcome; the log shows why. `AgentLog` is tapped inside `AgentLoop`, so every client gets it, and it never writes to stdout — a client may be using stdout for a protocol.
+
+## 19. Providers
+
+Nine providers are registered, all speaking the OpenAI wire format except Anthropic and Gemini:
+
+OpenAI · Anthropic · Google Gemini · Ollama · OpenRouter · Vercel AI Gateway · OpenCode Zen · Cloudflare Workers AI · Cloudflare AI Gateway
+
+Providers that need more than a key declare it: Cloudflare Workers AI needs an account id, AI Gateway needs an account and gateway id. `LlmProviders.ResolveBaseUrl` substitutes them from the saved credential or the environment, and leaves an unfilled placeholder visible rather than blanking it — a request to a URL containing a literal `{account_id}` fails in a way that looks like an auth error.
+
+`ProviderAuth` records whether a provider can be signed in with a subscription (`Account`), an API key, or both. A ChatGPT Plus/Pro subscription is supported end to end; no other provider has a subscription flow yet.
+
+## 20. What counts as connected
+
+A provider is offered as an option only when it can actually serve a request. `LlmProviders.IsConnected` is the single definition:
+
+```csharp
+LlmProviders.IsConnected("openai", auth)   // a credential or env var, AND no missing fields
+```
+
+Both halves matter. A provider that needs no API key is still not connected until it has been chosen — a ChatGPT subscription needs no key, so without that rule it appears in pickers while signed out and fails on first use. And a credential that exists but is incomplete cannot work either: an AI Gateway credential with no account id cannot build its URL.
+
+Status lists (`/providers`) deliberately do not filter. Showing what is missing is their job; only lists of _options_ hide what cannot be used.
+
+## 21. Browsing models
+
+Building a model picker is the same problem in every host, so the rules live in the framework rather than in each UI:
+
+```csharp
+using Reptar.AI;
+
+var options = await LlmModelOptions.BuildAsync(auth);
+
+foreach (var option in options)
+    Console.WriteLine($"{option.ProviderName,-28} {option.ModelId,-24} {option.Specs}");
+
+var categories = LlmModelOptions.Categories(options);  // ["All", "OpenAI", "Google", ...]
+```
+
+`ModelOption` carries what a picker needs: provider key and name, model id, display name, a grouping category, a short capability line (`400k ctx · reasoning`), whether it reasons, and the thinking levels it actually accepts.
+
+The filtering is the part worth not reimplementing:
+
+| Rule | Why |
+| --- | --- |
+| Only connected providers | Picking a model with no credential gives a 401 that reads like a bug |
+| Only chat models | An embedding or TTS model in a picker produces an error, not a reply |
+| Newest first | Provider catalogs arrive in no useful order |
+| Fall back to the provider default | A provider with no known catalog must stay selectable |
+
+`LlmModelOptions.IsChatModel` excludes the families that cannot answer a prompt — embeddings, rerankers, image generation, speech, transcription, moderation, and audio-only realtime models.
+
+Ordering compares the numeric runs in a model id, descending, so `gpt-6-sol` sorts above `gpt-5.6`, and `gpt-5.10` above `gpt-5.9` — which string comparison gets backwards. A dated snapshot sorts above the alias it snapshots. It is a heuristic, not a version scheme: `o3` versus `gpt-4` has no correct answer, only a stable one.
+
+A ChatGPT subscription browses the same catalog as the OpenAI API, since it serves the same model family. Cloudflare Workers AI lists only the models Cloudflare itself hosts (`@cf/...`) — that is a different product from an OpenAI account, and the GPT models there are open-weights variants, not the API models.
+
+## 22. Sign in with ChatGPT
+
+A ChatGPT Plus/Pro subscription is a provider: `openai-chatgpt`. It needs no API key. The flow is authorization-code with PKCE and a loopback callback on `127.0.0.1:1455`.
+
+Several details produce confusing failures if missed:
+
+- **PKCE is mandatory.** It is a public client with no secret, so the S256 verifier is what stops an intercepted authorization code from being redeemed.
+- **The authorize URL needs `agent_name_hint`, `nonce`, and `ext_agent_host_id`.** Without them OpenAI answers `invalid_authorize_request` and does not say which parameter was missing. The host id is `urn:uuid:<uuid>` for the installation, persisted in `~/.reptar/agent/device-id` — a value that changed per launch would present every run as a new device.
+- **The client id is issued, not fixed.** OpenAI performs dynamic client registration: the request sends `dynamic_agent_client` and the real id comes back on the callback, then must be used for the exchange and every refresh. Reusing the placeholder yields `invalid_client`.
+- **The listener binds before the browser opens.** Opening first races the bind: on a session that needs no interaction the redirect can arrive before the socket exists. A callback whose state does not match is answered and ignored rather than aborting the flow, since a stale tab can land on the same port while a legitimate sign-in is pending.
+- **The grant must include `chatgpt.tokens.use.direct`** or the token cannot call the API. The flow checks for it rather than surfacing it later as a 401.
+
+Tokens refresh three minutes before expiry, and the rotated refresh token is persisted — keeping the old one breaks the next refresh.
+
+A subscription token is not accepted by `/chat/completions`, so this provider uses `OpenAiResponsesLlmClient` (`/v1/responses`), where the transcript is a flat list of typed input items and a tool call is a sibling item rather than a field on the assistant message.
+
 ## See also
 
 - [AI Tools & Agent Harness](/ai/agent-harness) — the tool layer underneath this
+- [Extensions](/ai/extensions) — tools, commands, and hooks added at runtime
+- [Reptar.Term](/ai/term-package) — the terminal UI package
 - [Structured LLM Outputs](/cookbook/structured-llm-outputs)
 - [Human in the Loop](/cookbook/human-in-the-loop)
 - [Agent Evals](/cookbook/agent-evals)

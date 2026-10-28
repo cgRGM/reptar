@@ -13,6 +13,8 @@ Because Reptar already maintains route metadata and `Rule<T>` validator constrai
 
 ## 1. Route Tool Definition (`.AsAiTool()`)
 
+:::tip This page covers the **tool layer**. The agent engine built on top of it — the streaming loop, sessions, compaction, durability, the SDK, codemode, MCP consumption — is documented in [Agent Runtime](/ai/agent-runtime). :::
+
 Register your routes normally with typed input validators, and designate them as AI tools using `.AsAiTool()`:
 
 ```csharp
@@ -204,6 +206,8 @@ app.Post("/api/chat", async ctx =>
 ---
 
 ## 8. Coding Agent Tooling: MCP Server, CLI Inspection & Two-Layer Agent Docs
+
+:::note This section covers Reptar **exposing itself** as an MCP server (`bun reptar mcp`). Reptar **consuming** other MCP servers is the opposite direction and lives in [Agent Runtime § 9](/ai/agent-runtime#9-mcp) — `McpToolSource` connects a stdio server and mounts its tools as ordinary AI tools. :::
 
 Reptar is designed from the ground up to be operated by AI coding agents (Claude Code, Cursor, Antigravity, Windsurf) with zero guesswork:
 

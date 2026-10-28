@@ -214,6 +214,8 @@ export default defineConfig({
               label: "Agent Runtime (loop, sessions, SDK)",
               slug: "ai/agent-runtime",
             },
+            { label: "Extensions", slug: "ai/extensions" },
+            { label: "Reptar.Term (terminal UI)", slug: "ai/term-package" },
             { label: "AI Gateway (Proxy & Failover)", slug: "ai/ai-gateway" },
           ],
           label: "AI & Agents",

@@ -1,5 +1,6 @@
 #:project ../../framework/Reptar/Reptar.csproj
 #:project ../../framework/Reptar.AI/Reptar.AI.csproj
+#:project ../../framework/Reptar.Term/Reptar.Term.csproj
 #:project ../../framework/Reptar.Kestrel/Reptar.Kestrel.csproj
 #:include schema.cs
 #:include features/chat.cs
@@ -7,19 +8,12 @@
 #:include rpc/RpcMode.cs
 #:include rpc/RpcClient.cs
 #:include web.cs
-#:include terminal/Ansi.cs
-#:include terminal/TermSelector.cs
-#:include terminal/TermLayout.cs
 #:include terminal/ReptarTerm.cs
 #:include terminal/TerminalAgent.cs
-#:include terminal/TerminalBuffer.cs
-#:include terminal/TerminalEditor.cs
-#:include terminal/TerminalInput.cs
-#:include terminal/TerminalScreen.cs
-#:include terminal/TerminalUi.cs
 
 global using Reptar;
 global using Reptar.AI;
+global using Reptar.Term;
 global using Reptar.Hosting;
 global using ReptarWeb;
 
@@ -71,6 +65,11 @@ await store.EnsureCreatedAsync();
 // and old flat sessions are imported on first load.
 var tree = new SessionTreeStore(app.Db);
 await tree.EnsureCreatedAsync();
+
+// Todos: mounted as ordinary tools so the model can plan multi-step work, and readable by the
+// UI for the status-line count.
+var todos = TodoModule.Create();
+todos.Mount(app);
 
 // Chat API + session persistence + embedded web companion.
 Chat.Configure(app, store, workspaceRoot);

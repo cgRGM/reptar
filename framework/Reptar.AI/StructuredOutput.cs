@@ -218,6 +218,18 @@ public static class AgentStructuredOutput
                 null));
             return null;
         }
+        catch (NotSupportedException)
+        {
+            // Native AOT has no reflection-based serializer unless the app registers a
+            // JsonSerializerContext for T. Say so, rather than surfacing a bare platform error
+            // that reads like a bug in the caller's model.
+            issues.Add(new ValidationIssue(
+                $"This build cannot deserialize '{typeof(T).Name}' by reflection. Native AOT requires a "
+                + "source-generated JsonSerializerContext for the target type: pass "
+                + "JsonSerializerOptions whose TypeInfoResolver includes it.",
+                null));
+            return null;
+        }
     }
 
     /// <summary>

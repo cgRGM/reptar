@@ -300,16 +300,24 @@ const run = (args: string[], cwd = repoRoot): void => {
  * app owns stdout from its first byte. Mirrors pi's "stdout is protocol only,
  * diagnostics go to stderr" contract.
  */
-const runWithCleanStdout = (args: string[], cwd = repoRoot): void => {
-  const build = spawnSync(
-    dotnetPath(),
-    ["build", args[0], "-v", "q", "--nologo"],
-    {
-      cwd,
-      env: dotnetEnv(),
-      stdio: ["ignore", "ignore", "inherit"],
-    }
-  );
+const runWithCleanStdout = (
+  args: string[],
+  cwd = repoRoot,
+  { quiet = false }: { quiet?: boolean } = {}
+): void => {
+  // `/clp:ErrorsOnly` keeps the console clean without hiding a real failure. The framework
+  // carries a long tail of nullable warnings that are irrelevant to someone launching a CLI,
+  // and printing them on every start buries the thing the user actually ran.
+  const buildArgs = ["build", args[0], "-v", "q", "--nologo"];
+  if (quiet) {
+    buildArgs.push("/clp:ErrorsOnly");
+  }
+
+  const build = spawnSync(dotnetPath(), buildArgs, {
+    cwd,
+    env: dotnetEnv(),
+    stdio: ["ignore", "ignore", "inherit"],
+  });
 
   if (build.status !== 0) {
     process.exit(build.status ?? 1);
@@ -1129,13 +1137,6 @@ Slash commands inside the session: /reset /history /tools /model /sessions
             (_, index) => index !== workspaceFlag && index !== workspaceFlag + 1
           );
 
-    // RPC mode owns stdout for its JSONL protocol, so keep build noise off it.
-    const isRpc = passThrough.some(
-      (arg, index) =>
-        (arg === "--mode" && passThrough[index + 1] === "rpc") ||
-        arg === "--mode=rpc"
-    );
-
     const agentArgs = [
       "app.cs",
       "--",
@@ -1144,11 +1145,11 @@ Slash commands inside the session: /reset /history /tools /model /sessions
       ...passThrough,
     ];
 
-    if (isRpc) {
-      runWithCleanStdout(agentArgs, path.join(repoRoot, "examples/agent-cli"));
-    } else {
-      run(["run", ...agentArgs], path.join(repoRoot, "examples/agent-cli"));
-    }
+    // Both modes build quietly and then run with --no-build: the agent owns the terminal, and
+    // a wall of compiler warnings before its first frame is not a good first impression.
+    runWithCleanStdout(agentArgs, path.join(repoRoot, "examples/agent-cli"), {
+      quiet: true,
+    });
     break;
   }
 

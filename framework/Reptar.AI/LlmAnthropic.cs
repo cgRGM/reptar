@@ -232,7 +232,7 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
             switch (message.Role)
             {
                 case "tool":
-                    (pendingToolResults ??= new JsonArray()).Add(new JsonObject
+                    (pendingToolResults ??= new JsonArray()).Add((JsonNode)new JsonObject
                     {
                         ["type"] = "tool_result",
                         ["tool_use_id"] = message.ToolCallId,
@@ -247,7 +247,7 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
                     var contentArray = new JsonArray();
 
                     if (message.Content.Length > 0)
-                        contentArray.Add(new JsonObject
+                        contentArray.Add((JsonNode)new JsonObject
                         {
                             ["type"] = "text",
                             ["text"] = message.Content
@@ -255,7 +255,7 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
 
                     foreach (var call in message.ToolCalls)
                     {
-                        contentArray.Add(new JsonObject
+                        contentArray.Add((JsonNode)new JsonObject
                         {
                             ["type"] = "tool_use",
                             ["id"] = call.Id,
@@ -266,12 +266,12 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
                     }
 
                     assistant["content"] = contentArray;
-                    array.Add(assistant);
+                    array.Add((JsonNode)assistant);
                     break;
 
                 case "assistant":
                     FlushToolResults(array, ref pendingToolResults);
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "assistant",
                         ["content"] = message.Content
@@ -284,14 +284,14 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
                     {
                         var blocks = new JsonArray();
                         if (message.Content.Length > 0)
-                            blocks.Add(new JsonObject
+                            blocks.Add((JsonNode)new JsonObject
                             {
                                 ["type"] = "text",
                                 ["text"] = message.Content
                             });
                         foreach (var image in message.Images)
                         {
-                            blocks.Add(new JsonObject
+                            blocks.Add((JsonNode)new JsonObject
                             {
                                 ["type"] = "image",
                                 ["source"] = new JsonObject
@@ -302,7 +302,7 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
                                 }
                             });
                         }
-                        array.Add(new JsonObject
+                        array.Add((JsonNode)new JsonObject
                         {
                             ["role"] = "user",
                             ["content"] = blocks
@@ -310,7 +310,7 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
                     }
                     else
                     {
-                        array.Add(new JsonObject
+                        array.Add((JsonNode)new JsonObject
                         {
                             ["role"] = "user",
                             ["content"] = message.Content
@@ -370,7 +370,7 @@ public sealed class AnthropicLlmClient(LlmConfig config) : ILlmClient
         if (pending is null || pending.Count == 0)
             return;
 
-        target.Add(new JsonObject
+        target.Add((JsonNode)new JsonObject
         {
             ["role"] = "user",
             ["content"] = pending

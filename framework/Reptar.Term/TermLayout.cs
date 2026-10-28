@@ -1,5 +1,5 @@
 #if !NETWASM
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// Vertical geometry for the bottom of the screen.

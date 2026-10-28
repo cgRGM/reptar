@@ -102,10 +102,19 @@ public static class ModelAliases
     /// <param name="spec">What the user typed.</param>
     /// <param name="aliases">Registry to consult. Defaults to <see cref="Defaults"/>.</param>
     /// <param name="apiKey">Key to attach, usually resolved separately.</param>
+    /// <param name="spec">What the user typed: an alias, <c>provider/model</c>, or a bare id.</param>
+    /// <param name="aliases">Registry to consult. Defaults to <see cref="Defaults"/>.</param>
+    /// <param name="apiKey">Key to attach, usually resolved separately.</param>
+    /// <param name="provider">
+    /// Provider to pair with a bare model id. Settings store provider and model separately, so a
+    /// saved <c>{"provider":"ollama","model":"llama3.1:8b"}</c> must resolve without the spec
+    /// needing to repeat the provider.
+    /// </param>
     public static LlmConfig Resolve(
         string spec,
         IReadOnlyList<ModelAlias>? aliases = null,
-        string? apiKey = null)
+        string? apiKey = null,
+        string? provider = null)
     {
         var registry = aliases ?? Defaults;
 
@@ -119,16 +128,26 @@ public static class ModelAliases
         var slash = spec.IndexOf('/');
         if (slash > 0 && slash < spec.Length - 1)
         {
-            var provider = spec[..slash];
-            var model = spec[(slash + 1)..];
+            var specProvider = spec[..slash];
+            var specModel = spec[(slash + 1)..];
 
             return new LlmConfig
             {
-                ProviderKey = provider,
-                Provider = ModelAlias.WireProtocol(provider),
-                Model = model,
+                ProviderKey = specProvider,
+                Provider = ModelAlias.WireProtocol(specProvider),
+                Model = specModel,
                 ApiKey = apiKey
             };
+        }
+
+        // A bare id with an explicit provider: that provider wins over the environment.
+        // Delegated rather than hand-built, so the provider's base URL, env key, and saved
+        // credential are all resolved — a hand-built config has no BaseUrl, which silently
+        // points a local model at api.openai.com.
+        if (provider is { Length: > 0 })
+        {
+            var configured = LlmConfig.FromEnvironment(provider: provider, model: spec);
+            return apiKey is null ? configured : configured with { ApiKey = apiKey };
         }
 
         // Bare model id: keep the provider from the environment.

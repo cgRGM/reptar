@@ -1,5 +1,5 @@
 #if !NETWASM
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// Pinned-footer support over a DECSTBM scroll region: the terminal scrolls
@@ -17,10 +17,66 @@ public sealed class TerminalScreen : IDisposable
     private const string EnableBracketedPaste = "\x1b[?2004h";
     private const string DisableBracketedPaste = "\x1b[?2004l";
 
+    /// <summary>
+    /// SGR mouse reporting: press, release, and wheel. Motion (1002/1003) is deliberately left
+    /// off — it floods the input queue with a report per cell the pointer crosses, and nothing
+    /// here needs hover.
+    /// </summary>
+    private const string EnableMouse = "\x1b[?1000h\x1b[?1006h";
+
+    private const string DisableMouse = "\x1b[?1006l\x1b[?1000l";
+
     private int _lastHeight;
     private bool _active;
+    private bool _altScreen;
+    private bool _mouseEnabled;
 
     public bool Active => _active;
+
+    /// <summary>True while the alternate screen buffer is in use.</summary>
+    public bool InAltScreen => _altScreen;
+
+    /// <summary>
+    /// Takes over the full screen: alternate buffer, hidden cursor, bracketed paste, and a clean
+    /// slate. This is the mode a full-frame TUI wants, as opposed to <see cref="Enter"/>'s pinned
+    /// footer over a scroll region.
+    /// </summary>
+    /// <remarks>
+    /// Owning this here rather than in each application means the package can guarantee the
+    /// terminal is restored: one <c>Dispose</c> covers every mode, and no app has to remember the
+    /// escape sequences.
+    /// </remarks>
+    /// <param name="mouse">Enable click and wheel reporting.</param>
+    public void EnterAltScreen(bool mouse = true)
+    {
+        if (!CanUseScreen())
+            return;
+
+        Console.Write("\x1b[?1049h");   // alternate buffer
+        Console.Write("\x1b[?25l");     // hide cursor
+        Console.Write(EnableBracketedPaste);
+        if (mouse)
+            Console.Write(EnableMouse);
+        Console.Write("\x1b[H\x1b[2J");  // home + clear
+
+        _mouseEnabled = mouse;
+        _altScreen = true;
+        _active = true;
+    }
+
+    /// <summary>
+    /// Writes a frame to the alternate screen, wrapped so the terminal presents it atomically.
+    /// </summary>
+    public void WriteFrame(string frame)
+    {
+        if (!_altScreen)
+        {
+            Console.Write(frame);
+            return;
+        }
+
+        Console.Write(Ansi.Frame(frame));
+    }
 
     /// <summary>
     /// Reserves the bottom line for the footer and enables bracketed paste.
@@ -82,6 +138,30 @@ public sealed class TerminalScreen : IDisposable
             return;
 
         _active = false;
+
+        if (_altScreen)
+        {
+            _altScreen = false;
+            try
+            {
+                if (_mouseEnabled)
+                {
+                    Console.Write(DisableMouse);
+                    _mouseEnabled = false;
+                }
+
+                Console.Write("\x1b[?25h");       // show cursor
+                Console.Write(DisableBracketedPaste);
+                Console.Write("\x1b[?1049l");     // leave alternate buffer
+            }
+            catch
+            {
+                // Best-effort cleanup on exit.
+            }
+
+            return;
+        }
+
         try
         {
             var height = SafeHeight();

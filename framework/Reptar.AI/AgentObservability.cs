@@ -177,12 +177,16 @@ public static class AgentObservers
     /// the wire format for web frontends and log shippers. Flushes after
     /// every event so partial lines never survive a crash.
     /// </summary>
-    public static Action<AgentEvent> JsonLines(TextWriter writer, JsonSerializerOptions? options = null)
+    /// <remarks>
+    /// Uses <see cref="AgentEventJson.ToJson(AgentEvent)"/> rather than <c>JsonSerializer</c>:
+    /// serializing by runtime type is reflection-based and throws under Native AOT, and the
+    /// canonical mapping is the one clients already parse.
+    /// </remarks>
+    public static Action<AgentEvent> JsonLines(TextWriter writer)
     {
-        var jsonOptions = options ?? ReptarJson.Options;
         return @event =>
         {
-            writer.WriteLine(JsonSerializer.Serialize(@event, @event.GetType(), jsonOptions));
+            writer.WriteLine(@event.ToJson());
             writer.Flush();
         };
     }

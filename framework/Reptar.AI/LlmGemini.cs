@@ -145,7 +145,7 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
             switch (message.Role)
             {
                 case "tool":
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "user",
                         ["parts"] = new JsonArray(new JsonObject
@@ -162,10 +162,10 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
                 case "assistant" when message.ToolCalls is { Count: > 0 }:
                     var parts = new JsonArray();
                     if (message.Content.Length > 0)
-                        parts.Add(new JsonObject { ["text"] = message.Content });
+                        parts.Add((JsonNode)new JsonObject { ["text"] = message.Content });
                     foreach (var call in message.ToolCalls)
                     {
-                        parts.Add(new JsonObject
+                        parts.Add((JsonNode)new JsonObject
                         {
                             ["functionCall"] = new JsonObject
                             {
@@ -175,7 +175,7 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
                             }
                         });
                     }
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "model",
                         ["parts"] = parts
@@ -183,7 +183,7 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
                     break;
 
                 case "assistant":
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "model",
                         ["parts"] = new JsonArray(new JsonObject { ["text"] = message.Content })
@@ -195,10 +195,10 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
                     {
                         var userParts = new JsonArray();
                         if (message.Content.Length > 0)
-                            userParts.Add(new JsonObject { ["text"] = message.Content });
+                            userParts.Add((JsonNode)new JsonObject { ["text"] = message.Content });
                         foreach (var image in message.Images)
                         {
-                            userParts.Add(new JsonObject
+                            userParts.Add((JsonNode)new JsonObject
                             {
                                 ["inline_data"] = new JsonObject
                                 {
@@ -207,7 +207,7 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
                                 }
                             });
                         }
-                        array.Add(new JsonObject
+                        array.Add((JsonNode)new JsonObject
                         {
                             ["role"] = "user",
                             ["parts"] = userParts
@@ -215,7 +215,7 @@ internal sealed class GeminiLlmClient(LlmConfig config) : ILlmClient
                     }
                     else
                     {
-                        array.Add(new JsonObject
+                        array.Add((JsonNode)new JsonObject
                         {
                             ["role"] = "user",
                             ["parts"] = new JsonArray(new JsonObject { ["text"] = message.Content })

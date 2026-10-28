@@ -289,7 +289,7 @@ public static class RequestPortAgent
             throw new InvalidOperationException($"Checkpoint '{checkpointId}' was already answered.");
 
         var options = jsonOptions ?? ReptarJson.Options;
-        var history = liveHistory ?? JsonSerializer.Deserialize<List<ChatMessage>>(checkpoint.StateJson, options)
+        var history = liveHistory ?? AgentMessageJson.DeserializeList(checkpoint.StateJson)
             ?? [];
 
         // Approval checkpoints: the answer decides whether the pending tool
@@ -374,7 +374,7 @@ public static class RequestPortAgent
                 // unwind so the loop pauses instead of continuing.
                 var checkpoint = await store.CreateAsync(
                     sessionId, AskUserToolName, question,
-                    JsonSerializer.Serialize(history, options), callId).ConfigureAwait(false);
+                    AgentMessageJson.SerializeList(history), callId).ConfigureAwait(false);
 
                 onPortEvent?.Invoke(new RequestPortEvent.RunSuspended(checkpoint.Id, AskUserToolName, question));
                 throw new RequestPortSuspendedException(AskUserToolName, question);

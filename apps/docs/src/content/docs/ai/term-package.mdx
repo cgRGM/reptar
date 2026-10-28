@@ -1,0 +1,115 @@
+---
+title: Reptar.Term
+description: The terminal UI package — buffered rendering, raw input, searchable selectors, layout.
+---
+
+`Reptar.Term` is the terminal layer: the parts of a terminal agent that have nothing to do with agents. It is a package so an application does not have to reimplement raw-mode input, a double-buffered renderer, or a searchable picker.
+
+```csharp
+using Reptar.Term;
+
+using var screen = new TerminalScreen();
+var back = new TerminalBuffer(Console.WindowWidth, Console.WindowHeight);
+
+back.Print(2, 1, "hello", fg: Ansi.Green);
+Console.Write(back.RenderDiff(previous: null));
+```
+
+## What is in it
+
+| Type | Purpose |
+| --- | --- |
+| `TerminalBuffer` | A 2D cell grid with `Print`, `FillRect`, `DrawBox`, `PrintCentered`, and a `RenderDiff` that emits only the cells that changed |
+| `TerminalScreen` | Alternate-screen lifecycle and cursor handling |
+| `TerminalInput` | Raw-mode byte reader and parser: arrows, Home/End/PageUp/Down, Delete, Ctrl and Shift combos, bracketed paste, UTF-8, OSC 52 clipboard |
+| `TerminalEditor` | A line editor with history, cursor movement, `@`-mention completion, and an inline command dropdown |
+| `TerminalUi` | Widgets: prompts, numbered pickers, and bordered tables that degrade to plain input when stdin is piped |
+| `TermSelector` | The searchable list used by every picker, with a notice line, detail line, status, and position counter |
+| `TermLayout` | The bottom-of-screen geometry, so no two bands can claim the same row |
+| `Ansi` | Colour codes, and markdown rendering to ANSI |
+
+## Rendering model
+
+Rendering is immediate-mode and diffed. You clear the back buffer, draw the whole frame, and call `RenderDiff`, which compares against the previous buffer and writes only the changed cells. Nothing is retained between frames, so there is no widget tree to invalidate.
+
+```csharp
+_back.Clear();
+DrawHeader(_back);
+DrawTranscript(_back);
+DrawComposer(_back);
+Console.Write(_back.RenderDiff(_front));
+_front = _back.Clone();
+```
+
+Because the diff is cell-level, redrawing everything each frame is cheap. The rule that matters is to **clear every row you draw into**: `Print` stops at the end of the text, so drawing a short line over a long one leaves the tail of the old line visible.
+
+## Input
+
+`TerminalInput` owns stdin after `Activate()`. `.NET`'s `Console.ReadKey` runs its own escape parser that silently discards arrow keys and OSC sequences once it has been invoked, and mixing a second reader on the same descriptor races for bytes — so one background thread reads stdin and a parser turns the byte stream into `TermKey` values.
+
+```csharp
+TerminalInput.Activate();
+var key = TerminalInput.ReadKey(timeoutMs: 0);   // null when nothing is pending
+```
+
+Pass a timeout. The default is `-1`, which blocks until a key arrives — fine for a REPL that only acts on input, wrong for a render loop that also has to animate and repaint.
+
+## Selectors
+
+`TermSelector` is one component for every list: models, providers, sessions, settings, the session tree. It renders a rule, an optional notice, a title, a search row, the filtered items, a position counter, a detail line for the selection, a status line, and a key hint.
+
+```csharp
+var selector = new TermSelector("Select provider to configure:", items)
+{
+    Notice = "Only showing models from configured providers.",
+    Hint = "Type to search · Enter to select · Esc cancel"
+};
+```
+
+Matching is fuzzy over the **label only**. Searching descriptions as well looks helpful and is actively harmful: a single letter matches almost every description, so the list never narrows.
+
+`SetItems` preserves the query and restores the selection by label, so reloading data behind an open picker does not move it under the user.
+
+## Layout
+
+`TermLayout` is the single owner of the bottom-of-screen geometry:
+
+```
+height-1   footer: stats
+height-2   footer: working directory
+height-3   composer, or the selector's last row
+...        the dropdown band, when open
+...        working indicator
+...        transcript
+```
+
+`Composer` moves up by exactly `DropdownRows`; a selector takes the composer's slot entirely; `TranscriptBottom` stops above whichever is present. `Fits` reports when a band cannot be placed, and it is unit-tested, because layout bugs are invisible until someone looks at a screenshot.
+
+## Terminal capabilities
+
+**Synchronized output.** `TerminalScreen.WriteFrame` wraps every frame in DEC mode 2026 where the terminal supports it, so a multi-part repaint is presented in one paint instead of being observed half-applied. Unsupported terminals ignore the sequences.
+
+**Hyperlinks.** `Ansi.Link(text, url)` emits an OSC 8 link. The URL is percent-encoded for control characters — a raw `ESC` inside a URL would terminate the link early and let the remainder act as styling — and terminals without OSC 8 print the label.
+
+**Mouse.** `TerminalScreen.EnterAltScreen(mouse: true)` enables SGR reporting (mode 1006). Motion reporting is deliberately off: it floods the queue with a report per cell crossed and nothing here needs hover. `TermSelector.ApplyMouse` maps wheel and click events onto the selection.
+
+**Images.** `TerminalImage.Detect()` picks the kitty or iTerm2 protocol from the environment, and `TerminalImage.Render` builds the escape sequence — chunked for kitty, a single OSC 1337 payload for iTerm2. There is no sixel path, because it needs palette quantization and a terminal with no inline image support should get `TerminalImage.Placeholder`, not mojibake.
+
+## Markdown
+
+`MarkdownRenderer` turns markdown into styled runs — headings, bullets, ordered lists, quotes, rules, fenced blocks, and **inline** emphasis, code spans, strike-through and links. Inline mattering is the point: `**bold**` becomes a run drawn bold, rather than having its markers stripped. The output is plain data, so a caller can window, scroll, or test it without a terminal.
+
+## Todos
+
+`TodoModule` gives the model `todos_add` / `todos_complete` / `todos_remove` / `todos_get_remaining` / `todos_get_all`, and `Mount(app)` registers them as ordinary tools.
+
+The UI keeps them out of the transcript: a count sits in the status line (`☰ 2/5`), and `/todo` opens the full list as a searchable picker. A long todo list that occupies screen space competes with the conversation; a count and a keypress does not.
+
+## Piped input
+
+Every widget falls back to plain numbered input when stdin is not a terminal, so the same binary works in a script or CI:
+
+```csharp
+if (Console.IsInputRedirected || !Ansi.Enabled)
+    // numbered prompts instead of arrow-key navigation
+```

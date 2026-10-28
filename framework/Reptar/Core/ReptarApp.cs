@@ -19,6 +19,13 @@ public sealed class RouteMeta
     public bool IsAiTool { get; internal set; }
     public string? AiToolName { get; internal set; }
     public string? AiToolDescription { get; internal set; }
+
+    /// <summary>
+    /// Explicit JSON Schema for this tool's arguments. Set by
+    /// <see cref="RouteBuilder.WithAiToolSchema"/> for routes that parse their own body, which
+    /// otherwise expose an empty parameter list and leave the model guessing names and types.
+    /// </summary>
+    public Dictionary<string, object?>? AiToolParameters { get; internal set; }
     public string? FileFieldName { get; internal set; }
     public string? FileDescription { get; internal set; }
     public bool FileRequired { get; internal set; } = true;
@@ -35,6 +42,7 @@ public sealed class RouteMeta
             QueryType = QueryType,
             Name = Name,
             Summary = Summary,
+            AiToolParameters = AiToolParameters,
             Description = Description,
             Validator = Validator,
             IsAiTool = IsAiTool,
@@ -565,7 +573,12 @@ public sealed class ReptarApp
         return this;
     }
 
-    public ReptarApp OnQueue<T>(string queueName, Func<Ctx, QueueMessage, T, Task> handler)
+    public ReptarApp OnQueue<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string queueName,
+        Func<Ctx, QueueMessage, T, Task> handler)
     {
         _queueHandlers[queueName] = async (ctx, msg) =>
         {
@@ -1134,7 +1147,7 @@ public sealed class ReptarApp
             {
                 alarmCtx.Log.Error($"[Alarm] {exception.Message}");
                 alarmResponse = ReptarResponse.Json(
-                    $"{{\"ran\":false,\"error\":{System.Text.Json.JsonSerializer.Serialize(exception.Message, ReptarJson.Options)}}}", 500);
+                    $"{{\"ran\":false,\"error\":{System.Text.Json.Nodes.JsonValue.Create(exception.Message)!.ToJsonString()}}}", 500);
             }
 
             if (startBackground && alarmCtx.BackgroundTasks.Count > 0)
@@ -1877,6 +1890,33 @@ public sealed class RouteBuilder(ReptarApp app, RouteMeta meta)
         meta.IsAiTool = true;
         meta.AiToolName = name;
         meta.AiToolDescription = description;
+        return this;
+    }
+
+    /// <summary>
+    /// Declares the JSON Schema for this tool's arguments.
+    /// </summary>
+    /// <remarks>
+    /// Routes that bind a typed body get a schema generated from it. A route that reads the raw
+    /// body — which is how the workspace tools parse JSON — has no type information to reflect
+    /// over, so without this the model receives <c>{"type":"object","properties":{}}</c> and has to
+    /// guess every parameter name. Declare it explicitly:
+    /// <code>
+    /// .AsAiTool("read_file", "Read a file")
+    /// .WithAiToolSchema(new()
+    /// {
+    ///     ["type"] = "object",
+    ///     ["properties"] = new Dictionary&lt;string, object?&gt;
+    ///     {
+    ///         ["path"] = new Dictionary&lt;string, object?&gt; { ["type"] = "string" }
+    ///     },
+    ///     ["required"] = new List&lt;object?&gt; { "path" }
+    /// });
+    /// </code>
+    /// </remarks>
+    public RouteBuilder WithAiToolSchema(Dictionary<string, object?> parameters)
+    {
+        meta.AiToolParameters = parameters;
         return this;
     }
 

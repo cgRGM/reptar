@@ -232,6 +232,48 @@ public sealed class TodoModule
         }
     }
 
+    /// <summary>Items still to do.</summary>
+    public int RemainingCount => Items.Count(item => !item.IsComplete);
+
+    /// <summary>Items finished.</summary>
+    public int CompletedCount => Items.Count(item => item.IsComplete);
+
+    /// <summary>
+    /// Registers the todo tools on the app so the standard <c>ExecuteAiToolAsync</c> dispatcher
+    /// reaches them, and returns the definitions to merge into the agent's tool list.
+    /// </summary>
+    /// <remarks>
+    /// The module already exposes tools with their own <c>ExecuteAsync</c>; without this they are
+    /// only reachable through <see cref="AgentModuleComposition"/>, which is why no client could
+    /// actually use them. Mounting as routes makes them ordinary tools like any other.
+    /// </remarks>
+    public IReadOnlyList<AiToolDefinition> Mount(ReptarApp app)
+    {
+        var module = ToModule();
+
+        foreach (var tool in module.Tools)
+        {
+            var name = tool.Name;
+            var description = tool.Description;
+
+            app.Post($"/agent/todo/{name}", async ctx =>
+            {
+                var node = WorkspaceTools.ReadJsonNode(ctx);
+                var result = await ExecuteAsync(name, node?.ToJsonString() ?? "{}").ConfigureAwait(false);
+
+                return result.Success
+                    ? ctx.JsonRaw(result.Content ?? "{}")
+                    : ctx.Error(result.StatusCode, result.ErrorCode ?? "todo_error", result.ErrorMessage ?? "failed");
+            })
+            .WithName(name)
+            .WithSummary(description)
+            .AsAiTool(name, description)
+            .WithAiToolSchema(tool.Parameters);
+        }
+
+        return module.Tools;
+    }
+
     private async Task<AiToolResult> ExecuteAsync(string name, string argsJson)
     {
         await Task.CompletedTask; // keep the uniform async contract
@@ -299,7 +341,7 @@ public sealed class TodoModule
             }
         }
 
-        return AiToolResult.Ok(200, Serialize(added));
+        return AiToolResult.Ok(200, SerializeItems(added));
     }
 
     private AiToolResult Complete(string argsJson)
@@ -332,7 +374,7 @@ public sealed class TodoModule
             }
         }
 
-        return AiToolResult.Ok(200, Serialize(completed.Select(id => new { id })));
+        return AiToolResult.Ok(200, SerializeIds(completed));
     }
 
     private AiToolResult Remove(string argsJson)
@@ -354,7 +396,7 @@ public sealed class TodoModule
             }
         }
 
-        return AiToolResult.Ok(200, Serialize(removed.Select(id => new { id })));
+        return AiToolResult.Ok(200, SerializeIds(removed));
     }
 
     private AiToolResult List(bool completed)
@@ -365,11 +407,44 @@ public sealed class TodoModule
             snapshot = completed ? [.. _items] : _items.Where(item => !item.IsComplete).ToList();
         }
 
-        return AiToolResult.Ok(200, Serialize(snapshot));
+        return AiToolResult.Ok(200, SerializeItems(snapshot));
     }
 
-    private static string Serialize<TValue>(TValue value) =>
-        JsonSerializer.Serialize(value, ReptarJson.Options);
+    /// <summary>
+    /// Renders todo items as JSON.
+    /// </summary>
+    /// <remarks>
+    /// Explicit rather than through a generic converter: a record's <c>ToString()</c> is not
+    /// JSON, and the model needs the <c>id</c> field in a parseable form to call
+    /// <c>todos_complete</c> with it. Serializing by reflection is not available under Native AOT.
+    /// </remarks>
+    private static string SerializeItems(IEnumerable<TodoItemRecord> items)
+    {
+        var array = new System.Text.Json.Nodes.JsonArray();
+
+        foreach (var item in items)
+        {
+            array.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
+            {
+                ["id"] = item.Id,
+                ["title"] = item.Title,
+                ["description"] = item.Description,
+                ["complete"] = item.IsComplete,
+                ["completionReason"] = item.CompletionReason
+            });
+        }
+
+        return array.ToJsonString();
+    }
+
+    private static string SerializeIds(IEnumerable<string> ids)
+    {
+        var array = new System.Text.Json.Nodes.JsonArray();
+        foreach (var id in ids)
+            array.Add((System.Text.Json.Nodes.JsonNode)System.Text.Json.Nodes.JsonValue.Create(id)!);
+
+        return array.ToJsonString();
+    }
 
     private static AiToolDefinition Tool(string name, string description, string parametersJson) => new()
     {
@@ -562,13 +637,15 @@ public sealed class PlanExecuteModule
                 }
 
                 _modes[sessionId] = mode;
-                return AiToolResult.Ok(200, JsonSerializer.Serialize(new { mode }, ReptarJson.Options));
+                return AiToolResult.Ok(200,
+                    new System.Text.Json.Nodes.JsonObject { ["mode"] = mode }.ToJsonString());
             }
 
             case ModeGetToolName:
             {
                 var mode = CurrentMode(sessionId);
-                return AiToolResult.Ok(200, JsonSerializer.Serialize(new { mode }, ReptarJson.Options));
+                return AiToolResult.Ok(200,
+                    new System.Text.Json.Nodes.JsonObject { ["mode"] = mode }.ToJsonString());
             }
 
             default:

@@ -166,7 +166,7 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
             switch (message.Role)
             {
                 case "system":
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "system",
                         ["content"] = message.Content
@@ -183,7 +183,7 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
                     var toolCalls = new JsonArray();
                     foreach (var call in message.ToolCalls)
                     {
-                        toolCalls.Add(new JsonObject
+                        toolCalls.Add((JsonNode)new JsonObject
                         {
                             ["id"] = call.Id,
                             ["type"] = "function",
@@ -195,11 +195,11 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
                         });
                     }
                     assistantWithTools["tool_calls"] = toolCalls;
-                    array.Add(assistantWithTools);
+                    array.Add((JsonNode)assistantWithTools);
                     break;
 
                 case "assistant":
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "assistant",
                         ["content"] = message.Content
@@ -207,7 +207,7 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
                     break;
 
                 case "tool":
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "tool",
                         ["tool_call_id"] = message.ToolCallId,
@@ -220,14 +220,14 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
                     {
                         var content = new JsonArray();
                         if (message.Content.Length > 0)
-                            content.Add(new JsonObject
+                            content.Add((JsonNode)new JsonObject
                             {
                                 ["type"] = "text",
                                 ["text"] = message.Content
                             });
                         foreach (var image in message.Images)
                         {
-                            content.Add(new JsonObject
+                            content.Add((JsonNode)new JsonObject
                             {
                                 ["type"] = "image_url",
                                 ["image_url"] = new JsonObject
@@ -236,7 +236,7 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
                                 }
                             });
                         }
-                        array.Add(new JsonObject
+                        array.Add((JsonNode)new JsonObject
                         {
                             ["role"] = "user",
                             ["content"] = content
@@ -244,7 +244,7 @@ public class OpenAiLlmClient(LlmConfig config) : ILlmClient
                     }
                     else
                     {
-                        array.Add(new JsonObject
+                        array.Add((JsonNode)new JsonObject
                         {
                             ["role"] = "user",
                             ["content"] = message.Content

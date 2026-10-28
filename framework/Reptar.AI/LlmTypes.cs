@@ -16,7 +16,10 @@ public enum LlmProvider
     Anthropic,
     Gemini,
     Ollama,
-    Echo
+    Echo,
+
+    /// <summary>OpenAI Responses API (<c>/v1/responses</c>), used by ChatGPT subscriptions.</summary>
+    OpenAiResponses
 }
 
 /// <summary>
@@ -137,6 +140,20 @@ public sealed record LlmConfig
             LlmProviders.CloudflareGateway => BuildOpenAiCompatible(
                 LlmProviders.CloudflareGateway, requestedModel, requestedBaseUrl, auth,
                 Environment.GetEnvironmentVariable("REPTAR_AGENT_API_KEY")),
+            LlmProviders.OpenAiChatGpt => new LlmConfig
+            {
+                ProviderKey = LlmProviders.OpenAiChatGpt,
+                Provider = LlmProvider.OpenAiResponses,
+                Model = requestedModel
+                    ?? auth.Get(LlmProviders.OpenAiChatGpt)?.DefaultModel
+                    ?? LlmProviders.Find(LlmProviders.OpenAiChatGpt)!.DefaultModel,
+                // The subscription token is not an API key; it is read from the stored OAuth
+                // fields and refreshed by ChatGptSubscription.
+                ApiKey = auth.Get(LlmProviders.OpenAiChatGpt)?.Fields.GetValueOrDefault("access_token")
+                    ?? auth.Get(LlmProviders.OpenAiChatGpt)?.ApiKey,
+                BaseUrl = "https://api.openai.com/v1",
+                PromptCache = false
+            },
             LlmProviders.CloudflareWorkersAi => BuildOpenAiCompatible(
                 LlmProviders.CloudflareWorkersAi, requestedModel, requestedBaseUrl, auth,
                 Environment.GetEnvironmentVariable("REPTAR_AGENT_API_KEY")),
@@ -373,8 +390,27 @@ public static class LlmClientFactory
         LlmProvider.Anthropic => new AnthropicLlmClient(config),
         LlmProvider.Gemini => new GeminiLlmClient(config),
         LlmProvider.Ollama => new OllamaLlmClient(config),
+        LlmProvider.OpenAiResponses => new OpenAiResponsesLlmClient(config),
         _ => new EchoLlmClient(config)
     };
+
+    /// <summary>
+    /// Builds a client for a ChatGPT subscription, refreshing the token first. Falls back to the
+    /// stored token when a refresh fails, so the caller sees a provider 401 rather than a silent
+    /// empty run.
+    /// </summary>
+    public static async Task<ILlmClient> CreateForChatGptAsync(
+        LlmAuthFile auth,
+        string? model = null,
+        CancellationToken cancellationToken = default)
+    {
+        var token = await ChatGptSubscription
+            .GetAccessTokenAsync(auth, cancellationToken)
+            .ConfigureAwait(false);
+
+        var config = LlmConfig.FromEnvironment(LlmProviders.OpenAiChatGpt, model);
+        return Create(token is { Length: > 0 } ? config with { ApiKey = token } : config);
+    }
 
     public static ILlmClient FromEnvironment(string? provider = null, string? model = null) =>
         Create(LlmConfig.FromEnvironment(provider, model));

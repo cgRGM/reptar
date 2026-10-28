@@ -7,10 +7,30 @@ namespace Reptar.AI;
 /// Resolves the provider config for the CLI. A model spec may be an alias (<c>fast</c>), a
 /// <c>provider/model</c> pair, or a bare model id.
 /// </summary>
+/// <summary>
+/// Resolves which provider and model to use, from the most explicit source available.
+/// </summary>
+/// <remarks>
+/// Precedence, highest first:
+/// <list type="number">
+/// <item>CLI flags (<c>--provider</c>, <c>--model</c>)</item>
+/// <item><c>REPTAR_AGENT_PROVIDER</c> / <c>REPTAR_AGENT_MODEL</c></item>
+/// <item><c>~/.reptar/settings.json</c></item>
+/// <item>provider env keys, then credentials saved by <c>/connect</c>, then offline echo</item>
+/// </list>
+///
+/// Settings sit above the saved-auth default on purpose. Without that, choosing a model in the
+/// picker and then restarting would silently fall back to whatever <c>/connect</c> last touched —
+/// the file you edited was never consulted.
+/// </remarks>
 public static class AgentConfigResolver
 {
     public static LlmConfig Resolve(TerminalAgentOptions options)
     {
+        var envProvider = Environment.GetEnvironmentVariable("REPTAR_AGENT_PROVIDER");
+        var envModel = Environment.GetEnvironmentVariable("REPTAR_AGENT_MODEL");
+        var envWins = !string.IsNullOrWhiteSpace(envProvider) || !string.IsNullOrWhiteSpace(envModel);
+
         if (options.Provider is null && options.Model is { Length: > 0 } spec)
         {
             var resolved = ModelAliases.Resolve(spec);
@@ -24,8 +44,36 @@ public static class AgentConfigResolver
             }
         }
 
+        // Settings supply a default only when nothing more explicit was given.
+        if (options.Provider is null && options.Model is null && !envWins &&
+            LoadSettings(options.WorkspaceRoot) is { Model: { Length: > 0 } settingsModel } settings)
+        {
+            var resolved = ModelAliases.Resolve(
+                settingsModel,
+                provider: settings.Provider);
+
+            if (resolved is not null)
+                return resolved with { Attribution = ClientIdentity.Reptar };
+        }
+
         return LlmConfig.FromEnvironment(options.Provider, options.Model, options.BaseUrl)
             with { Attribution = ClientIdentity.Reptar };
+    }
+
+    /// <summary>
+    /// User settings, or null when none exist. Project settings are deliberately not read here:
+    /// resolving a default model should not depend on a trust decision.
+    /// </summary>
+    private static AgentSettings? LoadSettings(string workspaceRoot)
+    {
+        try
+        {
+            return AgentSettingsStore.Load(workspaceRoot, trusted: false).Settings;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }
 
@@ -623,9 +671,12 @@ public sealed class TerminalAgent(
 
                         case AgentEvent.ToolExecutionStart call when options.ShowToolCalls:
                             FlushPending(pending);
-                            Ansi.WriteLine(Ansi.Color(
-                                Ansi.Color(Ansi.Cyan, "→ ") + Ansi.Color(Ansi.Yellow, call.ToolName) + " ",
-                                SummarizeArgs(call.ArgumentsJson)));
+                            // Color() takes a code first; build the line from coloured parts.
+                            Ansi.WriteLine(
+                                Ansi.Color(Ansi.Cyan, "→ ")
+                                + Ansi.Color(Ansi.Yellow, call.ToolName)
+                                + " "
+                                + Ansi.Color(Ansi.Gray, SummarizeArgs(call.ArgumentsJson)));
                             break;
 
                         case AgentEvent.ToolExecutionEnd call when options.ShowToolCalls:
@@ -633,9 +684,12 @@ public sealed class TerminalAgent(
                             var tail = call.DurationMs >= 1000
                                 ? $"{call.DurationMs / 1000.0:0.0}s"
                                 : $"{call.DurationMs:0}ms";
-                            Ansi.WriteLine(Ansi.Color(
-                                glyph + " " + Ansi.Color(Ansi.Yellow, call.ToolName) + " ",
-                                Ansi.Color(Ansi.Gray, tail)));
+                            Ansi.WriteLine(
+                                glyph
+                                + " "
+                                + Ansi.Color(Ansi.Yellow, call.ToolName)
+                                + " "
+                                + Ansi.Color(Ansi.Gray, tail));
                             break;
                     }
                 },
@@ -1142,10 +1196,10 @@ public sealed class TerminalAgent(
         {
             var saved = _auth.Credentials.Keys
                 .Where(key => !(LlmProviders.IsKnown(key) && LlmProviders.CredentialSource(key, _auth).Source == "env"))
-                .Select(key => new TerminalUi.SelectItem(
-                    key,
+                .Select(key => new TermSelectorItem(
                     LlmProviders.Find(key)?.DisplayName ?? key,
-                    LlmProviders.FormatStatus(key, _auth)))
+                    LlmProviders.FormatStatus(key, _auth),
+                    Value: key))
                 .ToList();
 
             target = saved.Count == 0
@@ -1338,7 +1392,7 @@ public sealed class TerminalAgent(
                 var detail = model is { ContextTokens: > 0 }
                     ? $"{model.ContextTokens / 1000}k ctx"
                     : null;
-                return new TerminalUi.SelectItem(id, label, detail);
+                return new TermSelectorItem(label, detail ?? "", Value: id);
             })
             .ToList();
 
@@ -1355,10 +1409,10 @@ public sealed class TerminalAgent(
             var saved = _auth.Credentials.Keys
                 .Where(key => !(LlmProviders.IsKnown(key) &&
                                 LlmProviders.CredentialSource(key, _auth).Source == "env"))
-                .Select(key => new TerminalUi.SelectItem(
-                    key,
+                .Select(key => new TermSelectorItem(
                     LlmProviders.Find(key)?.DisplayName ?? key,
-                    LlmProviders.FormatStatus(key, _auth)))
+                    LlmProviders.FormatStatus(key, _auth),
+                    Value: key))
                 .ToList();
 
             if (saved.Count == 0)
@@ -1371,14 +1425,14 @@ public sealed class TerminalAgent(
         }
 
         var items = LlmProviders.Known
-            .Select(info => new TerminalUi.SelectItem(
-                info.Key,
+            .Select(info => new TermSelectorItem(
                 info.DisplayName,
                 LlmProviders.FormatStatus(info.Key, _auth) +
-                    (info.Note is { Length: > 0 } ? "  ·  " + info.Note : "")))
+                    (info.Note is { Length: > 0 } ? "  ·  " + info.Note : ""),
+                Value: info.Key))
             .ToList();
 
-        items.Add(new TerminalUi.SelectItem("other", "Other (custom OpenAI-compatible endpoint)"));
+        items.Add(new TermSelectorItem("Other (custom OpenAI-compatible endpoint)", "", Value: "other"));
 
         return TerminalUi.Select("select a provider to configure", items);
     }

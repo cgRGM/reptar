@@ -1,7 +1,7 @@
 #if !NETWASM
 using System.Text;
 
-namespace Reptar.AI;
+namespace Reptar.Term;
 
 /// <summary>
 /// A single cell in the 2D terminal screen buffer.

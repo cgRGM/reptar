@@ -26,7 +26,10 @@ public enum TermOverlay
     Tree = 4,
 
     /// <summary>Which models <c>Ctrl+P</c> cycles through (<c>/scoped-models</c>).</summary>
-    ScopedModels = 5
+    ScopedModels = 5,
+
+    /// <summary>The model's todo list (<c>/todo</c>).</summary>
+    Todos = 6
 }
 
 /// <summary>
@@ -44,6 +47,9 @@ public sealed class ReptarTerm : IDisposable
 
     /// <summary>Tree-backed persistence. Preferred over the flat store when present.</summary>
     private readonly SessionTreeStore? _tree;
+
+    /// <summary>The model's todo list, shown as a count in the status line.</summary>
+    private readonly TodoModule? _todos;
     private readonly LlmAuthFile _auth = LlmAuthFile.LoadActive();
     private readonly string _workspaceName;
     private readonly List<string> _workspaceFiles = [];
@@ -54,7 +60,9 @@ public sealed class ReptarTerm : IDisposable
     private int _width;
     private int _height;
     private bool _running = true;
-    private bool _inAltScreen;
+
+    /// <summary>Owns the terminal lifecycle: alternate buffer, cursor, bracketed paste.</summary>
+    private readonly TerminalScreen _screen = new();
 
     private TermOverlay _overlay = TermOverlay.None;
     private string _input = "";
@@ -86,7 +94,11 @@ public sealed class ReptarTerm : IDisposable
     private string _streamingText = "";
     private string _thinkingText = "";
     private string? _runError;
-    private int _scrollOffset;
+    /// <summary>Absolute index of the first visible transcript line when not following the tail.</summary>
+    private int _scrollAnchor;
+
+    /// <summary>True while the view is pinned to the newest content.</summary>
+    private bool _followTail = true;
     private int _persistedCount;
     private double _inputCostPerMillion;
     private double _outputCostPerMillion;
@@ -103,6 +115,7 @@ public sealed class ReptarTerm : IDisposable
 
     /// <summary>Prompt templates discovered under .reptar/prompts/.</summary>
     private readonly List<PromptTemplate> _templates = [];
+    private AgentExtensionHost? _extensions;
 
     /// <summary>One rendered tool call: name, arguments, live output, terminal status.</summary>
     private sealed class ToolCard
@@ -113,6 +126,12 @@ public sealed class ReptarTerm : IDisposable
         public StringBuilder Output { get; } = new();
         public string Status { get; set; } = "running";
         public int DurationMs { get; set; }
+
+        /// <summary>True when the full output is shown rather than a few lines.</summary>
+        public bool Expanded { get; set; }
+
+        /// <summary>Transcript line indices this card was drawn on, for click hit-testing.</summary>
+        public List<int> Rows { get; } = [];
     }
 
     // Autocomplete dropdowns
@@ -162,6 +181,9 @@ public sealed class ReptarTerm : IDisposable
 
     /// <summary>Model-scope editor for <c>Ctrl+P</c> cycling.</summary>
     private TermSelector? _scopeSelector;
+
+    /// <summary>Read-only todo list.</summary>
+    private TermSelector? _todoSelector;
     private int _selectedProviderIdx;
 
     /// <summary>Searchable model list, built from configured providers only.</summary>
@@ -190,6 +212,7 @@ public sealed class ReptarTerm : IDisposable
         TermOverlay.Settings => _settingsSelector,
         TermOverlay.Tree => _treeSelector,
         TermOverlay.ScopedModels => _scopeSelector,
+        TermOverlay.Todos => _todoSelector,
         _ => null
     };
 
@@ -261,7 +284,6 @@ public sealed class ReptarTerm : IDisposable
 
     /// <summary>True while the <c>ctrl+o</c> resources panel is expanded.</summary>
     private bool _showResources;
-    private string _statusRibbon = "";
 
     // Official Reptar pixel dinosaur (matching the website header SVG: apps/web/src/components/header.astro)
     private static readonly string[] PixelDinoWatermark =
@@ -297,12 +319,14 @@ public sealed class ReptarTerm : IDisposable
         ReptarApp app,
         TerminalAgentOptions options,
         AgentSessionStore? store,
-        SessionTreeStore? tree = null)
+        SessionTreeStore? tree = null,
+        TodoModule? todos = null)
     {
         _app = app;
         _options = options;
         _store = store;
         _tree = tree;
+        _todos = todos;
         _workspaceName = Path.GetFileName(Path.GetFullPath(options.WorkspaceRoot));
 
         _width = Math.Max(40, Console.WindowWidth);
@@ -424,6 +448,17 @@ public sealed class ReptarTerm : IDisposable
         if (trusted)
             _templates.AddRange(PromptTemplates.Load(_options.WorkspaceRoot));
 
+        // Extensions are executable, so an untrusted project contributes none of its own. Personal
+        // extensions still load: they are the user's own code, not the repository's.
+        _extensions = await AgentExtensionHost
+            .LoadAsync(
+                trusted ? _options.WorkspaceRoot : null,
+                _app.GetAiTools(onlyExplicit: true))
+            .ConfigureAwait(false);
+
+        foreach (var error in _extensions.Errors)
+            AgentLog.Write($"extension: {error}");
+
         if (_settings.Settings.Thinking is { Length: > 0 } savedThinking &&
             ThinkingLevels.Parse(savedThinking) is { } level)
         {
@@ -450,6 +485,10 @@ public sealed class ReptarTerm : IDisposable
             _settings,
             _templates);
 
+        if (AgentLog.Enabled)
+            _messages.Add(new ChatMessage("assistant",
+                $"Logging this session to `{AgentLog.FilePath}`."));
+
         UpdateStatusRibbon();
         Render();
         _ = RefreshPricingAsync();
@@ -465,8 +504,10 @@ public sealed class ReptarTerm : IDisposable
             if (_runTask is { IsCompleted: true })
                 await FinishAgentRunAsync().ConfigureAwait(false);
 
-            // 3. Handle one keystroke, if any. Never blocks the loop.
-            var keyRead = TerminalInput.ReadKey();
+            // 3. Handle one keystroke, if any. Poll with a zero timeout: the default is -1,
+            //    which blocks until a key arrives and freezes the whole loop — no spinner, no
+            //    streamed text, no timer, until the user types something.
+            var keyRead = TerminalInput.ReadKey(timeoutMs: 0);
             if (keyRead is { } key)
             {
                 _dirty = true;
@@ -538,11 +579,14 @@ public sealed class ReptarTerm : IDisposable
                 Render();
             }
 
-            if (_isStreaming)
-                _dirty = true;   // the working indicator animates
+            // The working indicator animates, so keep repainting while a run is in flight.
+            // Idle frames cost nothing because _dirty stays false.
+            var streaming = _isStreaming;
+            if (streaming)
+                _dirty = true;
 
             if (keyRead is null)
-                await Task.Delay(16, cancellationToken).ConfigureAwait(false);
+                await Task.Delay(streaming ? 16 : 40, cancellationToken).ConfigureAwait(false);
         }
 
         AbortAgent();
@@ -629,11 +673,26 @@ public sealed class ReptarTerm : IDisposable
             {
                 _ = ForkSessionAsync();
             }),
+            new("todo", "/todo", "See the agent's todo list", OpenTodos),
             new("scoped-models", "/scoped-models", "Choose the models Ctrl+P cycles through", OpenScopedModels),
             new("settings", "/settings", "Open the settings menu", OpenSettingsMenu),
             new("help", "/help", "Show tips and shortcuts", () => { ShowHelpMessage(); }),
             new("exit", "/exit", "Quit ReptarTerm", () => { _running = false; }),
         };
+
+        // Extension commands sit alongside built-ins: an extension should not feel bolted on.
+        if (_extensions is not null)
+        {
+            foreach (var command in _extensions.Commands)
+            {
+                var captured = command;
+                all.Add(new PaletteCommand(
+                    captured.Name,
+                    "/" + captured.Name,
+                    captured.Description,
+                    () => _ = RunExtensionCommandAsync(captured.Name)));
+            }
+        }
 
         // Prompt templates appear in the same dropdown as built-ins, so a project command is as
         // discoverable as /help.
@@ -901,6 +960,153 @@ public sealed class ReptarTerm : IDisposable
         _overlay = TermOverlay.ScopedModels;
         _input = "";
         _inputCursor = 0;
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// <c>/todo</c>: the full list, searchable like every other picker. Read-only — the model
+    /// owns the list; this is for seeing what is coming without spending screen space on it.
+    /// </summary>
+    /// <summary>
+    /// Expands or collapses the tool card occupying a screen row.
+    /// </summary>
+    /// <remarks>
+    /// Tool output is the part of a transcript a reader most often wants more of, and a wall of
+    /// expanded blocks is the part they most often want less of. A click is the cheapest way to
+    /// give both without a keybinding per card.
+    /// </remarks>
+    private bool ToggleToolCardAt(int screenRow)
+    {
+        var viewportTop = 2;
+        var offset = screenRow - viewportTop;
+        if (offset < 0)
+            return false;
+
+        var lines = BuildTranscriptLines();
+        var viewHeight = Math.Max(1, Layout.TranscriptBottom - viewportTop);
+        var maxFirst = Math.Max(0, lines.Count - viewHeight);
+        var first = _followTail ? maxFirst : Math.Clamp(_scrollAnchor, 0, maxFirst);
+        var index = first + offset;
+
+        foreach (var card in _toolCards)
+        {
+            if (!card.Rows.Contains(index))
+                continue;
+
+            card.Expanded = !card.Expanded;
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Moves the transcript window by <paramref name="delta"/> lines. Positive scrolls toward the
+    /// newest content; reaching the end re-enables tail-following.
+    /// </summary>
+    private void ScrollBy(int delta)
+    {
+        _scrollAnchor = Math.Max(0, _scrollAnchor + delta);
+        _followTail = false;
+        _dirty = true;
+    }
+
+    private void OpenTodos()
+    {
+        if (_todos is not { } todos || todos.Items.Count == 0)
+        {
+            _messages.Add(new ChatMessage("assistant",
+                "No todos yet. The agent adds them when a task needs more than one step."));
+            _dirty = true;
+            return;
+        }
+
+        var items = todos.Items.Select(item => new TermSelectorItem(
+            (item.IsComplete ? "✓ " : "○ ") + item.Title,
+            "",
+            item.IsComplete ? "done" : "open",
+            item.IsComplete,
+            item.Description ?? (item.CompletionReason is { Length: > 0 } reason ? $"Completed: {reason}" : ""),
+            item));
+
+        if (_todoSelector is null)
+            _todoSelector = new TermSelector("Todos", items, Math.Max(6, ComposerRow - 10));
+        else
+            _todoSelector.SetItems(items);
+
+        _todoSelector.Notice =
+            $"{todos.CompletedCount} of {todos.Items.Count} done · {todos.RemainingCount} open";
+        _todoSelector.Hint = "Type to search · Esc closes";
+
+        _overlay = TermOverlay.Todos;
+        _input = "";
+        _inputCursor = 0;
+        _dirty = true;
+    }
+
+    /// <summary>
+    /// Runs the ChatGPT sign-in: prints the URL, opens the browser, waits for the loopback
+    /// callback, then switches to the subscription as the active provider.
+    /// </summary>
+    private async Task SignInWithChatGptAsync()
+    {
+        _providerSelector!.Status = "waiting for the browser…";
+        _dirty = true;
+        Render();
+
+        try
+        {
+            var credential = await ChatGptSubscription.SignInAsync(
+                _auth,
+                onUrl: url =>
+                {
+                    // Always print it: a headless session has no browser to open.
+                    _providerSelector.Status = "If the browser did not open, visit: " + url;
+                    _dirty = true;
+                },
+                onStatus: status =>
+                {
+                    _providerSelector.Status = status;
+                    _dirty = true;
+                }).ConfigureAwait(false);
+
+            var model = credential.DefaultModel ?? "gpt-5.1-codex";
+            ActivateProvider(LlmProviders.OpenAiChatGpt, model);
+        }
+        catch (OAuthException ex)
+        {
+            _providerSelector!.Status = "Sign-in failed: " + ex.Message;
+            _dirty = true;
+        }
+        catch (Exception ex)
+        {
+            _providerSelector!.Status = "Sign-in failed: " + ex.Message;
+            _dirty = true;
+        }
+    }
+
+    /// <summary>
+    /// Runs an extension command and prints whatever it returns.
+    /// </summary>
+    private async Task RunExtensionCommandAsync(string name)
+    {
+        if (_extensions is null)
+            return;
+
+        try
+        {
+            var result = await _extensions
+                .RunCommandAsync(name, [])
+                .ConfigureAwait(false);
+
+            if (result is { } value && value.ToDisplay() is { Length: > 0 } text && text != "null")
+                _messages.Add(new ChatMessage("assistant", text));
+        }
+        catch (Exception ex)
+        {
+            _messages.Add(new ChatMessage("assistant", $"extension '{name}' failed: {ex.Message}"));
+        }
+
         _dirty = true;
     }
 
@@ -1285,8 +1491,10 @@ public sealed class ReptarTerm : IDisposable
 
         _thinking = thinking;
 
-        _client = LlmClientFactory.Create(AgentConfigResolver.Resolve(
-            _options with { Provider = providerKey, Model = modelId }) with { Thinking = thinking });
+        _client = providerKey == LlmProviders.OpenAiChatGpt
+            ? LlmClientFactory.CreateForChatGptAsync(_auth, modelId).GetAwaiter().GetResult()
+            : LlmClientFactory.Create(AgentConfigResolver.Resolve(
+                _options with { Provider = providerKey, Model = modelId }) with { Thinking = thinking });
 
         _auth.SetDefault(providerKey);
         _ = _settings.SaveModelAsync(providerKey, modelId);
@@ -1406,6 +1614,29 @@ public sealed class ReptarTerm : IDisposable
             return;
         }
 
+        // Mouse: wheel scrolls the transcript, or moves a selector's selection; a click in a
+        // selector picks the row under the pointer.
+        if (key.Mouse is { } mouse)
+        {
+            if (ActiveSelector is { } hovered)
+            {
+                var listTop = Layout.SelectorBottom - hovered.Height + 1 + SelectorItemOffset(hovered);
+                if (hovered.ApplyMouse(mouse, listTop))
+                    _dirty = true;
+            }
+            else if (mouse.Wheel != 0)
+            {
+                ScrollBy(mouse.Wheel * 3);
+                _dirty = true;
+            }
+            else if (mouse.Kind == TermMouseKind.Press && ToggleToolCardAt(mouse.Y))
+            {
+                _dirty = true;
+            }
+
+            return;
+        }
+
         // A selector owns every key while it is open: search, navigate, choose, cancel.
         if (ActiveSelector is { } selector)
         {
@@ -1522,11 +1753,11 @@ public sealed class ReptarTerm : IDisposable
         if (string.IsNullOrWhiteSpace(_fileQuery))
             return _workspaceFiles.Take(8).ToList();
 
-        return _workspaceFiles
-            .Where(f => f.Contains(_fileQuery, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(f => f.StartsWith(_fileQuery, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .Take(8)
-            .ToList();
+        // Fuzzy, and ranked on the file name first so a short query prefers a real prefix match
+        // over an incidental substring somewhere deep in a path.
+        return [.. Fuzzy
+            .Rank(_fileQuery, _workspaceFiles, file => [Path.GetFileName(file), file])
+            .Take(8)];
     }
 
     private async Task HandleChatKeyAsync(TermKey key)
@@ -1636,6 +1867,10 @@ public sealed class ReptarTerm : IDisposable
                 {
                     OpenScopedModels();
                 }
+                else if (cmdPart is "/todo" or "/todos")
+                {
+                    OpenTodos();
+                }
                 else if (cmdPart is "/tree")
                 {
                     await OpenTreeAsync().ConfigureAwait(false);
@@ -1741,13 +1976,20 @@ public sealed class ReptarTerm : IDisposable
         // Transcript scrollback. PgUp detaches from the tail; PgDn walks back down.
         if (key.Key == ConsoleKey.PageUp)
         {
-            _scrollOffset += Math.Max(1, _height / 2);
+            ScrollBy(-Math.Max(1, _height / 2));
             return;
         }
 
         if (key.Key == ConsoleKey.PageDown)
         {
-            _scrollOffset = Math.Max(0, _scrollOffset - Math.Max(1, _height / 2));
+            ScrollBy(Math.Max(1, _height / 2));
+            return;
+        }
+
+        if (key.Ctrl && key.Key == ConsoleKey.End)
+        {
+            _followTail = true;
+            _dirty = true;
             return;
         }
 
@@ -2020,19 +2262,30 @@ public sealed class ReptarTerm : IDisposable
 
         if (selector == _providerSelector && item.Value is ProviderInfo provider)
         {
-            // Account sign-in is not implemented; say so instead of dropping into a key prompt
-            // that would look like the same flow under a different name.
             if (_authMethod == ProviderAuth.Account)
             {
+                if (provider.Key == LlmProviders.OpenAiChatGpt)
+                {
+                    await SignInWithChatGptAsync().ConfigureAwait(false);
+                    return;
+                }
+
                 _providerSelector.Status =
-                    $"{provider.DisplayName}: account sign-in is not implemented yet. " +
-                    "Go back and choose an API key.";
+                    $"{provider.DisplayName} has no account sign-in flow yet. "
+                    + "ChatGPT subscriptions are supported; use an API key otherwise.";
                 _dirty = true;
                 return;
             }
 
             if (!provider.RequiresApiKey)
             {
+                // "Connected" is a stored credential, so a provider that needs no key still has to
+                // be recorded — otherwise choosing it would not make it appear in the model list.
+                _auth.Set(provider.Key, new ProviderCredential(
+                    ApiKey: null,
+                    BaseUrl: provider.HasUrlTemplate ? null : provider.DefaultBaseUrl,
+                    DefaultModel: provider.DefaultModel));
+
                 ActivateProvider(provider.Key, provider.DefaultModel);
                 return;
             }
@@ -2044,10 +2297,7 @@ public sealed class ReptarTerm : IDisposable
 
         if (selector == _modelSelector && item.Value is CatalogModelItem model)
         {
-            var (source, _) = LlmProviders.CredentialSource(model.ProviderKey, _auth);
-            var configured = source != "none" || model.ProviderKey == LlmProviders.Ollama;
-
-            if (!configured)
+            if (!LlmProviders.IsConnected(model.ProviderKey, _auth))
             {
                 BeginKeyEntry(model.ProviderKey, model.ModelId);
                 _dirty = true;
@@ -2290,24 +2540,47 @@ public sealed class ReptarTerm : IDisposable
 
     private async Task SendChatMessageAsync(string prompt)
     {
-        // Resolve any @path mentions to append file contents
+        // Resolve @path mentions by inlining the file, and say so when one does not resolve.
+        // Silently dropping a mention is the worst outcome: the model receives "@llms.txt" as
+        // ordinary text and guesses at a filename, which is how it ends up asking for a file
+        // that does not exist.
         var resolvedPrompt = new StringBuilder(prompt);
-        foreach (var token in prompt.Split(' '))
+        var unresolved = new List<string>();
+
+        foreach (var token in prompt.Split(' ', StringSplitOptions.RemoveEmptyEntries))
         {
-            if (token.StartsWith('@') && token.Length > 1)
+            if (!token.StartsWith('@') || token.Length < 2)
+                continue;
+
+            var relPath = token[1..].TrimEnd(',', ';', '!', '?', '.');
+            if (relPath.Length == 0)
+                continue;
+
+            var fullPath = Path.Combine(_options.WorkspaceRoot, relPath);
+
+            if (!File.Exists(fullPath))
             {
-                var relPath = token[1..].TrimEnd(',', ';', '!', '?');
-                var fullPath = Path.Combine(_options.WorkspaceRoot, relPath);
-                if (File.Exists(fullPath))
-                {
-                    try
-                    {
-                        var content = await File.ReadAllTextAsync(fullPath).ConfigureAwait(false);
-                        resolvedPrompt.AppendLine($"\n\n```file:{relPath}\n{content}\n```");
-                    }
-                    catch { }
-                }
+                unresolved.Add(relPath);
+                continue;
             }
+
+            try
+            {
+                var content = await File.ReadAllTextAsync(fullPath).ConfigureAwait(false);
+                resolvedPrompt.AppendLine($"\n\n```file:{relPath}\n{content}\n```");
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                unresolved.Add($"{relPath} ({ex.Message})");
+            }
+        }
+
+        if (unresolved.Count > 0)
+        {
+            _messages.Add(new ChatMessage("assistant",
+                "⚠️ Could not attach: " + string.Join(", ", unresolved.Select(path => $"`{path}`")) +
+                ". The message was sent without it — use `@` to pick from the file list."));
+            _dirty = true;
         }
 
         var userMessage = new ChatMessage("user", resolvedPrompt.ToString());
@@ -2326,6 +2599,8 @@ public sealed class ReptarTerm : IDisposable
     /// </summary>
     private void StartAgentRun(ChatMessage userMessage)
     {
+        AgentLog.Message(AgentRoles.User, userMessage.Content);
+
         _isStreaming = true;
         _runStartedAt = DateTimeOffset.UtcNow;
         _dirty = true;
@@ -2333,7 +2608,7 @@ public sealed class ReptarTerm : IDisposable
         _thinkingText = "";
         _runError = null;
         _statusNote = "";
-        _scrollOffset = 0;
+        _followTail = true;
         _activePlanSteps.Clear();
         _toolCards.Clear();
         lock (_steeringGate) _steeringQueue.Clear();
@@ -2358,23 +2633,12 @@ public sealed class ReptarTerm : IDisposable
                     _app,
                     _client,
                     history,
+                    // Extension tools are declared to the model alongside the workspace tools.
+                    tools: [.. _app.GetAiTools(onlyExplicit: true), .. _extensions?.Tools ?? []],
                     systemPrompt: systemPrompt,
                     maxSteps: _options.MaxSteps,
                     onEvent: evt => sink.TryWrite(evt),
-                    configure: config => config with
-                    {
-                        GetSteeringMessages = () =>
-                        {
-                            lock (_steeringGate)
-                            {
-                                if (_steeringQueue.Count == 0)
-                                    return [];
-                                return [_steeringQueue.Dequeue()];
-                            }
-                        },
-                        Retry = new AgentRetryPolicy { MaxAttempts = 3 },
-                        PrepareNextTurn = (turn, ct) => CompactIfNeededAsync(turn, sink, ct)
-                    },
+                    configure: config => ConfigureRun(config, sink),
                     cancellationToken: token).ConfigureAwait(false);
             }
             catch (Exception ex)
@@ -2449,6 +2713,10 @@ public sealed class ReptarTerm : IDisposable
                 case AgentEvent.UsageReported usage:
                     _totalTokensIn += usage.InputTokens;
                     _totalTokensOut += usage.OutputTokens;
+                    // Cache counters drive the R/W segments of the status ribbon. They were
+                    // rendered but never assigned, so prompt caching was invisible in the UI.
+                    _totalCacheRead += usage.CacheReadTokens;
+                    _totalCacheWrite += usage.CacheWriteTokens;
                     _totalCost +=
                         (usage.InputTokens / 1_000_000.0 * _inputCostPerMillion) +
                         (usage.OutputTokens / 1_000_000.0 * _outputCostPerMillion);
@@ -2674,6 +2942,55 @@ public sealed class ReptarTerm : IDisposable
     }
 
     /// <summary>
+    /// Applies the run's steering, retry, compaction, and extension wiring.
+    /// </summary>
+    /// <remarks>
+    /// Extension hooks are applied last so they wrap everything above: a gate installed here must
+    /// be able to refuse a call the rest of the configuration would have allowed.
+    /// </remarks>
+    private AgentLoopConfig ConfigureRun(AgentLoopConfig config, ChannelWriter<AgentEvent> sink)
+    {
+        var configured = config with
+        {
+            // Extension tools are dispatched here; anything unclaimed falls through to the app.
+            ToolExecutor = RunToolWithExtensionsAsync,
+            GetSteeringMessages = () =>
+            {
+                lock (_steeringGate)
+                {
+                    if (_steeringQueue.Count == 0)
+                        return [];
+                    return [_steeringQueue.Dequeue()];
+                }
+            },
+            Retry = new AgentRetryPolicy { MaxAttempts = 3 },
+            PrepareNextTurn = (turn, ct) => CompactIfNeededAsync(turn, sink, ct)
+        };
+
+        return _extensions?.Apply(configured) ?? configured;
+    }
+
+    /// <summary>Runs a tool, preferring an extension that claims it.</summary>
+    private async Task<AiToolResult> RunToolWithExtensionsAsync(
+        AgentToolInvocation invocation,
+        CancellationToken cancellationToken)
+    {
+        if (_extensions is not null)
+        {
+            var claimed = await _extensions
+                .ExecuteToolAsync(invocation.ToolName, invocation.ArgumentsJson, cancellationToken)
+                .ConfigureAwait(false);
+
+            if (claimed is not null)
+                return claimed;
+        }
+
+        return await _app
+            .ExecuteAiToolAsync(invocation.ToolName, invocation.ArgumentsJson)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Runs between turns. When the live context is close to the model's window, summarizes the
     /// older half and hands the loop a shorter projection — the raw transcript is untouched, so
     /// scrollback and export still show everything.
@@ -2749,7 +3066,8 @@ public sealed class ReptarTerm : IDisposable
         _messages.Clear();
         _messages.AddRange(messages);
         _persistedCount = _messages.Count;
-        _scrollOffset = 0;
+        _scrollAnchor = 0;
+        _followTail = true;
         _toolCards.Clear();
         _activePlanSteps.Clear();
         _streamingText = "";
@@ -2807,15 +3125,6 @@ public sealed class ReptarTerm : IDisposable
     /// <summary>
     /// pi's <c>formatTokens</c>: compact enough for a footer, precise where precision is visible.
     /// </summary>
-    private static string FormatTokens(int count)
-    {
-        if (count < 1_000) return count.ToString();
-        if (count < 10_000) return $"{count / 1_000.0:0.0}k";
-        if (count < 1_000_000) return $"{Math.Round(count / 1_000.0)}k";
-        if (count < 10_000_000) return $"{count / 1_000_000.0:0.0}M";
-        return $"{Math.Round(count / 1_000_000.0)}M";
-    }
-
     /// <summary>
     /// Renders the complete double-buffered frame into _back and emits minimal ANSI diff.
     /// </summary>
@@ -2883,9 +3192,9 @@ public sealed class ReptarTerm : IDisposable
             caretY = ComposerRow;
         }
 
-        // Emit diff
-        var ansi = _back.RenderDiff(_front, caretX, caretY);
-        Console.Write(ansi);
+        // Emit the diff as one synchronized frame: a repaint is several cursor moves and cell
+        // writes, and a terminal that presents them piecemeal shows the intermediate states.
+        _screen.WriteFrame(_back.RenderDiff(_front, caretX, caretY));
 
         _front = _back.Clone();
     }
@@ -2971,32 +3280,70 @@ public sealed class ReptarTerm : IDisposable
 
         var total = lines.Count;
         var viewHeight = Math.Max(1, availableHeight);
-        var maxScroll = Math.Max(0, total - viewHeight);
-        _scrollOffset = Math.Clamp(_scrollOffset, 0, maxScroll);
+        var maxFirst = Math.Max(0, total - viewHeight);
 
-        var first = Math.Max(0, total - viewHeight - _scrollOffset);
+        // While following the tail, the window is the end of the transcript. Once the reader
+        // scrolls, the window is pinned to an absolute line — otherwise every streamed token
+        // shifts the content under them, which is what made scrolling feel off.
+        var first = _followTail
+            ? maxFirst
+            : Math.Clamp(_scrollAnchor, 0, maxFirst);
+
+        if (!_followTail && first >= maxFirst)
+            _followTail = true;
+
+        _scrollAnchor = first;
+
         var y = viewportTop;
 
         for (var i = first; i < total && y < viewportBottom; i++)
             lines[i].Draw(_back, ref y, viewportBottom);
 
-        if (_scrollOffset > 0 && viewportBottom - 1 >= viewportTop)
+        if (!_followTail && viewportBottom - 1 >= viewportTop)
         {
+            // pi's affordance: say how far back you are and how to get home.
             _back.Print(
-                Math.Max(2, _width - 24), viewportBottom - 1,
-                $"▲ {_scrollOffset} lines back (PgDn)",
+                Math.Max(2, _width - 34), viewportBottom - 1,
+                $"↓ {maxFirst - first} lines back · Ctrl+End jumps to latest",
                 fg: "\x1b[90m");
         }
     }
 
     /// <summary>One rendered transcript line: text plus styling, deferred until placement.</summary>
-    private readonly record struct TranscriptLine(string Text, string Fg, bool Bold, int Indent = 4)
+    private readonly record struct TranscriptLine(
+        string Text,
+        string Fg,
+        bool Bold,
+        int Indent = 4,
+        IReadOnlyList<MarkdownRun>? Runs = null,
+        string Bg = "")
     {
         public void Draw(TerminalBuffer buffer, ref int y, int limit)
         {
             if (y >= limit)
                 return;
-            buffer.Print(Indent, y++, Text, fg: Fg, bold: Bold);
+
+            // A filled row (a tool block) paints its whole width so the fill reads as a block
+            // rather than as a coloured highlight behind the text.
+            if (Bg.Length > 0)
+                buffer.FillRect(0, y, buffer.Width, 1, ' ', bg: Bg);
+
+            // A markdown line carries several styles; a plain line is one run.
+            if (Runs is not { Count: > 0 } runs)
+            {
+                buffer.Print(Indent, y++, Text, fg: Fg, bold: Bold, bg: Bg);
+                return;
+            }
+
+            var x = Indent;
+            foreach (var run in runs)
+            {
+                buffer.Print(x, y, run.Text, fg: run.Fg, bold: run.Bold, dim: run.Dim,
+                    italic: run.Italic, underline: run.Underline, bg: Bg);
+                x += run.Text.Length;
+            }
+
+            y++;
         }
     }
 
@@ -3011,7 +3358,6 @@ public sealed class ReptarTerm : IDisposable
         const string errorFg = "\x1b[38;2;248;113;113m";
 
         var lines = new List<TranscriptLine>(_messages.Count * 4);
-        var codeFence = false;
 
         // pi's startup panel sits above the transcript. Collapsed it is one line; ctrl+o expands
         // it to name every loaded resource and every rejection.
@@ -3047,11 +3393,6 @@ public sealed class ReptarTerm : IDisposable
             lines.Add(new TranscriptLine("", textFg, false, 0));
         }
 
-        void Emit(string text, string fg = textFg, bool bold = false, int indent = 4)
-        {
-            foreach (var wrapped in WrapText(text, Math.Max(10, _width - indent - 2)))
-                lines.Add(new TranscriptLine(wrapped, fg, bold, indent));
-        }
 
         foreach (var message in _messages)
         {
@@ -3059,16 +3400,23 @@ public sealed class ReptarTerm : IDisposable
             {
                 case "user":
                     if (lines.Count > 0) lines.Add(new TranscriptLine("", textFg, false, 0));
-                    // A left bar, not the composer's `❯`: a submitted turn and the live prompt
-                    // should not look like the same thing.
-                    lines.Add(new TranscriptLine("▌ you", userFg, true, 2));
-                    Emit(message.Content, textFg, false, 4);
+
+                    // The user's turn is a bar down the whole block, not a one-line label. A
+                    // header alone left the reply reading as a continuation of the prompt,
+                    // because both were white text at the same indent.
+                    foreach (var wrapped in WrapText(message.Content, Math.Max(10, _width - 8)))
+                        lines.Add(new TranscriptLine("▌ " + wrapped, userFg, false, 2));
+
                     break;
 
                 case "assistant":
                     if (message.Content.Length == 0) break;
                     if (lines.Count > 0) lines.Add(new TranscriptLine("", textFg, false, 0));
-                    RenderMarkdown(message.Content, codeFence, Emit, lines, textFg, dimFg);
+
+                    // A quiet marker so a reply is identifiable at a glance without a label on
+                    // every block; the markdown below it carries the rest.
+                    lines.Add(new TranscriptLine("◆", agentFg, false, 2));
+                    AppendMarkdown(message.Content, lines);
                     break;
 
                 // Tool payloads are shown through the cards below, so the raw result stays out
@@ -3084,8 +3432,9 @@ public sealed class ReptarTerm : IDisposable
 
             foreach (var card in _toolCards)
             {
-                // pi's shape: a header naming the call, a bordered box with the output, then the
-                // duration. The border colour is the success signal.
+                // pi's shape: a header naming the call, a filled block with the output, then the
+                // duration. The fill colour is the state signal — grey while running, green or
+                // red when it lands — so a glance down the transcript reads as a status column.
                 var glyph = card.Status switch
                 {
                     "ok" => "✓",
@@ -3093,45 +3442,60 @@ public sealed class ReptarTerm : IDisposable
                     _ => "◐"
                 };
 
-                var border = card.Status == "failed" ? errorFg : agentFg;
+                var (fill, tint) = card.Status switch
+                {
+                    "failed" => ("\x1b[48;2;48;24;26m", errorFg),
+                    "ok" => ("\x1b[48;2;20;38;32m", agentFg),
+                    _ => ("\x1b[48;2;34;36;42m", dimFg)
+                };
+
+                card.Rows.Clear();
+                card.Rows.Add(lines.Count);
 
                 lines.Add(new TranscriptLine(
                     $"{glyph} {card.Name}  {card.Args}",
                     card.Status == "failed" ? errorFg : toolFg,
                     true,
-                    2));
+                    2,
+                    Bg: fill));
 
                 var output = card.Output.ToString().TrimEnd();
                 if (output.Length > 0)
                 {
                     var body = output.Split('\n');
+                    var limit = card.Expanded ? 40 : card.Status == "running" ? 4 : 6;
                     var shown = card.Status == "running"
-                        ? body.TakeLast(4).ToArray()
-                        : body.Take(8).ToArray();
+                        ? body.TakeLast(limit).ToArray()
+                        : body.Take(limit).ToArray();
 
                     var width = Math.Max(20, Math.Min(_width - 8, 110));
 
-                    lines.Add(new TranscriptLine("┌" + new string('─', width - 2) + "┐", border, false, 4));
-
                     foreach (var bodyLine in shown)
                     {
-                        var clipped = Clip(bodyLine, width - 4);
+                        card.Rows.Add(lines.Count);
                         lines.Add(new TranscriptLine(
-                            "│ " + clipped.PadRight(width - 4) + " │", border, false, 4));
+                            Clip(bodyLine, width), textFg, false, 4, Bg: fill));
                     }
 
                     if (body.Length > shown.Length)
                     {
-                        var more = $"… {body.Length - shown.Length} more lines";
+                        card.Rows.Add(lines.Count);
                         lines.Add(new TranscriptLine(
-                            "│ " + more.PadRight(width - 4) + " │", dimFg, false, 4));
+                            card.Expanded
+                                ? "▾ collapse"
+                                : $"▸ {body.Length - shown.Length} more lines — click to expand",
+                            tint, false, 4, Bg: fill));
                     }
-
-                    lines.Add(new TranscriptLine("└" + new string('─', width - 2) + "┘", border, false, 4));
+                    else if (card.Expanded)
+                    {
+                        card.Rows.Add(lines.Count);
+                        lines.Add(new TranscriptLine("▾ collapse", tint, false, 4, Bg: fill));
+                    }
                 }
 
                 if (card.Status != "running")
                 {
+                    card.Rows.Add(lines.Count);
                     var took = card.DurationMs >= 1000
                         ? $"{card.DurationMs / 1000.0:0.0}s"
                         : $"{card.DurationMs}ms";
@@ -3153,7 +3517,7 @@ public sealed class ReptarTerm : IDisposable
             if (_streamingText.Length > 0)
             {
                 lines.Add(new TranscriptLine("", textFg, false, 0));
-                RenderMarkdown(_streamingText, codeFence, Emit, lines, textFg, dimFg);
+                AppendMarkdown(_streamingText, lines);
             }
         }
 
@@ -3161,91 +3525,32 @@ public sealed class ReptarTerm : IDisposable
     }
 
     /// <summary>
-    /// Minimal inline markdown: headings, bullets, blockquotes, inline code, bold, and
-    /// fenced code blocks. Deliberately not a full parser — it only needs to make an
-    /// agent transcript scannable.
+    /// Appends rendered markdown to the transcript lines.
     /// </summary>
-    private static void RenderMarkdown(
-        string text,
-        bool startsInFence,
-        Action<string, string, bool, int> emit,
-        List<TranscriptLine> lines,
-        string textFg,
-        string dimFg)
+    /// <remarks>
+    /// The parsing and styling live in <see cref="MarkdownRenderer"/>; this only maps styled runs
+    /// onto transcript lines. That split is why <c>**bold**</c> is drawn bold instead of having
+    /// its markers stripped — the runs carry a style, the buffer paints per cell.
+    /// </remarks>
+    private void AppendMarkdown(string markdown, List<TranscriptLine> lines)
     {
-        const string codeFg = "\x1b[38;2;148;163;184m";
-        const string headingFg = "\x1b[97m";
-
-        var inFence = startsInFence;
-
-        foreach (var rawLine in text.Split('\n'))
+        foreach (var rendered in MarkdownRenderer.Render(markdown, _width))
         {
-            var line = rawLine.TrimEnd('\r');
-            var trimmed = line.TrimStart();
-
-            if (trimmed.StartsWith("```", StringComparison.Ordinal))
+            if (rendered.Runs.Count == 0)
             {
-                inFence = !inFence;
-                var language = trimmed.Length > 3 ? trimmed[3..].Trim() : "";
-                lines.Add(new TranscriptLine(
-                    language.Length > 0 ? $"┄┄ {language} ┄┄" : "┄┄┄┄",
-                    dimFg, false, 4));
+                lines.Add(new TranscriptLine("", "\x1b[37m", false, 0));
                 continue;
             }
 
-            if (inFence)
-            {
-                lines.Add(new TranscriptLine("  " + line, codeFg, false, 4));
-                continue;
-            }
-
-            if (trimmed.Length == 0)
-            {
-                lines.Add(new TranscriptLine("", textFg, false, 0));
-                continue;
-            }
-
-            if (trimmed.StartsWith('#'))
-            {
-                var level = trimmed.TakeWhile(c => c == '#').Count();
-                var body = trimmed[level..].Trim();
-                emit(body, level <= 2 ? headingFg : textFg, true, 4);
-                continue;
-            }
-
-            if (trimmed.StartsWith("- ", StringComparison.Ordinal) ||
-                trimmed.StartsWith("* ", StringComparison.Ordinal))
-            {
-                emit("• " + trimmed[2..], textFg, false, 6);
-                continue;
-            }
-
-            if (trimmed.StartsWith('>'))
-            {
-                emit("│ " + trimmed[1..].TrimStart(), dimFg, false, 6);
-                continue;
-            }
-
-            emit(StripInlineMarkdown(line), textFg, false, 4);
+            // A line can carry several styles, so it is stored as styled runs rather than one
+            // string with a single colour.
+            lines.Add(new TranscriptLine(
+                rendered.Text,
+                rendered.Runs[0].Fg,
+                rendered.Runs.Any(run => run.Bold),
+                rendered.Indent,
+                rendered.Runs));
         }
-    }
-
-    /// <summary>Strips the inline markers a terminal cannot style per-character.</summary>
-    private static string StripInlineMarkdown(string line)
-    {
-        var builder = new StringBuilder(line.Length);
-        for (var i = 0; i < line.Length; i++)
-        {
-            if (line[i] == '*' && i + 1 < line.Length && line[i + 1] == '*')
-            {
-                i++;
-                continue;
-            }
-            if (line[i] == '`')
-                continue;
-            builder.Append(line[i]);
-        }
-        return builder.ToString();
     }
 
     private static string Clip(string value, int width) =>
@@ -3261,71 +3566,25 @@ public sealed class ReptarTerm : IDisposable
     /// </remarks>
     private async Task RefreshCatalogAsync()
     {
-        var items = new List<CatalogModelItem>();
-        var categories = new List<string> { "All" };
-
-        foreach (var provider in LlmProviders.Known)
-        {
-            var (source, _) = LlmProviders.CredentialSource(provider.Key, _auth);
-            var usable = source != "none" || !provider.RequiresApiKey;
-
-            if (!usable)
-                continue;
-
-            var category = provider.DisplayName.Split(' ')[0];
-            if (!categories.Contains(category))
-                categories.Add(category);
-
-            List<LlmCatalog.CuratedModel> models;
-            try
-            {
-                models = await LlmCatalog.ListCuratedAsync(provider.Key).ConfigureAwait(false);
-            }
-            catch
-            {
-                models = [];
-            }
-
-            if (models.Count == 0)
-            {
-                // Offline or unlisted: offer the provider's default so it is still selectable.
-                items.Add(new CatalogModelItem(
-                    provider.DefaultModel, provider.Key, provider.DisplayName, category,
-                    "default", "default", [ThinkingLevel.Off], provider.DefaultModel));
-                continue;
-            }
-
-            foreach (var model in models)
-            {
-                // A model picker that offers embedding, image-generation, and TTS models is
-                // noise: picking one produces a confusing provider error rather than a reply.
-                if (!IsChatModel(model.Id))
-                    continue;
-
-                var specs = new List<string>();
-                if (model.ContextTokens > 0)
-                    specs.Add($"{FormatTokens((int)Math.Min(int.MaxValue, model.ContextTokens))} ctx");
-                if (model.Reasoning)
-                    specs.Add("reasoning");
-                if (model.Vision)
-                    specs.Add("vision");
-
-                items.Add(new CatalogModelItem(
-                    model.Id,
-                    provider.Key,
-                    provider.DisplayName,
-                    category,
-                    specs.Count > 0 ? string.Join(" · ", specs) : "—",
-                    model.Reasoning ? "reasoning" : "chat",
-                    model.SupportedThinking,
-                    model.Name));
-            }
-        }
+        var options = await LlmModelOptions.BuildAsync(_auth).ConfigureAwait(false);
 
         _catalog.Clear();
-        _catalog.AddRange(items);
+        foreach (var option in options)
+        {
+            _catalog.Add(new CatalogModelItem(
+                option.ModelId,
+                option.ProviderKey,
+                option.ProviderName,
+                option.Category,
+                option.Specs,
+                option.Reasoning ? "reasoning" : option.IsDefault ? "default" : "chat",
+                option.Thinking,
+                option.DisplayName));
+        }
 
-        _providerCategories = categories;
+        _providerCategories.Clear();
+        _providerCategories.AddRange(LlmModelOptions.Categories(options));
+
         if (_providerCategoryIdx >= _providerCategories.Count)
             _providerCategoryIdx = 0;
 
@@ -3335,25 +3594,6 @@ public sealed class ReptarTerm : IDisposable
 
         RebuildModelSelector();
         RebuildProviderSelector();
-    }
-
-    /// <summary>
-    /// Whether a model id names a chat model. Excludes the families that cannot answer a prompt:
-    /// embeddings, image generation, speech, and the audio-only realtime models.
-    /// </summary>
-    private static bool IsChatModel(string modelId)
-    {
-        var id = modelId.ToLowerInvariant();
-
-        string[] excluded =
-        [
-            "embedding", "embed-", "-embed", "rerank",
-            "-image", "image-", "dall-e", "stable-diffusion", "imagen",
-            "tts", "-audio", "audio-", "whisper", "transcribe",
-            "realtime", "moderation", "clip", "-vision-preview"
-        ];
-
-        return !excluded.Any(token => id.Contains(token, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -3754,6 +3994,21 @@ public sealed class ReptarTerm : IDisposable
         }
     }
 
+    /// <summary>
+    /// Rows between a selector's first drawn line and its first item, so a click row can be
+    /// mapped back to an index. Mirrors the order the selector renders in.
+    /// </summary>
+    private static int SelectorItemOffset(TermSelector selector)
+    {
+        var rows = 1;                                   // rule
+
+        if (selector.Notice.Length > 0) rows++;
+        if (selector.Title.Length > 0) rows++;
+
+        rows++;                                         // search row
+        return rows;
+    }
+
     private int FooterStatsRow => Layout.FooterStats;
     private int FooterLocationRow => Layout.FooterLocation;
     private int ComposerRow => Layout.Composer;
@@ -3902,10 +4157,10 @@ public sealed class ReptarTerm : IDisposable
 
         var left = new System.Text.StringBuilder();
 
-        if (_totalTokensIn > 0) left.Append('↑').Append(FormatTokens(_totalTokensIn));
-        if (_totalTokensOut > 0) left.Append(left.Length > 0 ? " " : "").Append('↓').Append(FormatTokens(_totalTokensOut));
-        if (_totalCacheRead > 0) left.Append(left.Length > 0 ? " " : "").Append('R').Append(FormatTokens(_totalCacheRead));
-        if (_totalCacheWrite > 0) left.Append(left.Length > 0 ? " " : "").Append('W').Append(FormatTokens(_totalCacheWrite));
+        if (_totalTokensIn > 0) left.Append('↑').Append(LlmModelOptions.FormatTokens(_totalTokensIn));
+        if (_totalTokensOut > 0) left.Append(left.Length > 0 ? " " : "").Append('↓').Append(LlmModelOptions.FormatTokens(_totalTokensOut));
+        if (_totalCacheRead > 0) left.Append(left.Length > 0 ? " " : "").Append('R').Append(LlmModelOptions.FormatTokens(_totalCacheRead));
+        if (_totalCacheWrite > 0) left.Append(left.Length > 0 ? " " : "").Append('W').Append(LlmModelOptions.FormatTokens(_totalCacheWrite));
 
         if (_lastCacheHitRate >= 0)
             left.Append(left.Length > 0 ? " " : "").Append("CH").Append(_lastCacheHitRate.ToString("0.0")).Append('%');
@@ -3918,12 +4173,27 @@ public sealed class ReptarTerm : IDisposable
         var percent = _contextLimit > 0 ? used * 100.0 / _contextLimit : 0;
 
         var contextText = _contextLimit > 0
-            ? $"{percent:0.0}%/{FormatTokens(_contextLimit)}{(_autoCompact ? " (auto)" : "")}"
-            : $"?/{FormatTokens(used)}";
+            ? $"{percent:0.0}%/{LlmModelOptions.FormatTokens(_contextLimit)}{(_autoCompact ? " (auto)" : "")}"
+            : $"?/{LlmModelOptions.FormatTokens(used)}";
 
         var contextColor = percent > 90 ? "\x1b[38;2;248;113;113m"
             : percent > 70 ? "\x1b[38;2;251;191;36m"
             : dim;
+
+        // Todos take a slot in the status line rather than a block in the transcript: a long
+        // list would otherwise consume the screen as it grows.
+        if (_todos is { } todos && todos.Items.Count > 0)
+        {
+            var open = todos.RemainingCount;
+            var done = todos.CompletedCount;
+            var glyph = open == 0 ? "✓" : "☰";
+            left.Append(left.Length > 0 ? " " : "")
+                .Append(glyph)
+                .Append(' ')
+                .Append(done)
+                .Append('/')
+                .Append(done + open);
+        }
 
         var right = _client.Config.Model;
 
@@ -3997,19 +4267,9 @@ public sealed class ReptarTerm : IDisposable
         }
     }
 
-    private void EnterAltScreen()
-    {
-        if (_inAltScreen) return;
-        Console.Write("\x1b[?1049h\x1b[?25l");
-        _inAltScreen = true;
-    }
+    private void EnterAltScreen() => _screen.EnterAltScreen();
 
-    private void ExitAltScreen()
-    {
-        if (!_inAltScreen) return;
-        Console.Write("\x1b[?25h\x1b[?1049l");
-        _inAltScreen = false;
-    }
+    private void ExitAltScreen() => _screen.Dispose();
 
     private void LoadHistory()
     {

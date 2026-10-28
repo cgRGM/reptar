@@ -235,6 +235,74 @@ public sealed class ScriptInterpreter
     }
 
     /// <summary>
+    /// Adds a host function to the global scope.
+    /// </summary>
+    /// <remarks>
+    /// Extensions need this: the registration functions (<c>register_tool</c>, <c>on</c>) exist
+    /// only while loading, and the built-in set is fixed at construction.
+    /// </remarks>
+    public void AddGlobal(string name, ScriptValue value) => _globals[name] = value;
+
+    /// <summary>
+    /// Runs a registered handler on this interpreter, keeping its globals and tool executor.
+    /// </summary>
+    /// <remarks>
+    /// Distinct from <see cref="InvokeAsync"/>: that one builds a throwaway interpreter for array
+    /// callbacks, which is fine for <c>map</c>/<c>filter</c> but wrong for an extension handler —
+    /// the handler needs the host functions and tool access it was defined against, and a stub
+    /// executor would make every tool call inside it return null.
+    /// </remarks>
+    public async Task<ScriptValue> InvokeHandlerAsync(
+        ScriptValue callable,
+        IReadOnlyList<ScriptValue> arguments,
+        CancellationToken cancellationToken = default)
+    {
+        if (callable is ScriptNativeFunction native)
+            return await native.Invoke(arguments, cancellationToken).ConfigureAwait(false);
+
+        if (callable is not ScriptClosure closure)
+            return ScriptValue.Null;
+
+        // Each invocation gets a fresh step budget; otherwise a long-lived extension would exhaust
+        // the limit over many turns and start failing mid-session.
+        _steps = 0;
+
+        var saved = _scopes.ToList();
+        _scopes.Clear();
+
+        try
+        {
+            foreach (var scope in closure.Captured)
+                _scopes.Add(new Dictionary<string, ScriptValue>(scope, StringComparer.Ordinal));
+
+            if (_scopes.Count == 0)
+                _scopes.Add([]);
+
+            var frame = new Dictionary<string, ScriptValue>(StringComparer.Ordinal);
+            for (var i = 0; i < closure.Parameters.Count; i++)
+            {
+                frame[closure.Parameters[i]] = i < arguments.Count ? arguments[i] : ScriptValue.Null;
+            }
+
+            _scopes.Add(frame);
+
+            foreach (var statement in closure.Body)
+            {
+                var outcome = await ExecuteAsync(statement, cancellationToken).ConfigureAwait(false);
+                if (outcome.Flow == ScriptFlow.Return)
+                    return outcome.Value;
+            }
+
+            return ScriptValue.Null;
+        }
+        finally
+        {
+            _scopes.Clear();
+            _scopes.AddRange(saved);
+        }
+    }
+
+    /// <summary>
     /// Runs a user lambda. Static so array methods (<c>filter</c>/<c>map</c>/<c>find</c>) can
     /// apply it without owning an interpreter instance.
     /// </summary>
