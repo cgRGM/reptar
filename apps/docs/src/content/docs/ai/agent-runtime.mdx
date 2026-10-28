@@ -349,11 +349,72 @@ OpenAI · Anthropic · Google Gemini · Ollama · OpenRouter · Vercel AI Gatewa
 
 Providers that need more than a key declare it: Cloudflare Workers AI needs an account id, AI Gateway needs an account and gateway id. `LlmProviders.ResolveBaseUrl` substitutes them from the saved credential or the environment, and leaves an unfilled placeholder visible rather than blanking it — a request to a URL containing a literal `{account_id}` fails in a way that looks like an auth error.
 
-`ProviderAuth` records whether a provider can be signed in with a subscription (`Account`), an API key, or both. Account sign-in is not implemented; the field exists so the UI can say so rather than offer a flow that does not exist.
+`ProviderAuth` records whether a provider can be signed in with a subscription (`Account`), an API key, or both. A ChatGPT Plus/Pro subscription is supported end to end; no other provider has a subscription flow yet.
+
+## 20. What counts as connected
+
+A provider is offered as an option only when it can actually serve a request. `LlmProviders.IsConnected` is the single definition:
+
+```csharp
+LlmProviders.IsConnected("openai", auth)   // a credential or env var, AND no missing fields
+```
+
+Both halves matter. A provider that needs no API key is still not connected until it has been chosen — a ChatGPT subscription needs no key, so without that rule it appears in pickers while signed out and fails on first use. And a credential that exists but is incomplete cannot work either: an AI Gateway credential with no account id cannot build its URL.
+
+Status lists (`/providers`) deliberately do not filter. Showing what is missing is their job; only lists of _options_ hide what cannot be used.
+
+## 21. Browsing models
+
+Building a model picker is the same problem in every host, so the rules live in the framework rather than in each UI:
+
+```csharp
+using Reptar.AI;
+
+var options = await LlmModelOptions.BuildAsync(auth);
+
+foreach (var option in options)
+    Console.WriteLine($"{option.ProviderName,-28} {option.ModelId,-24} {option.Specs}");
+
+var categories = LlmModelOptions.Categories(options);  // ["All", "OpenAI", "Google", ...]
+```
+
+`ModelOption` carries what a picker needs: provider key and name, model id, display name, a grouping category, a short capability line (`400k ctx · reasoning`), whether it reasons, and the thinking levels it actually accepts.
+
+The filtering is the part worth not reimplementing:
+
+| Rule | Why |
+| --- | --- |
+| Only connected providers | Picking a model with no credential gives a 401 that reads like a bug |
+| Only chat models | An embedding or TTS model in a picker produces an error, not a reply |
+| Newest first | Provider catalogs arrive in no useful order |
+| Fall back to the provider default | A provider with no known catalog must stay selectable |
+
+`LlmModelOptions.IsChatModel` excludes the families that cannot answer a prompt — embeddings, rerankers, image generation, speech, transcription, moderation, and audio-only realtime models.
+
+Ordering compares the numeric runs in a model id, descending, so `gpt-6-sol` sorts above `gpt-5.6`, and `gpt-5.10` above `gpt-5.9` — which string comparison gets backwards. A dated snapshot sorts above the alias it snapshots. It is a heuristic, not a version scheme: `o3` versus `gpt-4` has no correct answer, only a stable one.
+
+A ChatGPT subscription browses the same catalog as the OpenAI API, since it serves the same model family. Cloudflare Workers AI lists only the models Cloudflare itself hosts (`@cf/...`) — that is a different product from an OpenAI account, and the GPT models there are open-weights variants, not the API models.
+
+## 22. Sign in with ChatGPT
+
+A ChatGPT Plus/Pro subscription is a provider: `openai-chatgpt`. It needs no API key. The flow is authorization-code with PKCE and a loopback callback on `127.0.0.1:1455`.
+
+Several details produce confusing failures if missed:
+
+- **PKCE is mandatory.** It is a public client with no secret, so the S256 verifier is what stops an intercepted authorization code from being redeemed.
+- **The authorize URL needs `agent_name_hint`, `nonce`, and `ext_agent_host_id`.** Without them OpenAI answers `invalid_authorize_request` and does not say which parameter was missing. The host id is `urn:uuid:<uuid>` for the installation, persisted in `~/.reptar/agent/device-id` — a value that changed per launch would present every run as a new device.
+- **The client id is issued, not fixed.** OpenAI performs dynamic client registration: the request sends `dynamic_agent_client` and the real id comes back on the callback, then must be used for the exchange and every refresh. Reusing the placeholder yields `invalid_client`.
+- **The listener binds before the browser opens.** Opening first races the bind: on a session that needs no interaction the redirect can arrive before the socket exists. A callback whose state does not match is answered and ignored rather than aborting the flow, since a stale tab can land on the same port while a legitimate sign-in is pending.
+- **The grant must include `chatgpt.tokens.use.direct`** or the token cannot call the API. The flow checks for it rather than surfacing it later as a 401.
+
+Tokens refresh three minutes before expiry, and the rotated refresh token is persisted — keeping the old one breaks the next refresh.
+
+A subscription token is not accepted by `/chat/completions`, so this provider uses `OpenAiResponsesLlmClient` (`/v1/responses`), where the transcript is a flat list of typed input items and a tool call is a sibling item rather than a field on the assistant message.
 
 ## See also
 
 - [AI Tools & Agent Harness](/ai/agent-harness) — the tool layer underneath this
+- [Extensions](/ai/extensions) — tools, commands, and hooks added at runtime
 - [Reptar.Term](/ai/term-package) — the terminal UI package
 - [Structured LLM Outputs](/cookbook/structured-llm-outputs)
 - [Human in the Loop](/cookbook/human-in-the-loop)

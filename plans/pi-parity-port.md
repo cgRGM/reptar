@@ -1407,7 +1407,7 @@ Two packages and one reference client.
 
 ### What is verified
 
-- 906 unit tests, including contract tests for the loop's guarantees, compaction arithmetic, layout non-overlap, selector state preservation, and reflection-free settings.
+- 946 unit tests, including contract tests for the loop's guarantees, compaction arithmetic, layout non-overlap, selector state preservation, and reflection-free settings.
 - End-to-end against a live local model (Ollama, `llama3.1:8b`): tool calls, error recovery, file mutation, streaming, and the full event stream.
 - RPC round trip from both a C# client and a raw JSONL script.
 - Web API endpoints against a running server.
@@ -1418,7 +1418,7 @@ Two packages and one reference client.
 2. **Provider attribution headers.** Names come from pi's source; whether OpenRouter credits the app is only visible in their dashboard.
 3. **Thinking budgets against a real reasoning model.** The arithmetic is tested; acceptance is not.
 4. **The TUI at scale.** Every layout round was fixed from a screenshot, never from watching it work.
-5. **The ChatGPT subscription end to end.** The authorize URL, PKCE, callback, and token storage are tested; a token has never actually been used to make a request. The Responses client is likewise exercised only against recorded event shapes.
+5. **The ChatGPT subscription end to end.** The authorize URL, PKCE, callback, token storage, and the Responses client's request shape and stream translation are tested against a local server. Sign-in has been completed against a real account; a subscription token has not yet been used to make a request.
 
 ### What pi has that this does not
 

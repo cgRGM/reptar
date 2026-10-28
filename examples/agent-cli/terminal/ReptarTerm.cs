@@ -3122,15 +3122,6 @@ public sealed class ReptarTerm : IDisposable
     /// <summary>
     /// pi's <c>formatTokens</c>: compact enough for a footer, precise where precision is visible.
     /// </summary>
-    private static string FormatTokens(int count)
-    {
-        if (count < 1_000) return count.ToString();
-        if (count < 10_000) return $"{count / 1_000.0:0.0}k";
-        if (count < 1_000_000) return $"{Math.Round(count / 1_000.0)}k";
-        if (count < 10_000_000) return $"{count / 1_000_000.0:0.0}M";
-        return $"{Math.Round(count / 1_000_000.0)}M";
-    }
-
     /// <summary>
     /// Renders the complete double-buffered frame into _back and emits minimal ANSI diff.
     /// </summary>
@@ -3577,86 +3568,25 @@ public sealed class ReptarTerm : IDisposable
     /// </remarks>
     private async Task RefreshCatalogAsync()
     {
-        var items = new List<CatalogModelItem>();
-        var categories = new List<string> { "All" };
-
-        foreach (var provider in LlmProviders.Known)
-        {
-            // Connected means a stored credential, full stop. The old escape hatch for providers
-            // that need no key made an unconnected ChatGPT subscription look usable, so its
-            // default model appeared in the picker and failed on selection.
-            if (!LlmProviders.IsConnected(provider.Key, _auth))
-                continue;
-
-            var category = provider.DisplayName.Split(' ')[0];
-            if (!categories.Contains(category))
-                categories.Add(category);
-
-            List<LlmCatalog.CuratedModel> models;
-            try
-            {
-                models = await LlmCatalog.ListCuratedAsync(provider.Key).ConfigureAwait(false);
-            }
-            catch
-            {
-                models = [];
-            }
-
-            // No curated catalog means we do not know this provider's ids — a gateway, or a
-            // provider models.dev does not cover. Ask the provider rather than guessing: it knows
-            // its own names, including any routing prefix a borrowed catalog would get wrong.
-            if (models.Count == 0)
-            {
-                var live = await LlmCatalog
-                    .ListAsync(LlmConfig.FromEnvironment(provider.Key), timeoutMs: 4_000)
-                    .ConfigureAwait(false);
-
-                if (live.Ok)
-                {
-                    models = [.. live.Models.Select(id => new LlmCatalog.CuratedModel(id, id, 0))];
-                }
-            }
-
-            if (models.Count == 0)
-            {
-                // Offline or unlisted: offer the provider's default so it is still selectable.
-                items.Add(new CatalogModelItem(
-                    provider.DefaultModel, provider.Key, provider.DisplayName, category,
-                    "default", "default", [ThinkingLevel.Off], provider.DefaultModel));
-                continue;
-            }
-
-            foreach (var model in models)
-            {
-                // A model picker that offers embedding, image-generation, and TTS models is
-                // noise: picking one produces a confusing provider error rather than a reply.
-                if (!IsChatModel(model.Id))
-                    continue;
-
-                var specs = new List<string>();
-                if (model.ContextTokens > 0)
-                    specs.Add($"{FormatTokens((int)Math.Min(int.MaxValue, model.ContextTokens))} ctx");
-                if (model.Reasoning)
-                    specs.Add("reasoning");
-                if (model.Vision)
-                    specs.Add("vision");
-
-                items.Add(new CatalogModelItem(
-                    model.Id,
-                    provider.Key,
-                    provider.DisplayName,
-                    category,
-                    specs.Count > 0 ? string.Join(" · ", specs) : "—",
-                    model.Reasoning ? "reasoning" : "chat",
-                    model.SupportedThinking,
-                    model.Name));
-            }
-        }
+        var options = await LlmModelOptions.BuildAsync(_auth).ConfigureAwait(false);
 
         _catalog.Clear();
-        _catalog.AddRange(items);
+        foreach (var option in options)
+        {
+            _catalog.Add(new CatalogModelItem(
+                option.ModelId,
+                option.ProviderKey,
+                option.ProviderName,
+                option.Category,
+                option.Specs,
+                option.Reasoning ? "reasoning" : option.IsDefault ? "default" : "chat",
+                option.Thinking,
+                option.DisplayName));
+        }
 
-        _providerCategories = categories;
+        _providerCategories.Clear();
+        _providerCategories.AddRange(LlmModelOptions.Categories(options));
+
         if (_providerCategoryIdx >= _providerCategories.Count)
             _providerCategoryIdx = 0;
 
@@ -3666,25 +3596,6 @@ public sealed class ReptarTerm : IDisposable
 
         RebuildModelSelector();
         RebuildProviderSelector();
-    }
-
-    /// <summary>
-    /// Whether a model id names a chat model. Excludes the families that cannot answer a prompt:
-    /// embeddings, image generation, speech, and the audio-only realtime models.
-    /// </summary>
-    private static bool IsChatModel(string modelId)
-    {
-        var id = modelId.ToLowerInvariant();
-
-        string[] excluded =
-        [
-            "embedding", "embed-", "-embed", "rerank",
-            "-image", "image-", "dall-e", "stable-diffusion", "imagen",
-            "tts", "-audio", "audio-", "whisper", "transcribe",
-            "realtime", "moderation", "clip", "-vision-preview"
-        ];
-
-        return !excluded.Any(token => id.Contains(token, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -4248,10 +4159,10 @@ public sealed class ReptarTerm : IDisposable
 
         var left = new System.Text.StringBuilder();
 
-        if (_totalTokensIn > 0) left.Append('↑').Append(FormatTokens(_totalTokensIn));
-        if (_totalTokensOut > 0) left.Append(left.Length > 0 ? " " : "").Append('↓').Append(FormatTokens(_totalTokensOut));
-        if (_totalCacheRead > 0) left.Append(left.Length > 0 ? " " : "").Append('R').Append(FormatTokens(_totalCacheRead));
-        if (_totalCacheWrite > 0) left.Append(left.Length > 0 ? " " : "").Append('W').Append(FormatTokens(_totalCacheWrite));
+        if (_totalTokensIn > 0) left.Append('↑').Append(LlmModelOptions.FormatTokens(_totalTokensIn));
+        if (_totalTokensOut > 0) left.Append(left.Length > 0 ? " " : "").Append('↓').Append(LlmModelOptions.FormatTokens(_totalTokensOut));
+        if (_totalCacheRead > 0) left.Append(left.Length > 0 ? " " : "").Append('R').Append(LlmModelOptions.FormatTokens(_totalCacheRead));
+        if (_totalCacheWrite > 0) left.Append(left.Length > 0 ? " " : "").Append('W').Append(LlmModelOptions.FormatTokens(_totalCacheWrite));
 
         if (_lastCacheHitRate >= 0)
             left.Append(left.Length > 0 ? " " : "").Append("CH").Append(_lastCacheHitRate.ToString("0.0")).Append('%');
@@ -4264,8 +4175,8 @@ public sealed class ReptarTerm : IDisposable
         var percent = _contextLimit > 0 ? used * 100.0 / _contextLimit : 0;
 
         var contextText = _contextLimit > 0
-            ? $"{percent:0.0}%/{FormatTokens(_contextLimit)}{(_autoCompact ? " (auto)" : "")}"
-            : $"?/{FormatTokens(used)}";
+            ? $"{percent:0.0}%/{LlmModelOptions.FormatTokens(_contextLimit)}{(_autoCompact ? " (auto)" : "")}"
+            : $"?/{LlmModelOptions.FormatTokens(used)}";
 
         var contextColor = percent > 90 ? "\x1b[38;2;248;113;113m"
             : percent > 70 ? "\x1b[38;2;251;191;36m"
