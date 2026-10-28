@@ -8,6 +8,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
+import { verifyBracket } from "./bracket";
+import { verifyReportComparison } from "./report-evidence";
+import type { VerifiableResult } from "./report-evidence";
+
+type ScenarioEvidence = VerifiableResult["scenarios"][number];
+
 interface StageStats {
   name: string;
   count: number;
@@ -23,7 +29,7 @@ interface BreakdownSnapshot {
   stages: StageStats[];
 }
 
-interface ScenarioResult {
+interface ScenarioResult extends ScenarioEvidence {
   name: string;
   tier: string;
   method: string;
@@ -39,11 +45,11 @@ interface ScenarioResult {
   breakdown?: BreakdownSnapshot;
 }
 
-interface ResultFile {
+interface ResultFile extends VerifiableResult {
   label: string;
   baseUrl: string;
   generatedAt: string;
-  config: Record<string, number>;
+  config: VerifiableResult["config"];
   scenarios: ScenarioResult[];
 }
 
@@ -60,7 +66,15 @@ const manifest = existsSync(manifestPath)
   ? (JSON.parse(readFileSync(manifestPath, "utf-8")) as Record<string, unknown>)
   : {};
 
-const labels = ["reptar", "minimal-api", "hono-jit", "hono-compiled"];
+const labelsOption = process.argv.find((argument) =>
+  argument.startsWith("--labels=")
+);
+const labels = labelsOption
+  ? labelsOption.slice("--labels=".length).split(",")
+  : ["reptar", "minimal-api", "hono-jit", "hono-compiled"];
+if (labels.some((label) => !/^[a-z\d_-]+$/iu.test(label))) {
+  throw new Error("Report labels must be safe result filename identifiers");
+}
 const display: Record<string, string> = {
   "hono-compiled": "Hono (compiled)",
   "hono-jit": "Hono (JIT)",
@@ -139,7 +153,44 @@ const formatRss = (value: number | null | undefined): string =>
     ? "n/a"
     : `${(value / 1024).toFixed(1)} MB`;
 
+const loadBracket = (): ReturnType<typeof verifyBracket> => {
+  try {
+    const session = JSON.parse(
+      readFileSync(path.join(dir, "comparison-session.json"), "utf-8")
+    ) as { files: string[]; maxAaDrift: number };
+    const runs = session.files.map((file) => {
+      if (!/^[a-z\d_.-]+\.json$/iu.test(file)) {
+        throw new Error(
+          "Bracket files must be result filenames inside this directory"
+        );
+      }
+      return JSON.parse(
+        readFileSync(path.join(dir, file), "utf-8")
+      ) as VerifiableResult;
+    });
+    for (const result of results.values()) {
+      if (!runs.some((run) => JSON.stringify(run) === JSON.stringify(result))) {
+        throw new Error(
+          "Report result is not one of the exact bracket artifacts"
+        );
+      }
+    }
+    return verifyBracket(runs, session.maxAaDrift);
+  } catch (error) {
+    return {
+      aaDrift: {},
+      reason: `Missing/invalid A/B/B/A session: ${error instanceof Error ? error.message : "invalid evidence"}`,
+      verified: false,
+    };
+  }
+};
+const workStatus = verifyReportComparison([...results.values()]);
+const comparisonStatus = workStatus.verified ? loadBracket() : workStatus;
+
 const delta = (value: number, baseline: number): string => {
+  if (!comparisonStatus.verified) {
+    return "unverified";
+  }
   if (!(baseline > 0)) {
     return "n/a";
   }
@@ -155,6 +206,10 @@ const add = (...values: string[]): void => {
 
 add(`# Reptar Bench — ${path.basename(dir)}`, "");
 add(`Generated: ${new Date().toISOString()}`, "");
+add(
+  `Comparison status: **${comparisonStatus.verified ? "sampled equal-work evidence verified" : "UNVERIFIED — descriptive results only"}**. ${comparisonStatus.reason}.`,
+  ""
+);
 
 if (Object.keys(manifest).length > 0) {
   add("## Environment", "");
@@ -417,15 +472,10 @@ add("");
 add("## Notes");
 add(
   "",
-  "- Server and load generator run on the same Lightsail box (2 vCPU = 2 SMT threads on one physical core). The server is pinned to CPU 0 and `oha` to CPU 1, so these are **relative** comparisons, not absolute capacity numbers."
-);
-add(
-  "- Logging and Reptar telemetry are off for the main run. The existing RealWorld measurements showed default logging roughly halves in-memory throughput, so leaving it on would measure stdout, not the framework.",
-  "- Reptar uses a source-generated `JsonSerializerContext` (`BenchJsonCodec`) because the default reflection codec trims nested DTO properties under Native AOT. The .NET Minimal API control also uses source-generated JSON."
-);
-add(
-  "- `Rule<T>` and `ctx.Json<T>` with the default codec are not AOT-safe today; the benchmark app uses manual validation and a source-gen codec. That is a finding, not a hidden advantage.",
-  "- Hono runs both the JIT path (`bun run src/index.ts`) and the compiled bundle (`bun build --compile`). The compiled bundle is ~105 MB because it embeds the Bun runtime; it is not AOT."
+  "- Hardware, pinning, toolchain, middleware, cache and logging settings must come from this run's recorded manifest; historical Lightsail settings are not assumed.",
+  "- Raw rates and errors are retained even when comparison eligibility fails. Missing legacy evidence is not silently promoted to equal work.",
+  "- Response probes validate sampled semantics and actual encoded bytes before/after load, not every response or internal implementation work.",
+  "- Controlled A/A brackets and alternating order remain required for regression claims. Shared-runner fluctuations alone do not establish a small improvement."
 );
 add("");
 

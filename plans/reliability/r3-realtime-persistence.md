@@ -37,4 +37,4 @@ Evidence is retained outside the checkout at `/tmp/reptar-reliability-evidence-2
 - Protocol parity covers published native SQLite and rebuilt local workerd/D1, not remote multi-isolate staging or every deployment.
 - Short repetitions do not establish operational maturity; elapsed soak and multi-release evidence remain R6 work.
 
-Acceptance remains pending final-head CI/security and review.
+Accepted after PR #16 final-head Linux CI/security passed; merged as `9614c4f239081e9ba1755f4ce7eb8f15f57c39e0`. The limits above remain in force.

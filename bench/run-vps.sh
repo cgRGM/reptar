@@ -27,17 +27,45 @@ if [[ ! -x "$OHA" ]]; then
   exit 1
 fi
 
-mkdir -p "$RESULTS"
+if [[ "$(uname -s)" != "Linux" ]] || ! command -v setsid >/dev/null; then
+  echo "VPS orchestration requires Linux setsid process-group ownership." >&2
+  exit 1
+fi
+if [[ ! "$STAMP" =~ ^[a-zA-Z0-9_-]+$ ]] || [[ -e "$RESULTS" ]]; then
+  echo "Unsafe stamp or existing evidence directory; refusing to overwrite." >&2
+  exit 1
+fi
+mkdir "$RESULTS"
 
 # Shared VPSes may host unrelated apps or other agents' experiments. Never
 # stop containers or kill processes implicitly. Operators can explicitly opt
 # into quiescing named containers; restore only ones that were running.
 containers_to_restart=()
-restart_containers() {
-  if [[ -n "${SERVER_PID:-}" ]]; then
-    kill "$SERVER_PID" >/dev/null 2>&1 || true
-    wait "$SERVER_PID" >/dev/null 2>&1 || true
+stop_server() {
+  if [[ -z "${SERVER_PID:-}" ]]; then return; fi
+  kill -TERM -- "-$SERVER_PID" >/dev/null 2>&1 || true
+  for _ in $(seq 1 120); do
+    if ! kill -0 -- "-$SERVER_PID" >/dev/null 2>&1; then break; fi
+    sleep 0.025
+  done
+  if kill -0 -- "-$SERVER_PID" >/dev/null 2>&1; then
+    kill -KILL -- "-$SERVER_PID" >/dev/null 2>&1 || true
   fi
+  for _ in $(seq 1 120); do
+    if ! kill -0 -- "-$SERVER_PID" >/dev/null 2>&1; then break; fi
+    sleep 0.025
+  done
+  if kill -0 -- "-$SERVER_PID" >/dev/null 2>&1; then
+    echo "$SERVER_PID" > "$RESULTS/unfinished-owned-process-group.txt"
+    echo "Owned group failed bounded cleanup; preserving its id for inspection." >&2
+    SERVER_PID=""
+    return 1
+  fi
+  wait "$SERVER_PID" >/dev/null 2>&1 || true
+  SERVER_PID=""
+}
+restart_containers() {
+  stop_server
   if [[ ${#containers_to_restart[@]} -gt 0 ]]; then
     docker start "${containers_to_restart[@]}" >/dev/null 2>&1 || true
   fi
@@ -50,8 +78,9 @@ for container in ${BENCH_STOP_CONTAINERS:-}; do
   fi
 done
 
-echo "==> Seeding the shared database"
-bun "$ROOT/bench/shared/seed.ts" "$ROOT/bench/out/bench.db" >/dev/null
+echo "==> Seeding an owned, run-specific database"
+mkdir "$RESULTS/seed"
+bun "$ROOT/bench/shared/seed.ts" "$RESULTS/seed/bench.db" >/dev/null
 
 cat > "$RESULTS/manifest.json" <<EOF
 {
@@ -61,7 +90,7 @@ cat > "$RESULTS/manifest.json" <<EOF
   "cpu": "$(lscpu | grep -E 'Model name|^CPU\(s\)|Thread|Core|Socket' | tr '\n' '|')",
   "memory": "$(free -h | head -2 | tail -1)",
   "bun": "$(bun --version)",
-  "dotnet": "$(docker run --rm mcr.microsoft.com/dotnet/sdk:10.0 dotnet --version 2>/dev/null | tail -1)",
+  "dotnetBuildVersionAttestation": "${BENCH_BUILD_DOTNET_VERSION:-unknown}",
   "oha": "$($OHA --version)",
   "gitCommit": "${BENCH_SOURCE_REVISION:-$(git -C "$ROOT" rev-parse HEAD 2>/dev/null || echo unknown)}",
   "builderImageId": "$(docker image inspect --format '{{.Id}}' "${BUILDER_IMAGE:-reptar-bench-builder}" 2>/dev/null || echo unknown)",
@@ -86,16 +115,21 @@ start_server() {
   local db="$3"
   shift 3
 
-  if curl -s --max-time 1 "http://127.0.0.1:$port/__bench/plaintext" >/dev/null 2>&1; then
-    echo "Port $port is occupied; refusing to kill another process." >&2
+  python3 - "$port" <<'PY'
+import socket, sys
+with socket.socket() as probe:
+    probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    probe.bind(("127.0.0.1", int(sys.argv[1])))
+PY
+  if [[ -e "$db" || -e "$db-wal" || -e "$db-shm" ]]; then
+    echo "Existing benchmark database; refusing to overwrite." >&2
     return 1
   fi
-  rm -f "$db" "$db-wal" "$db-shm"
-  cp "$ROOT/bench/out/bench.db" "$db"
+  cp "$RESULTS/seed/bench.db" "$db"
 
   SERVER_START_NS=$(date +%s%N)
   pushd "$ROOT" >/dev/null
-  taskset -c 0 env \
+  setsid taskset -c 0 env \
     BENCH_DB="$db" \
     PORT="$port" \
     HOST=127.0.0.1 \
@@ -109,7 +143,8 @@ start_server() {
 wait_ready() {
   local port="$1"
   for _ in $(seq 1 200); do
-    if curl -sf "http://127.0.0.1:$port/__bench/plaintext" >/dev/null 2>&1; then
+    if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then return 1; fi
+    if [[ "$(curl -sf --max-time 1 "http://127.0.0.1:$port/__bench/plaintext" 2>/dev/null)" == "Hello, World!" ]]; then
       return 0
     fi
     sleep 0.1
@@ -127,12 +162,12 @@ run_impl() {
   echo "  $label (port $port)"
   echo "================================================================"
 
-  start_server "$label" "$port" "$ROOT/bench/out/$label.db" "$@"
+  start_server "$label" "$port" "$RESULTS/$label.db" "$@"
 
   if ! wait_ready "$port"; then
     echo "Server $label did not become ready" >&2
     tail -50 "$RESULTS/$label.server.log" >&2 || true
-    kill "$SERVER_PID" >/dev/null 2>&1 || true
+    stop_server
     return 1
   fi
 
@@ -149,6 +184,7 @@ run_impl() {
 
   taskset -c 1 bun "$ROOT/bench/load/run.ts" \
     --base-url "http://127.0.0.1:$port" \
+    --fixtures "$RESULTS/seed/fixtures.json" \
     --label "$label" \
     --pid "$SERVER_PID" \
     --connections "$CONNECTIONS" \
@@ -163,6 +199,7 @@ run_impl() {
   if [[ "${MIXED:-0}" == "1" ]]; then
     taskset -c 1 bun "$ROOT/bench/load/mixed.ts" \
       --base-url "http://127.0.0.1:$port" \
+      --fixtures "$RESULTS/seed/fixtures.json" \
       --label "$label" \
       --duration "${MIXED_DURATION:-15}" \
       --warmup "$WARMUP" \
@@ -171,9 +208,7 @@ run_impl() {
       2>&1 | tee "$RESULTS/$label.mixed.log"
   fi
 
-  kill "$SERVER_PID" >/dev/null 2>&1 || true
-  wait "$SERVER_PID" >/dev/null 2>&1 || true
-  SERVER_PID=""
+  stop_server
   sleep 1
 }
 
