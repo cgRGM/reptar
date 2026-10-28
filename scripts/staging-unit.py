@@ -11,7 +11,7 @@ import sys
 import tarfile
 import time
 
-PROPERTIES = ("LoadState", "Description", "ActiveState", "SubState", "MainPID", "Result", "ControlGroup", "MemoryMax", "MemorySwapMax", "TasksMax", "CPUQuotaPerSecUSec", "PrivateNetwork", "NoNewPrivileges", "ProtectSystem", "Restart", "KillMode", "RuntimeMaxUSec", "InvocationID", "OOMPolicy", "User", "ReadWritePaths", "ReadOnlyPaths")
+PROPERTIES = ("LoadState", "Description", "ActiveState", "SubState", "MainPID", "Result", "ControlGroup", "MemoryMax", "MemorySwapMax", "TasksMax", "CPUQuotaPerSecUSec", "PrivateNetwork", "NoNewPrivileges", "ProtectSystem", "Restart", "KillMode", "RuntimeMaxUSec", "InvocationID", "OOMPolicy", "User", "ReadWritePaths", "ReadOnlyPaths", "ExecMainCode", "ExecMainStatus", "MemoryPeak", "MemoryCurrent", "TasksCurrent", "CPUUsageNSec")
 
 
 def require(condition, message):

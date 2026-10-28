@@ -115,7 +115,11 @@ def main():
         verify_runtime(manifest["runtimeSha256"])
         result = json.loads((evidence / "result.json").read_text())
         require(result["status"] == "passed" and result["ownedProcessesCleaned"] and result["cycles"] == math.ceil(args.seconds / run_args.cadence), "Incomplete staged result")
-        (root / "stage-complete.json").write_text(json.dumps({"status": "passed", "earnedTwentyFourHourElapsed": result["earnedTwentyFourHourElapsed"], "runtimeUnchanged": True, "finishedAt": time.time()}, indent=2))
+        cgroup = Path("/sys/fs/cgroup") / isolation["cgroup"].lstrip("/")
+        usage = {name: (cgroup / name).read_text().strip() for name in ("memory.peak", "memory.events", "pids.events", "cpu.stat")}
+        memory_events = dict(line.split() for line in usage["memory.events"].splitlines())
+        require(memory_events["oom_kill"] == "0", "Cgroup recorded an OOM kill")
+        (root / "stage-complete.json").write_text(json.dumps({"status": "passed", "earnedTwentyFourHourElapsed": result["earnedTwentyFourHourElapsed"], "runtimeUnchanged": True, "cgroupUsage": usage, "finishedAt": time.time()}, indent=2))
     finally:
         watchdog.cancel()
         for number, handler in previous.items():
