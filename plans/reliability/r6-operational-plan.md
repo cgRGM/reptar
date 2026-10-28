@@ -21,7 +21,7 @@ Order: validate the operational harness and its negative controls; run **7200 ac
 
 ## Stage 2 — isolated staging, conditional and not applied
 
-No remote resource has been changed for this stage. Before apply:
+No remote resource has been changed for this stage. The concrete capped-native lifecycle, source boundary and pending gates are documented in [R6b isolated staging](r6-isolated-staging.md). Before apply:
 
 1. Read-only inventory of the chosen host/account, existing apps/containers, available memory/storage/CPU, bindings/databases and resource names. Record a before snapshot without credentials.
 2. Pin the exact source/artifacts and use unique `reptar-reliability-*` resources, manifests, resource caps, rates, expiry and cleanup. Use Alchemy for the reviewed infrastructure lifecycle where applicable. Do not reuse production DBs, DNS, signing keys, networks/volumes, workers.dev endpoints or other agents' resources.

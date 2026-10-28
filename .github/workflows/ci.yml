@@ -110,6 +110,15 @@ jobs:
             --typeRoots packages/rpc/node_modules/@types,node_modules/@types --types bun \
             --strict --resolveJsonModule --esModuleInterop --skipLibCheck bench/load/*.ts
 
+      - name: Staging bundle and scoped lifecycle negative controls (no remote apply)
+        run: |
+          python3 scripts/test-staging-bundle.py
+          python3 scripts/test-staging-unit.py
+          python3 -m py_compile scripts/test-staged-native.py scripts/staging-unit.py scripts/build-staging-bundle.py
+          bunx tsc --ignoreConfig --noEmit --target ESNext --module ESNext --moduleResolution Bundler \
+            --typeRoots packages/rpc/node_modules/@types,node_modules/@types --types bun \
+            --strict --skipLibCheck --allowImportingTsExtensions packages/infra/reliability.run.ts
+
       - name: Rebuild all deployed Worker artifacts
         run: |
           bun reptar build:worker
