@@ -124,7 +124,7 @@ public sealed class AgentEvalStore(IDbClient db, TableDef evals)
 
         foreach (var metric in metrics)
         {
-            array.Add(new System.Text.Json.Nodes.JsonObject
+            array.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
             {
                 ["name"] = metric.Name,
                 ["score"] = metric.Score,

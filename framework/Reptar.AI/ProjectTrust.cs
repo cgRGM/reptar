@@ -184,9 +184,9 @@ public sealed class ProjectTrustStore
         foreach (var (directory, decision) in _decisions)
         {
             if (decision == TrustDecision.Trusted)
-                trusted.Add(directory);
+                trusted.Add((JsonNode)JsonValue.Create(directory)!);
             else if (decision == TrustDecision.Untrusted)
-                untrusted.Add(directory);
+                untrusted.Add((JsonNode)JsonValue.Create(directory)!);
         }
 
         var payload = new JsonObject

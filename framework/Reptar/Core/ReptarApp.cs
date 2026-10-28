@@ -1142,7 +1142,7 @@ public sealed class ReptarApp
             {
                 alarmCtx.Log.Error($"[Alarm] {exception.Message}");
                 alarmResponse = ReptarResponse.Json(
-                    $"{{\"ran\":false,\"error\":{System.Text.Json.JsonSerializer.Serialize(exception.Message, ReptarJson.Options)}}}", 500);
+                    $"{{\"ran\":false,\"error\":{System.Text.Json.Nodes.JsonValue.Create(exception.Message)!.ToJsonString()}}}", 500);
             }
 
             if (startBackground && alarmCtx.BackgroundTasks.Count > 0)

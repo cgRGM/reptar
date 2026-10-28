@@ -35,7 +35,7 @@ public static class AgentMessageJson
             var array = new JsonArray();
             foreach (var call in calls)
             {
-                array.Add(new JsonObject
+                array.Add((JsonNode)new JsonObject
                 {
                     ["id"] = call.Id,
                     ["name"] = call.Name,
@@ -50,7 +50,7 @@ public static class AgentMessageJson
             var array = new JsonArray();
             foreach (var image in images)
             {
-                array.Add(new JsonObject
+                array.Add((JsonNode)new JsonObject
                 {
                     ["mimeType"] = image.MimeType,
                     ["data"] = image.Base64Data

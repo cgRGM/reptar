@@ -302,7 +302,7 @@ public static class WorkspaceTools
                 var array = new JsonArray();
                 foreach (var entry in entries)
                 {
-                    array.Add(new JsonObject
+                    array.Add((JsonNode)new JsonObject
                     {
                         ["path"] = entry.Path,
                         ["type"] = entry.Type,

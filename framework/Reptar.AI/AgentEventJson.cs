@@ -433,7 +433,7 @@ public static class AgentEventJson
             var array = new JsonArray();
             foreach (var call in calls)
             {
-                array.Add(new JsonObject
+                array.Add((JsonNode)new JsonObject
                 {
                     ["type"] = "toolCall",
                     ["id"] = call.Id,
@@ -449,7 +449,7 @@ public static class AgentEventJson
             var array = new JsonArray();
             foreach (var image in images)
             {
-                array.Add(new JsonObject
+                array.Add((JsonNode)new JsonObject
                 {
                     ["type"] = "image",
                     ["data"] = image.Base64Data,

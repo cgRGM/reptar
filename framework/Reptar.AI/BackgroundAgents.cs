@@ -281,7 +281,7 @@ public sealed class BackgroundAgentsModule
         foreach (var id in ids)
         {
             if (_tasks.TryGetValue(id, out var task) && task.Status.Value == "running")
-                stillRunning.Add(id);
+                stillRunning.Add((System.Text.Json.Nodes.JsonNode)System.Text.Json.Nodes.JsonValue.Create(id)!);
         }
 
         return AiToolResult.Ok(200, new System.Text.Json.Nodes.JsonObject
@@ -306,7 +306,7 @@ public sealed class BackgroundAgentsModule
 
             if (!_tasks.TryGetValue(id, out var task))
             {
-                results.Add(new System.Text.Json.Nodes.JsonObject
+                results.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
                 {
                     ["id"] = id,
                     ["status"] = "unknown"
@@ -314,7 +314,7 @@ public sealed class BackgroundAgentsModule
                 continue;
             }
 
-            results.Add(new System.Text.Json.Nodes.JsonObject
+            results.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
             {
                 ["id"] = id,
                 ["status"] = task.Status.Value,
@@ -330,7 +330,7 @@ public sealed class BackgroundAgentsModule
         var all = new System.Text.Json.Nodes.JsonArray();
         foreach (var task in _tasks.Values.OrderBy(task => task.Id, StringComparer.Ordinal))
         {
-            all.Add(new System.Text.Json.Nodes.JsonObject
+            all.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
             {
                 ["id"] = task.Id,
                 ["agent"] = task.AgentName,
