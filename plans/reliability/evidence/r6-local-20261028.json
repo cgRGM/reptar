@@ -1,0 +1,115 @@
+{
+  "kind": "derived-attestation-not-raw-journal",
+  "scope": "two-hour-local-disposable-osx-arm64-NativeAOT-Echo-only",
+  "sourceCommit": "7cfacca6ce1097ad529c50ea3e36dbf66c9f498c",
+  "requestedSeconds": 7200,
+  "actualElapsedSeconds": 7200.011815791018,
+  "cycles": 120,
+  "status": "passed",
+  "finishedAtUtc": "2026-10-28T05:30:12.442401+00:00",
+  "runnerSha256": "2c9d0919eb82f03085ae62037c0af07aa67b80aec1a708f08db49cabe748a5b4",
+  "bunSha256": "14b0008f960ea480de5d25df5ea0ada0fefa086a15e360ef2d305f44cae8f904",
+  "nativeFilesSha256": {
+    "switchyard": {
+      "libe_sqlite3.dylib": "09fe20a6c050912a7944b2f2f2981debe31679f7919f523c87251ae8cf0f2daa",
+      "app": "3c1fcde429f8599038fb4ff8489befedfbf48b29bdf4c51c5dc136bd23658974"
+    },
+    "rooms": {
+      "libe_sqlite3.dylib": "09fe20a6c050912a7944b2f2f2981debe31679f7919f523c87251ae8cf0f2daa",
+      "app": "51fed66d8ba1e013deccfc5afa0bdddb90008c6247563ec56a75c5b5a2359c06"
+    },
+    "agent": {
+      "libe_sqlite3.dylib": "09fe20a6c050912a7944b2f2f2981debe31679f7919f523c87251ae8cf0f2daa",
+      "app": "80e707e32e352200f1702a35fcc6f6a88b325f31da67b49104637d6afa558ae8"
+    }
+  },
+  "probeSha256": {
+    "rooms.js": "9baa431a9b63e89c8086b538a7a9403921e54437367b0e8a06239d98a2c82f9f",
+    "acceptance.test.js": "280b1121057f199f8b2aa7653a4ae7e2961668a8da9a4b5dadbb628e7e4cb7a3"
+  },
+  "bounds": {
+    "maxCycles": 120,
+    "nativeRssKiB": 1048576,
+    "ownedStorageBytes": 134217728,
+    "ownerStopDeadlineSeconds": 7380,
+    "maxTotalSecondsIncludingCleanup": 7500,
+    "probeTimeoutSeconds": 45,
+    "provider": "echo",
+    "paidCalls": 0
+  },
+  "peakObservedAggregateNativeRssKiB": 127648,
+  "peakObservedOwnedBytes": 62282881,
+  "maxObservedIntervalSeconds": 60.16343402862549,
+  "lastObservedRooms": {
+    "rooms": 0,
+    "activeConnections": 0,
+    "joins": 240,
+    "leaves": 120,
+    "messagesRelayed": 240,
+    "presenceUpdatesRelayed": 120,
+    "messagesPersisted": 240,
+    "messagesPersistFailed": 0,
+    "messagesPersistDropped": 0,
+    "lastPersistError": null,
+    "persisterQueueDepth": 0,
+    "persisterActiveWrites": 0,
+    "fanoutFailures": 0,
+    "fanoutAttempts": 840,
+    "fanoutDelivered": 840,
+    "lastFanoutError": "null",
+    "uptimeSeconds": 7141,
+    "process": {
+      "peakWorkingSetMb": 0,
+      "workingSetMb": 18.234375,
+      "threads": 14
+    }
+  },
+  "backupCounts": {
+    "switchyard": {
+      "users": 241,
+      "sessions": 241,
+      "oauth_accounts": 0,
+      "api_keys": 0,
+      "sy_projects": 121,
+      "sy_flags": 240,
+      "sy_versions": 360,
+      "sy_audit": 360
+    },
+    "rooms": {
+      "room_messages": 240
+    },
+    "agent-web": {
+      "agent_sessions": 1,
+      "agent_messages": 240,
+      "agent_session_entries": 0,
+      "agent_session_state": 0
+    },
+    "agent-rpc": {
+      "agent_sessions": 1,
+      "agent_messages": 0,
+      "agent_session_entries": 240,
+      "agent_session_state": 1
+    }
+  },
+  "coldNativeRecoveryPassed": true,
+  "cleanup": {
+    "ownedRecords": 250,
+    "unreapedRecords": 0,
+    "remainingOrUnconfirmedGroups": [],
+    "managerAbsent": true
+  },
+  "originalEvidenceSha256": {
+    "manifest.json": "57da41700db3a691f22611be5b61f96fdc7ebc63b83e83257883f89093c158e3",
+    "result.json": "fdb756b5ad7f7b02959f4b69f2920df1771d97a41b817c07dc875f33bfed9684",
+    "observations.jsonl": "584e6a3dafafe17374a0002ed5d753c192810860cc19460db7fc6b024e197961"
+  },
+  "limits": [
+    "not multi-release maturity",
+    "not remote/D1 proving",
+    "process recovery is not power-loss testing",
+    "RSS is sampled for long-lived native processes, not a hard OS allocation limit",
+    "Not 24-hour isolated staging; not multi-release maturity",
+    "Sampled idle-boundary resources, not capacity or transient/continuous peak profiling",
+    "Current-to-old application pair has no schema delta; not reverse-DDL proof"
+  ]
+}

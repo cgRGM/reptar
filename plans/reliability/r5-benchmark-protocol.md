@@ -29,4 +29,4 @@ Evidence remains in `/tmp/reptar-reliability-evidence-20261027/r5-*`, including 
 
 ## Acceptance
 
-Local automated and actual-artifact checks are recorded above. Full lint, strict benchmark TypeScript, complete Bun suite, and final-head Linux CI/security must pass before acceptance. R6 elapsed local/staging proving and multi-release operational maturity remain separate, unearned work.
+Accepted after PR #17 final-head Linux CI/security passed; merged as `70a521c57bdd80f23f973f98f652c1139340267b`. Local lint, strict benchmark TypeScript and the complete Bun suite passed (63 tests at this package), alongside the actual-artifact checks above. R6 elapsed local/staging proving and multi-release operational maturity remain separate, unearned work.
