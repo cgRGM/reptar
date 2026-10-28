@@ -236,6 +236,22 @@ jobs:
       - name: Native AOT published-artifact gate
         run: bash examples/switchyard/test-native.sh
 
+      - name: Operational harness success, budget and owner-stop controls (not elapsed proving)
+        run: |
+          set -euo pipefail
+          container=""
+          trap 'if [[ -n "$container" ]]; then docker rm "$container"; fi' EXIT
+          container=$(docker create --name "reptar-reliability-extract-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" reptar-switchyard:verify)
+          mkdir "$RUNNER_TEMP/reptar-operational-switchyard"
+          docker cp "$container:/app/." "$RUNNER_TEMP/reptar-operational-switchyard/"
+          docker rm "$container"
+          container=""
+          python3 scripts/test-operational-soak-harness.py \
+            --switchyard "$RUNNER_TEMP/reptar-operational-switchyard/reptar" \
+            --rooms "$RUNNER_TEMP/reptar-rooms-native/app" \
+            --agent "$RUNNER_TEMP/reptar-agent-native/app" \
+            --bun "$(command -v bun)"
+
       - name: Documentation snippet check
         run: bun run docs:check:snippets
 

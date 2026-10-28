@@ -104,11 +104,13 @@ const assert = (condition: boolean, message: string) => {
   }
 };
 
-const waitForPersistence = async (expected = 1): Promise<Frame> => {
+const waitForPersistence = async (expectedIds: unknown[]): Promise<Frame> => {
   const deadline = Date.now() + 5000;
   while (true) {
     // eslint-disable-next-line no-await-in-loop -- Native fanout precedes the queued SQLite commit.
-    const response = await fetch(`${host}/stats`);
+    const response = await fetch(`${host}/stats`, {
+      signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
+    });
     if (!response.ok) {
       throw new Error(`stats returned HTTP ${response.status}`);
     }
@@ -122,7 +124,20 @@ const waitForPersistence = async (expected = 1): Promise<Frame> => {
         `message persistence failed: ${JSON.stringify(snapshot)}`
       );
     }
-    if (Number(snapshot.messagesPersisted) >= expected) {
+    // eslint-disable-next-line no-await-in-loop -- Match this room's IDs, not a cumulative process counter.
+    const historyResponse = await fetch(
+      `${host}/rooms/${room}/messages?limit=10`,
+      { signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())) }
+    );
+    if (!historyResponse.ok) {
+      throw new Error(`history returned HTTP ${historyResponse.status}`);
+    }
+    // eslint-disable-next-line no-await-in-loop -- A previous room's successful writes are not this room's acknowledgement.
+    const persisted = (await historyResponse.json()) as Frame[];
+    if (
+      Number(snapshot.messagesPersisted) >= expectedIds.length &&
+      expectedIds.every((id) => persisted.some((message) => message.id === id))
+    ) {
       return snapshot;
     }
     if (Date.now() >= deadline) {
@@ -186,7 +201,7 @@ try {
   // REST surface
   // Native persistence is deliberately queued after broadcast; receipt of a
   // frame is not a durable-write acknowledgement. Verify eventual completion.
-  const stats = await waitForPersistence();
+  const stats = await waitForPersistence([mine.id]);
   assert(stats.messagesRelayed >= 1, "stats counts relayed messages");
   assert(stats.messagesPersisted >= 1, "stats counts persisted messages");
 
@@ -221,7 +236,7 @@ try {
     serverFrame.payload.text === "server-note",
     "REST fanout reaches the live peer"
   );
-  await waitForPersistence(2);
+  await waitForPersistence([mine.id, serverFrame.id]);
   const serverHistoryResponse = await fetch(
     `${host}/rooms/${room}/messages?limit=10`
   );
