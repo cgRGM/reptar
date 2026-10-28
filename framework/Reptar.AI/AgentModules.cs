@@ -424,7 +424,7 @@ public sealed class TodoModule
 
         foreach (var item in items)
         {
-            array.Add(new System.Text.Json.Nodes.JsonObject
+            array.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject
             {
                 ["id"] = item.Id,
                 ["title"] = item.Title,
@@ -441,7 +441,7 @@ public sealed class TodoModule
     {
         var array = new System.Text.Json.Nodes.JsonArray();
         foreach (var id in ids)
-            array.Add(id);
+            array.Add((System.Text.Json.Nodes.JsonNode)System.Text.Json.Nodes.JsonValue.Create(id)!);
 
         return array.ToJsonString();
     }

@@ -91,7 +91,7 @@ if (flags.Contains("--self-test"))
 // Provider management: status table and interactive connect (pi /login,
 // opencode `auth login` parity) before any mode handling.
 // -----------------------------------------------------------------------
-var agent = new TerminalAgent(app, tree, todos, new TerminalAgentOptions
+var agent = new TerminalAgent(app, tree, new TerminalAgentOptions
 {
     WorkspaceRoot = workspaceRoot,
     Provider = ValueOf("provider"),

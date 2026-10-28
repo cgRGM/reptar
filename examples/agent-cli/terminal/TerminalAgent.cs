@@ -103,7 +103,6 @@ public sealed record TerminalAgentOptions
 public sealed class TerminalAgent(
     ReptarApp app,
     SessionTreeStore? tree,
-    TodoModule? todos,
     TerminalAgentOptions options,
     AgentSessionStore? store = null)
 {

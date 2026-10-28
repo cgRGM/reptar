@@ -97,7 +97,7 @@ public sealed class OpenAiResponsesLlmClient(LlmConfig config) : ILlmClient
                     break;
 
                 case AgentRoles.Tool:
-                    input.Add(new JsonObject
+                    input.Add((JsonNode)new JsonObject
                     {
                         ["type"] = "function_call_output",
                         ["call_id"] = message.ToolCallId ?? "",
@@ -108,7 +108,7 @@ public sealed class OpenAiResponsesLlmClient(LlmConfig config) : ILlmClient
                 case AgentRoles.Assistant:
                     if (message.Content.Length > 0)
                     {
-                        input.Add(new JsonObject
+                        input.Add((JsonNode)new JsonObject
                         {
                             ["role"] = "assistant",
                             ["content"] = new JsonArray(new JsonObject
@@ -123,7 +123,7 @@ public sealed class OpenAiResponsesLlmClient(LlmConfig config) : ILlmClient
                     {
                         foreach (var call in calls)
                         {
-                            input.Add(new JsonObject
+                            input.Add((JsonNode)new JsonObject
                             {
                                 ["type"] = "function_call",
                                 ["call_id"] = call.Id,
@@ -135,7 +135,7 @@ public sealed class OpenAiResponsesLlmClient(LlmConfig config) : ILlmClient
                     break;
 
                 default:
-                    input.Add(new JsonObject
+                    input.Add((JsonNode)new JsonObject
                     {
                         ["role"] = "user",
                         ["content"] = new JsonArray(new JsonObject
@@ -157,7 +157,7 @@ public sealed class OpenAiResponsesLlmClient(LlmConfig config) : ILlmClient
 
         foreach (var tool in tools)
         {
-            array.Add(new JsonObject
+            array.Add((JsonNode)new JsonObject
             {
                 ["type"] = "function",
                 ["name"] = tool.Name,

@@ -148,7 +148,7 @@ public sealed record AgentSettings
             var array = new JsonArray();
             foreach (var entry in scoped)
             {
-                array.Add(new JsonObject
+                array.Add((JsonNode)new JsonObject
                 {
                     ["provider"] = entry.Provider,
                     ["model"] = entry.Model,

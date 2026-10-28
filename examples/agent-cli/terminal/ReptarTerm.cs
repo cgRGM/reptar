@@ -284,7 +284,6 @@ public sealed class ReptarTerm : IDisposable
 
     /// <summary>True while the <c>ctrl+o</c> resources panel is expanded.</summary>
     private bool _showResources;
-    private string _statusRibbon = "";
 
     // Official Reptar pixel dinosaur (matching the website header SVG: apps/web/src/components/header.astro)
     private static readonly string[] PixelDinoWatermark =
@@ -2714,6 +2713,10 @@ public sealed class ReptarTerm : IDisposable
                 case AgentEvent.UsageReported usage:
                     _totalTokensIn += usage.InputTokens;
                     _totalTokensOut += usage.OutputTokens;
+                    // Cache counters drive the R/W segments of the status ribbon. They were
+                    // rendered but never assigned, so prompt caching was invisible in the UI.
+                    _totalCacheRead += usage.CacheReadTokens;
+                    _totalCacheWrite += usage.CacheWriteTokens;
                     _totalCost +=
                         (usage.InputTokens / 1_000_000.0 * _inputCostPerMillion) +
                         (usage.OutputTokens / 1_000_000.0 * _outputCostPerMillion);
@@ -3390,11 +3393,6 @@ public sealed class ReptarTerm : IDisposable
             lines.Add(new TranscriptLine("", textFg, false, 0));
         }
 
-        void Emit(string text, string fg = textFg, bool bold = false, int indent = 4)
-        {
-            foreach (var wrapped in WrapText(text, Math.Max(10, _width - indent - 2)))
-                lines.Add(new TranscriptLine(wrapped, fg, bold, indent));
-        }
 
         foreach (var message in _messages)
         {

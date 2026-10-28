@@ -374,7 +374,7 @@ public static class AiToolExtensions
             var obj = new System.Text.Json.Nodes.JsonObject();
             foreach (var (key, value) in dict)
                 obj[key] = AI.LlmHttp.ToNode(value);
-            array.Add(obj);
+            array.Add((JsonNode)obj);
         }
 
         return array.ToJsonString(new JsonSerializerOptions

@@ -265,7 +265,7 @@
       "review": "Unresolved AI JSON overload/metadata debt. Only named offline/Echo/RPC/session artifact cases are supported by this evidence; live provider payloads, images, settings/trust/checkpoint mutation and every tool-output shape remain unverified or experimental. No paid-provider inference."
     },
     {
-      "diagnostic": "examples/agent-cli/app.cs(4,1)|CA2266|File-based program entry point should start with '#!' (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca2266)",
+      "diagnostic": "examples/agent-cli/app.cs(5,1)|CA2266|File-based program entry point should start with '#!' (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca2266)",
       "review": "Existing file-based entry directive style; invoked with dotnet publish, not direct shebang execution. No native-safety implication."
     },
     {
