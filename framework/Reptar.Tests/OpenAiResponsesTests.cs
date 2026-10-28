@@ -20,10 +20,29 @@ public sealed class OpenAiResponsesTests
 
         public StubServer(string sseBody)
         {
-            Port = FreePort();
+            // HttpListener refuses port 0, so a free port has to be chosen and then bound — a
+            // window where another test can take it. Retrying closes that window without the
+            // flakiness of picking once and hoping.
+            var random = new Random();
+            for (var attempt = 1; ; attempt++)
+            {
+                var candidate = random.Next(30_000, 60_000);
+                _listener.Prefixes.Clear();
+                _listener.Prefixes.Add($"http://127.0.0.1:{candidate}/");
+
+                try
+                {
+                    _listener.Start();
+                    Port = candidate;
+                    break;
+                }
+                catch (HttpListenerException) when (attempt < 25)
+                {
+                    // Taken by something else; try another.
+                }
+            }
+
             BaseUrl = $"http://127.0.0.1:{Port}/v1";
-            _listener.Prefixes.Add($"http://127.0.0.1:{Port}/");
-            _listener.Start();
 
             _loop = Task.Run(async () =>
             {
@@ -58,15 +77,6 @@ public sealed class OpenAiResponsesTests
         public string? RequestBody { get; private set; }
         public string? RequestPath { get; private set; }
         public string? Authorization { get; private set; }
-
-        private static int FreePort()
-        {
-            var listener = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-            listener.Stop();
-            return port;
-        }
 
         public void Dispose()
         {
