@@ -253,6 +253,39 @@ public static class LlmProviders
     }
 
     /// <summary>
+    /// True when a provider has a usable credential.
+    /// </summary>
+    /// <remarks>
+    /// "Connected" means a stored credential or an environment variable — nothing else. A provider
+    /// that does not require a key is still not connected until it has been chosen, because
+    /// otherwise it appears in model pickers it cannot serve. Lists of <em>options</em> filter on
+    /// this; lists of <em>status</em> do not, since showing what is missing is their whole job.
+    /// </remarks>
+    public static bool IsConnected(string providerKey, LlmAuthFile auth)
+    {
+        var (source, detail) = CredentialSource(providerKey, auth);
+
+        if (source == "none")
+            return false;
+
+        // A credential that is present but incomplete cannot serve a request — a gateway URL with
+        // no account id, for instance. Treating that as connected offers a provider that fails on
+        // first use, which is the failure this check exists to prevent.
+        var info = Find(providerKey);
+        if (info is null)
+            return true;
+
+        // CredentialSource reports the environment variable's *name*, so read its value: passing
+        // null here would report the api key as missing for a provider configured from the
+        // environment.
+        var fromEnvironment = source == "env" && detail is not null
+            ? Environment.GetEnvironmentVariable(detail)
+            : null;
+
+        return MissingRequirements(info, auth.Get(providerKey), fromEnvironment).Count == 0;
+    }
+
+    /// <summary>
     /// The status line Pi-style: "✓ configured" / "✓ env: OPENAI_API_KEY" / "• not connected".
     /// </summary>
     public static string FormatStatus(string providerKey, LlmAuthFile auth)

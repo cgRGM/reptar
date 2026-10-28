@@ -2280,6 +2280,13 @@ public sealed class ReptarTerm : IDisposable
 
             if (!provider.RequiresApiKey)
             {
+                // "Connected" is a stored credential, so a provider that needs no key still has to
+                // be recorded — otherwise choosing it would not make it appear in the model list.
+                _auth.Set(provider.Key, new ProviderCredential(
+                    ApiKey: null,
+                    BaseUrl: provider.HasUrlTemplate ? null : provider.DefaultBaseUrl,
+                    DefaultModel: provider.DefaultModel));
+
                 ActivateProvider(provider.Key, provider.DefaultModel);
                 return;
             }
@@ -2291,10 +2298,7 @@ public sealed class ReptarTerm : IDisposable
 
         if (selector == _modelSelector && item.Value is CatalogModelItem model)
         {
-            var (source, _) = LlmProviders.CredentialSource(model.ProviderKey, _auth);
-            var configured = source != "none" || model.ProviderKey == LlmProviders.Ollama;
-
-            if (!configured)
+            if (!LlmProviders.IsConnected(model.ProviderKey, _auth))
             {
                 BeginKeyEntry(model.ProviderKey, model.ModelId);
                 _dirty = true;
@@ -3578,10 +3582,10 @@ public sealed class ReptarTerm : IDisposable
 
         foreach (var provider in LlmProviders.Known)
         {
-            var (source, _) = LlmProviders.CredentialSource(provider.Key, _auth);
-            var usable = source != "none" || !provider.RequiresApiKey;
-
-            if (!usable)
+            // Connected means a stored credential, full stop. The old escape hatch for providers
+            // that need no key made an unconnected ChatGPT subscription look usable, so its
+            // default model appeared in the picker and failed on selection.
+            if (!LlmProviders.IsConnected(provider.Key, _auth))
                 continue;
 
             var category = provider.DisplayName.Split(' ')[0];
@@ -3596,6 +3600,21 @@ public sealed class ReptarTerm : IDisposable
             catch
             {
                 models = [];
+            }
+
+            // No curated catalog means we do not know this provider's ids — a gateway, or a
+            // provider models.dev does not cover. Ask the provider rather than guessing: it knows
+            // its own names, including any routing prefix a borrowed catalog would get wrong.
+            if (models.Count == 0)
+            {
+                var live = await LlmCatalog
+                    .ListAsync(LlmConfig.FromEnvironment(provider.Key), timeoutMs: 4_000)
+                    .ConfigureAwait(false);
+
+                if (live.Ok)
+                {
+                    models = [.. live.Models.Select(id => new LlmCatalog.CuratedModel(id, id, 0))];
+                }
             }
 
             if (models.Count == 0)

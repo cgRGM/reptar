@@ -27,16 +27,17 @@ public static class LlmCatalog
         Timeout = TimeSpan.FromSeconds(20)
     };
 
-    public static async Task<CatalogResult> ListAsync(LlmConfig config)
+    public static async Task<CatalogResult> ListAsync(LlmConfig config, int timeoutMs = 20_000)
     {
         try
         {
+            using var cancellation = new CancellationTokenSource(timeoutMs);
             var (url, headers, parser) = Endpoint(config);
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             foreach (var (name, value) in headers)
                 request.Headers.TryAddWithoutValidation(name, value);
 
-            using var response = await Client.SendAsync(request);
+            using var response = await Client.SendAsync(request, cancellation.Token);
             var body = await response.Content.ReadAsStringAsync();
 
             if (!response.IsSuccessStatusCode)
@@ -53,6 +54,10 @@ public static class LlmCatalog
 
             models.Sort(CompareByRecency);
             return new CatalogResult(true, models);
+        }
+        catch (OperationCanceledException)
+        {
+            return CatalogResult.Failure($"Timed out after {timeoutMs} ms");
         }
         catch (HttpRequestException ex)
         {
@@ -184,8 +189,9 @@ public static class LlmCatalog
         [LlmProviders.Gemini] = "google",
         [LlmProviders.Ollama] = "ollama",
         [LlmProviders.OpenRouter] = "openrouter",
-        [LlmProviders.Gateway] = "openai",
-        [LlmProviders.CloudflareGateway] = "openai",
+        // Gateways deliberately have no curated entry. A gateway routes to many providers and its
+        // ids carry a routing prefix (`openai/gpt-5.6`), so borrowing OpenAI's catalog would list
+        // ids that cannot be routed. They fall back to a live listing instead.
         [LlmProviders.CloudflareWorkersAi] = "cloudflare-workers-ai"
     };
 
