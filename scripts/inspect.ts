@@ -330,121 +330,127 @@ export const inspectProject = (
     );
   } else if (existsSync(dbPath)) {
     try {
-      using db = new Database(dbPath, { readonly: true });
-      dbConnected = true;
+      const db = new Database(dbPath, { readonly: true });
+      try {
+        dbConnected = true;
 
-      const tableRows = db
-        .query(
-          `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__reptar_%' ORDER BY name`
-        )
-        .all() as { name: string }[];
+        const tableRows = db
+          .query(
+            `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '__reptar_%' ORDER BY name`
+          )
+          .all() as { name: string }[];
 
-      for (const row of tableRows) {
-        const columns: ColumnInfo[] = [];
-        const indexes: string[] = [];
+        for (const row of tableRows) {
+          const columns: ColumnInfo[] = [];
+          const indexes: string[] = [];
 
-        try {
-          const quotedName = row.name.replaceAll('"', '""');
-          const colRows = db
-            .query(`PRAGMA table_info("${quotedName}")`)
-            .all() as {
-            name: string;
-            type: string;
-            notnull: number;
-            dflt_value: string | null;
-            pk: number;
-          }[];
+          try {
+            const quotedName = row.name.replaceAll('"', '""');
+            const colRows = db
+              .query(`PRAGMA table_info("${quotedName}")`)
+              .all() as {
+              name: string;
+              type: string;
+              notnull: number;
+              dflt_value: string | null;
+              pk: number;
+            }[];
 
-          for (const col of colRows) {
-            columns.push({
-              defaultValue: col.dflt_value,
-              name: col.name,
-              notNull: Boolean(col.notnull),
-              primaryKey: Boolean(col.pk),
-              type: col.type || "TEXT",
-            });
-          }
-
-          const idxRows = db
-            .query(`PRAGMA index_list("${quotedName}")`)
-            .all() as {
-            name: string;
-            unique: number;
-          }[];
-
-          for (const idx of idxRows) {
-            if (!idx.name.startsWith("sqlite_autoindex_")) {
-              indexes.push(idx.name);
+            for (const col of colRows) {
+              columns.push({
+                defaultValue: col.dflt_value,
+                name: col.name,
+                notNull: Boolean(col.notnull),
+                primaryKey: Boolean(col.pk),
+                type: col.type || "TEXT",
+              });
             }
+
+            const idxRows = db
+              .query(`PRAGMA index_list("${quotedName}")`)
+              .all() as {
+              name: string;
+              unique: number;
+            }[];
+
+            for (const idx of idxRows) {
+              if (!idx.name.startsWith("sqlite_autoindex_")) {
+                indexes.push(idx.name);
+              }
+            }
+          } catch (error) {
+            throw new Error(
+              `Cannot inspect SQLite metadata for table ${row.name}`,
+              { cause: error }
+            );
           }
-        } catch (error) {
-          throw new Error(
-            `Cannot inspect SQLite metadata for table ${row.name}`,
-            { cause: error }
-          );
+
+          tables.push({
+            columns,
+            indexes,
+            name: row.name,
+            source: "sqlite",
+          });
         }
 
-        tables.push({
-          columns,
-          indexes,
-          name: row.name,
-          source: "sqlite",
-        });
-      }
-
-      const hasMigrationsTable = db
-        .query(
-          `SELECT 1 FROM sqlite_master WHERE type='table' AND name='__reptar_migrations'`
-        )
-        .get();
-
-      if (hasMigrationsTable) {
-        const rows = db
-          .query(`SELECT id, name FROM "__reptar_migrations" ORDER BY id ASC`)
-          .all() as { id: string; name: string }[];
-        for (const r of rows) {
-          appliedMigrations.push(r.name || `${r.id}.sql`);
-        }
-      }
-
-      // Queue adapter stats: the DB queue's jobs table is a regular
-      // TableDef, so inspection reads it like any application table.
-      const hasJobsTable = db
-        .query(
-          `SELECT 1 FROM sqlite_master WHERE type='table' AND name='reptar_jobs'`
-        )
-        .get();
-      if (hasJobsTable) {
-        const stateRows = db
+        const hasMigrationsTable = db
           .query(
-            `SELECT state, COUNT(*) AS count FROM reptar_jobs GROUP BY state`
+            `SELECT 1 FROM sqlite_master WHERE type='table' AND name='__reptar_migrations'`
           )
-          .all() as { state: string; count: number }[];
-        const counts: Record<string, number> = {};
-        for (const row of stateRows) {
-          counts[row.state] = row.count;
+          .get();
+
+        if (hasMigrationsTable) {
+          const rows = db
+            .query(`SELECT id, name FROM "__reptar_migrations" ORDER BY id ASC`)
+            .all() as { id: string; name: string }[];
+          for (const r of rows) {
+            appliedMigrations.push(r.name || `${r.id}.sql`);
+          }
         }
 
-        const oldest = db
+        // Queue adapter stats: the DB queue's jobs table is a regular
+        // TableDef, so inspection reads it like any application table.
+        const hasJobsTable = db
           .query(
-            `SELECT MIN(created_at) AS oldest FROM reptar_jobs WHERE state = 'pending'`
+            `SELECT 1 FROM sqlite_master WHERE type='table' AND name='reptar_jobs'`
           )
-          .get() as { oldest: string | null };
+          .get();
+        if (hasJobsTable) {
+          const stateRows = db
+            .query(
+              `SELECT state, COUNT(*) AS count FROM reptar_jobs GROUP BY state`
+            )
+            .all() as { state: string; count: number }[];
+          const counts: Record<string, number> = {};
+          for (const row of stateRows) {
+            counts[row.state] = row.count;
+          }
 
-        const oldestMs = oldest?.oldest
-          ? Date.parse(oldest.oldest)
-          : Number.NaN;
+          const oldest = db
+            .query(
+              `SELECT MIN(created_at) AS oldest FROM reptar_jobs WHERE state = 'pending'`
+            )
+            .get() as { oldest: string | null };
 
-        queueStats = {
-          completed: counts.completed ?? 0,
-          dead: counts.dead ?? 0,
-          oldestPendingSeconds:
-            Number.isFinite(oldestMs) && oldestMs > 0
-              ? Math.max(0, Math.round((Date.now() - oldestMs) / 1000))
-              : undefined,
-          pending: counts.pending ?? 0,
-          table: "reptar_jobs",
-        };
+          const oldestMs = oldest?.oldest
+            ? Date.parse(oldest.oldest)
+            : Number.NaN;
+
+          queueStats = {
+            completed: counts.completed ?? 0,
+            dead: counts.dead ?? 0,
+            oldestPendingSeconds:
+              Number.isFinite(oldestMs) && oldestMs > 0
+                ? Math.max(0, Math.round((Date.now() - oldestMs) / 1000))
+                : undefined,
+            pending: counts.pending ?? 0,
+            table: "reptar_jobs",
+          };
+        }
+      } finally {
+        // Bun's Symbol.dispose uses strict sqlite3_close; evicted cached statements
+        // can remain alive until GC. close(false) uses SQLite's deferred close path.
+        db.close(false);
       }
     } catch {
       dbConnected = false;

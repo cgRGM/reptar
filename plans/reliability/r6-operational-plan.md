@@ -4,7 +4,7 @@
 
 The operator authorized end-to-end reliability work and suitable isolated Cloudflare/VPS staging, preserving unrelated services and data. R1–R5 are accepted through PR #17 (`70a521c57bdd80f23f973f98f652c1139340267b`). This plan does not authorize production deployment, JWT rotation, custom-domain changes, paid providers, or AWS provisioning.
 
-Order: validate the operational harness and its negative controls; run **7200 actual seconds** locally; inspect results and recovery; only then inventory/plan a **24-hour isolated staging** run if resource bounds permit. Short harness runs cannot earn elapsed proving. One release and multiple restarts cannot earn multi-release maturity.
+Order: validate the operational harness and its negative controls; run **7200 actual seconds** locally; inspect results and recovery; only then apply/start a reviewed **24-hour isolated staging** run if resource bounds permit. Read-only staging inventory and plan preparation may proceed during the elapsed local stage; this does not authorize remote mutation before that stage passes. Short harness runs cannot earn elapsed proving. One release and multiple restarts cannot earn multi-release maturity.
 
 ## Stage 1 — disposable local native proving
 

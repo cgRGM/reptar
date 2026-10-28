@@ -136,6 +136,28 @@ test("SQLite metadata inspection preserves quoted table and index identifiers", 
   }
 });
 
+test("inspection stays connected after cached statement eviction and migration reads", () => {
+  const { root, dbPath } = fixture();
+  try {
+    using db = new Database(dbPath);
+    db.run(planMigrations(root, root, { dbPath }).sql);
+    db.run('CREATE TABLE "__reptar_migrations" (id TEXT, name TEXT)');
+    db.run(
+      "INSERT INTO __reptar_migrations VALUES ('0001', '0001_existing.sql')"
+    );
+    for (const index of Array.from({ length: 32 }, (_, value) => value)) {
+      db.run(`CREATE TABLE "cache_eviction_${index}" (id TEXT)`);
+    }
+    const inspection = inspectProject(root, root, { dbPath });
+    expect(inspection.database.connected).toBe(true);
+    expect(inspection.databaseTables).toHaveLength(34);
+    expect(inspection.migrations.applied).toEqual(["0001_existing.sql"]);
+    expect(planMigrations(root, root, { dbPath }).status).toBe("in_sync");
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+});
+
 test("single-column primary keys remain inline", () => {
   const { root, dbPath } = fixture();
   try {

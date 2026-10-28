@@ -68,11 +68,11 @@ def main():
     paths = {name: root / f"{name}.db" for name in ("switchyard", "agent-web", "agent-rpc")}
     artifacts = {name: Path(getattr(args, name.replace("-", "_"))).resolve() for name in ("previous-switchyard", "previous-agent", "current-switchyard", "current-agent")}
     current_commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=OP.REPO, text=True).strip()
-    manifest = {"previousSourceCommit": args.previous_source_commit, "currentSourceCommit": current_commit, "artifactSha256": {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in artifacts.items()},
+    manifest = {"previousSourceCommit": args.previous_source_commit, "runnerSourceCommit": current_commit, "artifactSha256": {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in artifacts.items()},
                 "scope": "Switchyard/agent no-op schema upgrade and same-schema old-code backup read", "startedAt": time.time(), "paidModelCalls": 0,
                 "runnerSha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), "operationalHelperSha256": hashlib.sha256(Path(OP.__file__).read_bytes()).hexdigest()}
     (root / "manifest.json").write_text(json.dumps(manifest, indent=2))
-    result = {"status": "failed", "pinnedPreviousUsed": True, "schemaDelta": "none", "ddlReversalProven": False}
+    result = {"status": "failed", "pinnedPreviousUsed": False, "schemaDelta": "none", "ddlReversalProven": False}
     print(f"Owned upgrade evidence: {root}", flush=True)
 
     def start(version, databases, session=None):
@@ -114,6 +114,7 @@ def main():
         cursor_before = rpc_before[-1]["id"]
         stop(old_children)
         before = {name: rows(path) for name, path in paths.items()}
+        result["pinnedPreviousUsed"] = True
         current_children, current_rpc = start("current", paths, rpc_id)
         preserve(before, paths)
         projects = OP.json_http(bases["switchyard"], "/api/projects", cookie=cookie)[1]
@@ -150,6 +151,9 @@ def main():
         try:
             owner.cleanup()
             result["ownedProcessesCleaned"] = True
+        except Exception as error:
+            result.update({"status": "failed", "ownedProcessesCleaned": False, "cleanupError": str(error)})
+            raise
         finally:
             for number, handler in previous_handlers.items():
                 signal.signal(number, handler)
