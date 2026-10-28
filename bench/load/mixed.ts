@@ -10,10 +10,9 @@
  *   bun bench/load/mixed.ts --base-url http://127.0.0.1:9001 --label reptar
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
-import fixturesJson from "../out/fixtures.json";
 import { buildRequestHeaders } from "./request-headers";
 import type { Fixtures } from "./scenarios";
 
@@ -50,7 +49,10 @@ const acceptEncoding =
   process.env.BENCH_ACCEPT_ENCODING ??
   "identity";
 
-const fixtures = fixturesJson as Fixtures;
+const fixturesPath =
+  argValue("--fixtures") ??
+  path.join(import.meta.dir, "..", "out", "fixtures.json");
+const fixtures = JSON.parse(readFileSync(fixturesPath, "utf-8")) as Fixtures;
 const { sample, login } = fixtures;
 const bearer = { authorization: `Bearer ${login.jwt}` };
 const jsonHeaders = { "content-type": "application/json" };

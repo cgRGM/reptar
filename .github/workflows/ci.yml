@@ -102,7 +102,13 @@ jobs:
         run: bun reptar test
 
       - name: Host boundary and CLI regression tests
-        run: bun test packages/host/src packages/rpc/src/client.test.ts scripts/diff-composite.test.ts scripts/inspect-db.test.ts apps/docs/worker/index.test.ts bench/load/request-headers.test.ts scripts/testing
+        run: bun test packages/host/src packages/rpc/src/client.test.ts scripts/diff-composite.test.ts scripts/inspect-db.test.ts apps/docs/worker/index.test.ts bench/load scripts/testing
+
+      - name: Benchmark evidence TypeScript contracts
+        run: |
+          bunx tsc --ignoreConfig --noEmit --target ESNext --module ESNext --moduleResolution Bundler \
+            --typeRoots packages/rpc/node_modules/@types,node_modules/@types --types bun \
+            --strict --resolveJsonModule --esModuleInterop --skipLibCheck bench/load/*.ts
 
       - name: Rebuild all deployed Worker artifacts
         run: |

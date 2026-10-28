@@ -9,11 +9,20 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 
-import fixturesJson from "../out/fixtures.json";
+import { validateResponse } from "./correctness";
+import { assertEquivalentResponse, validateManifest } from "./protocol";
+import type { WorkManifest } from "./protocol";
 import { buildRequestHeaders } from "./request-headers";
+import { captureResponse, sha256 } from "./response-witness";
+import type { ResponseWitness } from "./response-witness";
 import { buildScenarios } from "./scenarios";
 import type { Fixtures, Scenario } from "./scenarios";
 
@@ -42,6 +51,12 @@ interface RunSample {
 }
 
 interface ScenarioResult {
+  connections: number;
+  equivalenceFailure: string | null;
+  before: ResponseWitness;
+  after: ResponseWitness;
+  requestBodySha256: string;
+  requestAcceptEncoding: string;
   name: string;
   tier: string;
   method: string;
@@ -111,7 +126,10 @@ const pid = Number(argValue("--pid") ?? "0");
 const only = argValue("--only");
 const skip = new Set((argValue("--skip") ?? "").split(",").filter(Boolean));
 
-const fixtures = fixturesJson as Fixtures;
+const fixturesPath =
+  argValue("--fixtures") ??
+  path.join(import.meta.dir, "..", "out", "fixtures.json");
+const fixtures = JSON.parse(readFileSync(fixturesPath, "utf-8")) as Fixtures;
 const scenarios = buildScenarios(fixtures).filter((scenario) => {
   if (skip.has(scenario.name) || skip.has(scenario.tier)) {
     return false;
@@ -123,6 +141,94 @@ const scenarios = buildScenarios(fixtures).filter((scenario) => {
     .split(",")
     .some((value) => value === scenario.name || value === scenario.tier);
 });
+
+for (const value of [connections, duration, reps]) {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("Connections/duration/reps must be finite positive values");
+  }
+}
+if (
+  ![warmup, cooldown].every((value) => Number.isFinite(value) && value >= 0) ||
+  scenarios.length === 0
+) {
+  throw new Error("Invalid warmup/cooldown or empty scenario selection");
+}
+const startedAt = new Date().toISOString();
+const timestamp = startedAt.replaceAll(/[:.]/gu, "-");
+const outDir = path.resolve(
+  argValue("--out") ?? path.join(import.meta.dir, "..", "results", timestamp)
+);
+mkdirSync(outDir, { recursive: true });
+if (!/^[a-z\d_-]+$/iu.test(label)) {
+  throw new Error("Benchmark label must be a safe filename identifier");
+}
+const journalPath = path.join(outDir, `${label}-${timestamp}.jsonl`);
+const record = (event: unknown): void => {
+  appendFileSync(journalPath, `${JSON.stringify(event)}\n`);
+};
+const manifestPath = argValue("--work-manifest");
+const workManifest = manifestPath
+  ? (JSON.parse(readFileSync(manifestPath, "utf-8")) as WorkManifest)
+  : null;
+if (workManifest) {
+  validateManifest(workManifest);
+}
+const executablePath = argValue("--server-executable");
+const executableVerified = Boolean(workManifest && executablePath);
+if (
+  workManifest &&
+  executablePath &&
+  sha256(readFileSync(executablePath)) !== workManifest.executableSha256
+) {
+  throw new Error(
+    "Declared server executable hash does not match the supplied artifact"
+  );
+}
+const ohaPath = Bun.which(ohaBin);
+if (!ohaPath) {
+  throw new Error(`Load generator not found: ${ohaBin}`);
+}
+const loadToolIdentity = `${spawnSync(ohaPath, ["--version"], { encoding: "utf-8" }).stdout.trim()}:${sha256(readFileSync(ohaPath))}`;
+const runnerIdentity = {
+  bun: Bun.version,
+  dirty:
+    spawnSync("git", ["status", "--porcelain"], {
+      cwd: import.meta.dir,
+      encoding: "utf-8",
+    }).stdout.trim().length > 0,
+  fixturesSha256: sha256(JSON.stringify(fixtures)),
+  platform: `${process.platform}-${process.arch}`,
+  sourceCommit: spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: import.meta.dir,
+    encoding: "utf-8",
+  }).stdout.trim(),
+  sourceHashes: Object.fromEntries(
+    [
+      "run.ts",
+      "correctness.ts",
+      "response-witness.ts",
+      "protocol.ts",
+      "scenarios.ts",
+      "request-headers.ts",
+    ].map((file) => [
+      file,
+      sha256(readFileSync(path.join(import.meta.dir, file))),
+    ])
+  ),
+};
+record({ event: "start", loadToolIdentity, runnerIdentity, workManifest });
+const witness = async (scenario: Scenario): Promise<ResponseWitness> => {
+  const response = await captureResponse({
+    body: scenario.body,
+    headers: [...buildRequestHeaders(scenario.headers, acceptEncoding)],
+    method: scenario.method,
+    url: `${baseUrl}${scenario.path}`,
+    validate: (status, decoded) =>
+      validateResponse(scenario, fixtures, status, decoded),
+  });
+  record({ event: "response-witness", response, scenario: scenario.name });
+  return response;
+};
 
 const median = (values: number[]): number => {
   if (values.length === 0) {
@@ -194,12 +300,23 @@ const postPath = async (requestPath: string): Promise<void> => {
   await response.arrayBuffer();
 };
 
+const redact = (text: string): string => {
+  let safe = text;
+  for (const secret of [fixtures.login.jwt, fixtures.login.password]) {
+    if (secret) {
+      safe = safe.replaceAll(secret, "[REDACTED]");
+    }
+  }
+  return safe;
+};
+
 const runOha = (scenario: Scenario, seconds: number): OhaResult => {
   const ohaArgs = [
     "-c",
     String(scenario.connections ?? connections),
     "-z",
     `${seconds}s`,
+    "--wait-ongoing-requests-after-deadline",
     "-t",
     "20s",
     "--no-tui",
@@ -227,13 +344,21 @@ const runOha = (scenario: Scenario, seconds: number): OhaResult => {
     maxBuffer: 20 * 1024 * 1024,
   });
 
+  record({
+    event: "load-result",
+    exitCode: result.status,
+    scenario: scenario.name,
+    seconds,
+    stderr: redact(result.stderr ?? ""),
+    stdout: redact(result.stdout ?? ""),
+  });
   if (result.error) {
     throw new Error(`oha failed: ${result.error.message}`);
   }
 
   if (result.status !== 0) {
     throw new Error(
-      `oha exited ${result.status}: ${result.stderr || result.stdout}`
+      `oha exited ${result.status}: ${redact(result.stderr || result.stdout)}`
     );
   }
 
@@ -247,9 +372,10 @@ const sample = (result: OhaResult): RunSample => {
     .reduce((sum, [, count]) => sum + count, 0);
   const errors =
     non2xx +
-    Object.entries(result.errorDistribution ?? {})
-      .filter(([name]) => name !== "aborted due to deadline")
-      .reduce((sum, [, count]) => sum + count, 0);
+    Object.values(result.errorDistribution ?? {}).reduce(
+      (sum, count) => sum + count,
+      0
+    );
 
   return {
     errors,
@@ -281,8 +407,14 @@ for (const scenario of scenarios) {
     await postPath(scenario.resetPath);
   }
 
-  if (scenario.warmup !== false) {
-    runOha(scenario, warmup);
+  const beforeResponse = await witness(scenario);
+  if (scenario.warmup !== false && warmup > 0) {
+    const warmupResult = sample(runOha(scenario, warmup));
+    if (warmupResult.errors > 0) {
+      throw new Error(
+        `Warmup failed for ${scenario.name}; raw result retained in ${journalPath}`
+      );
+    }
   }
 
   const runs: RunSample[] = [];
@@ -304,9 +436,26 @@ for (const scenario of scenarios) {
         totalRequests
       : null;
 
+  const afterResponse = await witness(scenario);
+  let equivalenceFailure: string | null = null;
+  try {
+    assertEquivalentResponse(beforeResponse, afterResponse);
+  } catch (error) {
+    equivalenceFailure =
+      error instanceof Error ? error.message : "Invalid response equivalence";
+    record({
+      event: "equivalence-failure",
+      reason: equivalenceFailure,
+      scenario: scenario.name,
+    });
+  }
   const result: ScenarioResult = {
+    after: afterResponse,
+    before: beforeResponse,
     breakdown,
+    connections: scenario.connections ?? connections,
     cpuMsPerRequest,
+    equivalenceFailure,
     errors: runs.reduce((sum, run) => sum + run.errors, 0),
     method: scenario.method,
     name: scenario.name,
@@ -314,6 +463,11 @@ for (const scenario of scenarios) {
     p95Ms: median(runs.map((run) => run.p95Ms)),
     p99Ms: median(runs.map((run) => run.p99Ms)),
     path: scenario.path,
+    requestAcceptEncoding:
+      buildRequestHeaders(scenario.headers, acceptEncoding).get(
+        "Accept-Encoding"
+      ) ?? "",
+    requestBodySha256: sha256(scenario.body ?? ""),
     rps: median(runs.map((run) => run.rps)),
     rssKb: after?.rssKb ?? null,
     runs,
@@ -353,26 +507,36 @@ for (const scenario of scenarios) {
   await Bun.sleep(scenario.tier === "T9" ? 5000 : cooldown * 1000);
 }
 
-const timestamp = new Date().toISOString().replaceAll(/[:.]/gu, "-");
-const outDir = path.resolve(
-  argValue("--out") ?? path.join(import.meta.dir, "..", "results", timestamp)
-);
-mkdirSync(outDir, { recursive: true });
-
 const payload = {
   baseUrl,
+  comparisonEligible:
+    executableVerified &&
+    workManifest?.mode === "equal-work" &&
+    results.every(
+      (result) =>
+        !result.equivalenceFailure &&
+        result.errors === 0 &&
+        result.totalRequests > 0
+    ),
   config: {
     acceptEncoding,
+    completionPolicy: "stop-issuing-wait-inflight-20s",
     connections,
     cooldown,
     duration,
+    loadToolIdentity,
     reps,
     warmup,
   },
   generatedAt: new Date().toISOString(),
   label,
   pid: pid || null,
+  runnerIdentity,
   scenarios: results,
+  schemaVersion: 2,
+  startedAt,
+  verificationScope: "sampled-response-semantics-not-every-load-response",
+  workManifest,
 };
 
 const jsonPath = path.join(outDir, `${label}.json`);
@@ -382,16 +546,21 @@ const markdown = [
   `## ${label}`,
   "",
   `Request Accept-Encoding: \`${acceptEncoding}\`.`,
+  `Comparison eligible: **${payload.comparisonEligible}**. ${payload.verificationScope}.`,
+  "Actual response encodings and encoded/decoded byte counts are retained per scenario in JSON; a request header alone is not compression evidence.",
   "",
-  "| Tier | Scenario | Req/s | p50 | p95 | p99 | Errors | CPU ms/req | RSS |",
-  "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+  "| Tier | Scenario | Req/s | p50 | p95 | p99 | Errors | CPU ms/req | RSS | Actual encoding before/after | Encoded/decoded bytes before → after | Equivalence |",
+  "| :--- | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | :--- |",
   ...results.map(
     (result) =>
       `| ${result.tier} | ${result.name} | ${result.rps.toFixed(0)} | ` +
       `${result.p50Ms.toFixed(1)} ms | ${result.p95Ms.toFixed(1)} ms | ` +
       `${result.p99Ms.toFixed(1)} ms | ${result.errors} | ` +
       `${result.cpuMsPerRequest?.toFixed(3) ?? "n/a"} | ` +
-      `${result.rssKb ? `${(result.rssKb / 1024).toFixed(1)} MB` : "n/a"} |`
+      `${result.rssKb ? `${(result.rssKb / 1024).toFixed(1)} MB` : "n/a"} | ` +
+      `${result.before.encoding}/${result.after.encoding} | ` +
+      `${result.before.encodedBytes}/${result.before.decodedBytes} → ${result.after.encodedBytes}/${result.after.decodedBytes} | ` +
+      `${result.equivalenceFailure ?? "sampled response matched"} |`
   ),
   "",
 ].join("\n");
@@ -399,3 +568,6 @@ const markdown = [
 writeFileSync(path.join(outDir, `${label}.md`), markdown);
 
 console.log(`\nWrote ${jsonPath}`);
+if (results.some((result) => result.errors > 0)) {
+  process.exitCode = 1;
+}
