@@ -573,7 +573,12 @@ public sealed class ReptarApp
         return this;
     }
 
-    public ReptarApp OnQueue<T>(string queueName, Func<Ctx, QueueMessage, T, Task> handler)
+    public ReptarApp OnQueue<
+        [DynamicallyAccessedMembers(
+            DynamicallyAccessedMemberTypes.PublicConstructors |
+            DynamicallyAccessedMemberTypes.PublicProperties)] T>(
+        string queueName,
+        Func<Ctx, QueueMessage, T, Task> handler)
     {
         _queueHandlers[queueName] = async (ctx, msg) =>
         {
